@@ -98,7 +98,7 @@ UiIntent Ui::build(Console& console, bool emulating, double display_fps,
     ImGui::NewFrame();
 
     if (show_launcher_ || !emulating) {
-        draw_launcher(console, intent);
+        draw_launcher(console, touch_visible, touch_editing, intent);
     } else {
         draw_overlay(console, display_fps, emulated_fps, frame_ms, underruns,
                      touch_visible, touch_editing, intent);
@@ -108,7 +108,8 @@ UiIntent Ui::build(Console& console, bool emulating, double display_fps,
     return intent;
 }
 
-void Ui::draw_launcher(Console& console, UiIntent& intent) {
+void Ui::draw_launcher(Console& console, bool touch_visible,
+                       bool touch_editing, UiIntent& intent) {
     const ImGuiViewport* viewport = ImGui::GetMainViewport();
     ImGui::SetNextWindowPos(viewport->WorkPos);
     ImGui::SetNextWindowSize(viewport->WorkSize);
@@ -155,12 +156,30 @@ void Ui::draw_launcher(Console& console, UiIntent& intent) {
     ImGui::SameLine();
     if (ImGui::Button("Browse##disc", ImVec2(110.0f * scale_, 0.0f))) {
         browsing_ = Browsing::Disc;
-        browser_.open("Choose a disc image", {".iso", ".bin", ".cue", ".img"});
+        browser_.open("Choose a disc image", {".iso", ".bin", ".cue", ".img", ".chd"});
     }
     ImGui::SameLine();
     if (ImGui::Button("Insert", ImVec2(80.0f * scale_, 0.0f))) {
         intent.disc_chosen = true;
         intent.disc_path = disc_path_buffer_;
+    }
+
+    if (!console.disc_loaded() && console.disc().is_chd()) {
+        // Recognised, not readable. Say exactly what it is and why, rather than
+        // leaving the user with a generic failure on a file that is perfectly
+        // valid.
+        ImGui::PushTextWrapPos(0.0f);
+        ImGui::TextColored(ImVec4(0.95f, 0.75f, 0.35f, 1.0f), "%s",
+                           console.disc().chd().describe().c_str());
+        ImGui::TextDisabled(
+            "CHD is recognised but not readable yet: the disc data is "
+            "compressed and needs a decoder. Use an ISO, BIN or CUE for now.");
+        ImGui::PopTextWrapPos();
+    } else if (!console.disc_loaded() && !console.last_error().empty()) {
+        ImGui::PushTextWrapPos(0.0f);
+        ImGui::TextColored(ImVec4(0.95f, 0.45f, 0.35f, 1.0f), "%s",
+                           console.last_error().c_str());
+        ImGui::PopTextWrapPos();
     }
 
     if (console.disc_loaded()) {
@@ -195,6 +214,56 @@ void Ui::draw_launcher(Console& console, UiIntent& intent) {
     ImGui::Spacing();
     ImGui::Separator();
     ImGui::Spacing();
+
+    // Settings live here rather than on the in-game overlay: laying out a pad
+    // is something you do once, before playing, and having to start a game to
+    // reach it is backwards. It also means the layout can be adjusted with the
+    // whole screen visible instead of over a running picture.
+    if (ImGui::CollapsingHeader("Settings")) {
+        ImGui::Indent();
+
+        ImGui::TextUnformatted("On-screen controls");
+        if (ImGui::Button(touch_visible ? "Hide pad" : "Show pad",
+                          ImVec2(150.0f * scale_, 0.0f))) {
+            intent.toggle_touch_controls = true;
+        }
+        if (touch_visible) {
+            ImGui::SameLine();
+            if (ImGui::Button(touch_editing ? "Done moving" : "Move pad",
+                              ImVec2(150.0f * scale_, 0.0f))) {
+                intent.toggle_layout_edit = true;
+            }
+            ImGui::SameLine();
+            if (ImGui::Button("Reset pad", ImVec2(150.0f * scale_, 0.0f))) {
+                intent.reset_touch_layout = true;
+            }
+            if (touch_editing) {
+                ImGui::PushTextWrapPos(0.0f);
+                ImGui::TextColored(ImVec4(1.0f, 0.78f, 0.35f, 1.0f),
+                                   "Drag the controls where you want them, then "
+                                   "choose Done moving.");
+                ImGui::PopTextWrapPos();
+            }
+        }
+
+        ImGui::Spacing();
+        ImGui::TextUnformatted("Machine");
+        int region = console.region() == Region::Pal ? 1 : 0;
+        if (ImGui::RadioButton("NTSC (60 Hz)", &region, 0)) {
+            intent.set_region_pal = false;
+            intent.region_changed = true;
+        }
+        ImGui::SameLine();
+        if (ImGui::RadioButton("PAL (50 Hz)", &region, 1)) {
+            intent.set_region_pal = true;
+            intent.region_changed = true;
+        }
+
+        ImGui::Unindent();
+        ImGui::Spacing();
+        ImGui::Separator();
+        ImGui::Spacing();
+    }
 
     ImGui::BeginDisabled(!console.bios_loaded());
     if (ImGui::Button("Start", ImVec2(150.0f * scale_, 0.0f))) {
@@ -290,27 +359,6 @@ void Ui::draw_overlay(Console& console, double display_fps,
     ImGui::SameLine();
     if (ImGui::Button("Reset")) {
         intent.reset = true;
-    }
-
-    ImGui::Separator();
-    if (ImGui::Button(touch_visible ? "Hide pad" : "Show pad")) {
-        intent.toggle_touch_controls = true;
-    }
-    if (touch_visible) {
-        ImGui::SameLine();
-        // Layout mode makes dragging move the controls instead of pressing
-        // them, which is the only way to fix a layout that does not suit a
-        // particular pair of hands or a particular phone.
-        if (ImGui::Button(touch_editing ? "Done" : "Move pad")) {
-            intent.toggle_layout_edit = true;
-        }
-        if (touch_editing) {
-            ImGui::SameLine();
-            if (ImGui::Button("Reset pad")) {
-                intent.reset_touch_layout = true;
-            }
-            ImGui::TextDisabled("Drag the controls where you want them.");
-        }
     }
 
     ImGui::End();

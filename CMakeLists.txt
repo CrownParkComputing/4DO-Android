@@ -24,6 +24,7 @@ add_library(retro3do_core STATIC
     src/core/arm60.cpp
     src/core/audio_ring.cpp
     src/core/bus.cpp
+    src/core/chd.cpp
     src/core/clio.cpp
     src/core/console.cpp
     src/core/disc.cpp
@@ -155,6 +156,7 @@ if(RETRO3DO_BUILD_TESTS)
         tests/test_arm60.cpp
         tests/test_audio_pad.cpp
         tests/test_bus.cpp
+        tests/test_chd.cpp
         tests/test_clio.cpp
         tests/test_disc.cpp
         tests/test_frame_mailbox.cpp

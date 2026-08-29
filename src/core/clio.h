@@ -25,6 +25,13 @@ class Arm60;
 
 // Sources on the first interrupt bank. Only the ones the machine currently
 // generates are named; the rest of the bits exist but are never raised yet.
+// Reset causes reported through CSTATBITS.
+enum : u32 {
+    kResetPowerOn = 1u << 0,   // cold start
+    kResetSoftware = 1u << 1,  // TODO(clio): confirm
+    kResetExternal = 1u << 6,  // TODO(clio): confirm
+};
+
 enum : u32 {
     kIrqVerticalBlank0 = 1u << 0,
     kIrqVerticalBlank1 = 1u << 1,
@@ -41,6 +48,10 @@ enum : u32 {
     kClioVint1        = 0x000c,   // scanline that raises VBL1
     kClioAudioIn      = 0x0020,   // TODO(clio): confirm
     kClioAudioOut     = 0x0024,   // TODO(clio): confirm
+    // CSTATBITS reports WHY the machine started. The BIOS reads it, masks with
+    // 0x43 and branches on 1, 2 or 0x40; anything else and it gives up and
+    // spins forever. Confirmed by disassembling the boot ROM, which is also
+    // what confirmed the MADAM and CLIO base addresses below.
     kClioCstatBits    = 0x0028,
     kClioWatchdog     = 0x0030,
     kClioHCount       = 0x0034,   // pixel within the line
@@ -139,6 +150,7 @@ private:
     u32 revision_ = 0;
     u32 mode_ = 0;
     u32 csys_bits_ = 0;
+    u32 cstat_bits_ = 0;
     u32 watchdog_ = 0;
     u32 seed_ = 0;
     u32 timer_slack_ = 0;

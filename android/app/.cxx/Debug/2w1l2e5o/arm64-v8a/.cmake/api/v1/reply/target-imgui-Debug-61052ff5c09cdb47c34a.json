@@ -1,8 +1,9 @@
 {
+	"archive" : {},
 	"artifacts" : 
 	[
 		{
-			"path" : "/home/jon/StudioProjects/Retro-3DO/android/app/build/intermediates/cxx/Debug/2w1l2e5o/obj/arm64-v8a/libmain.so"
+			"path" : "retro3do/libimgui.a"
 		}
 	],
 	"backtrace" : 1,
@@ -26,19 +27,19 @@
 			{
 				"command" : 0,
 				"file" : 0,
-				"line" : 117,
+				"line" : 90,
 				"parent" : 0
 			},
 			{
 				"command" : 1,
 				"file" : 0,
-				"line" : 124,
+				"line" : 99,
 				"parent" : 0
 			},
 			{
 				"command" : 2,
 				"file" : 0,
-				"line" : 125,
+				"line" : 98,
 				"parent" : 0
 			}
 		]
@@ -52,27 +53,13 @@
 					"fragment" : "-g -DANDROID -fdata-sections -ffunction-sections -funwind-tables -fstack-protector-strong -no-canonical-prefixes -D_FORTIFY_SOURCE=2 -Wformat -Werror=format-security   -fno-limit-debug-info  -fPIC"
 				},
 				{
-					"backtrace" : 2,
-					"fragment" : "-pthread"
-				},
-				{
 					"fragment" : "-std=gnu++17"
-				}
-			],
-			"defines" : 
-			[
-				{
-					"define" : "retro3do_EXPORTS"
 				}
 			],
 			"includes" : 
 			[
 				{
 					"backtrace" : 3,
-					"path" : "/home/jon/StudioProjects/Retro-3DO/src"
-				},
-				{
-					"backtrace" : 2,
 					"path" : "/home/jon/StudioProjects/Retro-3DO/third_party/imgui"
 				},
 				{
@@ -100,9 +87,7 @@
 				2,
 				3,
 				4,
-				5,
-				6,
-				7
+				5
 			],
 			"sysroot" : 
 			{
@@ -114,58 +99,12 @@
 	[
 		{
 			"backtrace" : 2,
-			"id" : "retro3do_core::@4146b486723d3652d7ff"
-		},
-		{
-			"backtrace" : 2,
 			"id" : "SDL3-shared::@bbf573702d147a204f21"
-		},
-		{
-			"backtrace" : 2,
-			"id" : "imgui::@4146b486723d3652d7ff"
 		}
 	],
-	"id" : "retro3do::@4146b486723d3652d7ff",
-	"link" : 
-	{
-		"commandFragments" : 
-		[
-			{
-				"fragment" : "-static-libstdc++ -Wl,--build-id=sha1 -Wl,--no-rosegment -Wl,--no-undefined-version -Wl,--fatal-warnings -Wl,--no-undefined -Qunused-arguments",
-				"role" : "flags"
-			},
-			{
-				"backtrace" : 2,
-				"fragment" : "retro3do/libretro3do_core.a",
-				"role" : "libraries"
-			},
-			{
-				"backtrace" : 2,
-				"fragment" : "retro3do/libimgui.a",
-				"role" : "libraries"
-			},
-			{
-				"backtrace" : 2,
-				"fragment" : "/home/jon/StudioProjects/Retro-3DO/android/app/build/intermediates/cxx/Debug/2w1l2e5o/obj/arm64-v8a/libSDL3.so",
-				"role" : "libraries"
-			},
-			{
-				"fragment" : "-pthread",
-				"role" : "libraries"
-			},
-			{
-				"fragment" : "-latomic -lm",
-				"role" : "libraries"
-			}
-		],
-		"language" : "CXX",
-		"sysroot" : 
-		{
-			"path" : "/home/jon/Android/Sdk/ndk/28.2.13676358/toolchains/llvm/prebuilt/linux-x86_64/sysroot"
-		}
-	},
-	"name" : "retro3do",
-	"nameOnDisk" : "libmain.so",
+	"id" : "imgui::@4146b486723d3652d7ff",
+	"name" : "imgui",
+	"nameOnDisk" : "libimgui.a",
 	"paths" : 
 	{
 		"build" : "retro3do",
@@ -182,9 +121,7 @@
 				2,
 				3,
 				4,
-				5,
-				6,
-				7
+				5
 			]
 		}
 	],
@@ -193,51 +130,39 @@
 		{
 			"backtrace" : 1,
 			"compileGroupIndex" : 0,
-			"path" : "/home/jon/StudioProjects/Retro-3DO/src/main.cpp",
+			"path" : "/home/jon/StudioProjects/Retro-3DO/third_party/imgui/imgui.cpp",
 			"sourceGroupIndex" : 0
 		},
 		{
 			"backtrace" : 1,
 			"compileGroupIndex" : 0,
-			"path" : "/home/jon/StudioProjects/Retro-3DO/src/platform/app.cpp",
+			"path" : "/home/jon/StudioProjects/Retro-3DO/third_party/imgui/imgui_draw.cpp",
 			"sourceGroupIndex" : 0
 		},
 		{
 			"backtrace" : 1,
 			"compileGroupIndex" : 0,
-			"path" : "/home/jon/StudioProjects/Retro-3DO/src/platform/emulator_thread.cpp",
+			"path" : "/home/jon/StudioProjects/Retro-3DO/third_party/imgui/imgui_tables.cpp",
 			"sourceGroupIndex" : 0
 		},
 		{
 			"backtrace" : 1,
 			"compileGroupIndex" : 0,
-			"path" : "/home/jon/StudioProjects/Retro-3DO/src/ui/ui.cpp",
+			"path" : "/home/jon/StudioProjects/Retro-3DO/third_party/imgui/imgui_widgets.cpp",
 			"sourceGroupIndex" : 0
 		},
 		{
 			"backtrace" : 1,
 			"compileGroupIndex" : 0,
-			"path" : "/home/jon/StudioProjects/Retro-3DO/src/ui/file_browser.cpp",
+			"path" : "/home/jon/StudioProjects/Retro-3DO/third_party/imgui/backends/imgui_impl_sdl3.cpp",
 			"sourceGroupIndex" : 0
 		},
 		{
 			"backtrace" : 1,
 			"compileGroupIndex" : 0,
-			"path" : "/home/jon/StudioProjects/Retro-3DO/src/ui/touch_pad.cpp",
-			"sourceGroupIndex" : 0
-		},
-		{
-			"backtrace" : 1,
-			"compileGroupIndex" : 0,
-			"path" : "/home/jon/StudioProjects/Retro-3DO/src/platform/storage.cpp",
-			"sourceGroupIndex" : 0
-		},
-		{
-			"backtrace" : 1,
-			"compileGroupIndex" : 0,
-			"path" : "/home/jon/StudioProjects/Retro-3DO/src/platform/android_storage.cpp",
+			"path" : "/home/jon/StudioProjects/Retro-3DO/third_party/imgui/backends/imgui_impl_sdlrenderer3.cpp",
 			"sourceGroupIndex" : 0
 		}
 	],
-	"type" : "SHARED_LIBRARY"
+	"type" : "STATIC_LIBRARY"
 }

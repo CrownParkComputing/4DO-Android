@@ -58,13 +58,17 @@ mistaken for a fall-through. Every handler that writes PC says so explicitly.
 | VRAM | `0x00200000` | 1 MB | Confident |
 | ROM (BIOS, reset vector) | `0x03000000` | 1 MB | Confident |
 | NVRAM | `0x03140000` | 32 KB | **TODO(map)** — confirm base and stride |
-| MADAM | `0x03300000` | — | **TODO(map)** — confirm |
-| CLIO | `0x03400000` | — | **TODO(map)** — confirm |
+| MADAM | `0x03300000` | — | **Confirmed** by the boot ROM |
+| CLIO | `0x03400000` | — | **Confirmed** by the boot ROM |
 
 The machine is **big-endian as the CPU sees it**. Every word and halfword access
 byte-swaps on a little-endian host. A swap that is right in one direction and
 wrong in the other produces graphics that are almost correct, which is the most
 expensive kind of bug to find later, so both directions are pinned by tests.
+
+Both chip bases were confirmed by disassembling a real boot ROM rather than
+taken on trust: at `0x03000068` it builds `0x03400000` for CLIO and at
+`0x0300006C` `0x03300000` for MADAM, then immediately reads a CLIO register.
 
 Reads of unmapped space currently return zero rather than raising a data abort.
 That is a scaffolding decision to keep early boot alive while the chips are
@@ -419,6 +423,44 @@ from system settings and an iOS container is reassigned on every install, so a
 path that worked yesterday may be meaningless today. On load the app tries the
 remembered BIOS and disc and, if they no longer resolve, forgets them silently —
 that is ordinary rather than exceptional and should not be reported as an error.
+
+## Booting a real BIOS
+
+Running a genuine boot ROM found a hang the test suite could never have,
+because it depends on the ROM's own expectations rather than on our behaviour:
+
+**The ROM reads CLIO register `0x28` (CSTATBITS), masks it with `0x43`, and
+branches on 1, 2 or `0x40`.** It is asking *why the machine started*. CLIO
+returned zero, which matches none of those, so the ROM fell through into a
+two-instruction infinite loop at `0x030000A8` — a black screen with the CPU
+apparently busy. Reporting a power-on reset instead lets it proceed, and it now
+runs on across two code regions and writes RAM.
+
+The lesson is that **zero is not a neutral default for a status register.** A
+register that reports a cause from a fixed set will hang the ROM if it reports
+none of them.
+
+A harness trap worth recording alongside it: the first trace stepped the CPU
+directly and never ticked CLIO, so every poll of a video counter waited forever.
+That looks precisely like an emulator bug and was entirely an artefact of the
+harness. Drive whole frames.
+
+## CHD recognition (`src/core/chd.cpp`)
+
+CHD is the format most 3DO libraries are actually stored in, so an emulator that
+cannot recognise one is confusing to use. Without this a `.chd` falls through to
+the raw-image path, finds no sync pattern, is taken for a cooked 2048-byte
+image, and reports a plausible sector count computed from *compressed* data —
+every read then returns compressed bytes as though they were disc contents.
+That presents as a corrupt disc rather than an unsupported file, which is far
+worse than a clear refusal.
+
+So a CHD is identified, described (version, uncompressed size, codecs, whether
+it is a delta against a parent) and refused with a reason. It is not yet
+readable: the data needs a decoder per codec, which is a separate job.
+
+Verified against a real library: `CHD v5, 766 MB uncompressed, cd-lzma +
+cd-zlib + cd-flac`.
 
 ## What device testing changed
 

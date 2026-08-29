@@ -94,6 +94,7 @@ void Disc::close() {
     path_.clear();
     tracks_.clear();
     sector_count_ = 0;
+    chd_ = ChdInfo{};
 }
 
 bool Disc::open(const std::string& path) {
@@ -110,6 +111,10 @@ bool Disc::open(const std::string& path) {
     // that trusting them produces the off-by-304-bytes failure this class
     // exists to avoid.
     if (!open_image(path, SectorLayout::Cooked2048)) {
+        return false;
+    }
+
+    if (reject_if_chd(path)) {
         return false;
     }
 
@@ -172,6 +177,10 @@ bool Disc::open_fd(int fd, const std::string& display_name) {
     }
     path_ = display_name;
 
+    if (reject_if_chd(display_name)) {
+        return false;
+    }
+
     SectorLayout detected = SectorLayout::Cooked2048;
     if (!detect_layout(&detected)) {
         close();
@@ -204,6 +213,24 @@ bool Disc::open_image(const std::string& path, SectorLayout layout) {
     }
     path_ = path;
     layout_ = layout;
+    return true;
+}
+
+// Recognise a CHD before anything else looks at the file. Returns true if this
+// is a CHD, in which case the disc is NOT opened: it is identified, described,
+// and refused with a reason.
+bool Disc::reject_if_chd(const std::string& display_name) {
+    chd_ = probe_chd(file_);
+    if (!chd_.is_chd) {
+        return false;
+    }
+
+    last_error_ = display_name + " is a " + chd_.describe() +
+                  ". CHD images are recognised but cannot be read yet.";
+    if (file_ != nullptr) {
+        std::fclose(file_);
+        file_ = nullptr;
+    }
     return true;
 }
 

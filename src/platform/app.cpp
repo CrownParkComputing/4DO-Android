@@ -516,6 +516,16 @@ void App::tick() {
         emulating_ = !emulating_;
         emulator_->set_paused(!emulating_);
     }
+    if (intent.region_changed) {
+        // A region change resizes the framebuffer, so the emulator must not be
+        // midway through a frame when it happens.
+        emulator_->set_paused(true);
+        console_->set_region(intent.set_region_pal ? Region::Pal : Region::Ntsc);
+        mailbox_->resize(console_->framebuffer().width,
+                         console_->framebuffer().height);
+        emulator_->set_paused(!emulating_);
+        save_settings();
+    }
     if (intent.toggle_touch_controls) {
         touch_->set_visible(!touch_->visible());
         if (!touch_->visible()) touch_->set_editing(false);

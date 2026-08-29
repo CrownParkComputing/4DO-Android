@@ -34,6 +34,8 @@ struct UiIntent {
     bool toggle_touch_controls = false;
     bool toggle_layout_edit = false;
     bool reset_touch_layout = false;
+    bool region_changed = false;
+    bool set_region_pal = false;
 };
 
 class Ui {
@@ -66,7 +68,8 @@ public:
     void render(SDL_Renderer* renderer);
 
 private:
-    void draw_launcher(Console& console, UiIntent& intent);
+    void draw_launcher(Console& console, bool touch_visible,
+                       bool touch_editing, UiIntent& intent);
     void draw_overlay(Console& console, double display_fps,
                       double emulated_fps, double frame_ms, u64 underruns,
                       bool touch_visible, bool touch_editing, UiIntent& intent);

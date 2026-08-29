@@ -55,6 +55,12 @@ void Clio::reset() {
 
     mode_ = 0;
     csys_bits_ = 0;
+
+    // A reset is a power-on as far as the machine is concerned. Reporting no
+    // cause at all is not a neutral default: the boot ROM tests this against a
+    // fixed set of causes and hangs if it recognises none, so zero here means
+    // the machine never boots.
+    cstat_bits_ = kResetPowerOn;
     watchdog_ = 0;
     seed_ = 0;
     timer_slack_ = 0;
@@ -161,7 +167,7 @@ u32 Clio::read(u32 offset) {
         case kClioCsysBits:    return csys_bits_;
         case kClioVint0:       return vint0_line_;
         case kClioVint1:       return vint1_line_;
-        case kClioCstatBits:   return 0;
+        case kClioCstatBits:   return cstat_bits_;
         case kClioWatchdog:    return watchdog_;
         case kClioHCount:      return pixel_in_line_;
         case kClioVCount:      return scanline_;
@@ -203,6 +209,9 @@ void Clio::write(u32 offset, u32 value) {
         case kClioWatchdog:  watchdog_ = value; break;
         case kClioSeed:      seed_ = value; break;
         case kClioMode:      mode_ = value; break;
+        // The ROM clears this once it has read the reset cause, so the cause is
+        // reported once rather than latching forever.
+        case kClioCstatBits: cstat_bits_ = value; break;
 
         // The interrupt registers come in set/clear pairs rather than being
         // read-modify-written. A handler acknowledges by writing the bits it

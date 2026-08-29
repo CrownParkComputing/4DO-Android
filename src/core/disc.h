@@ -22,6 +22,7 @@
 #include <string>
 #include <vector>
 
+#include "chd.h"
 #include "types.h"
 
 namespace retro3do {
@@ -80,6 +81,14 @@ public:
     const std::string& last_error() const { return last_error_; }
 
     SectorLayout layout() const { return layout_; }
+
+    // Set when the file was recognised as a CHD. A CHD is identified but not
+    // yet readable: the data is compressed, and decompressing it needs a codec
+    // per compression type. Reporting it precisely beats letting it fall
+    // through to the raw-image path, which would take compressed bytes for
+    // disc contents and look like a corrupt disc.
+    const ChdInfo& chd() const { return chd_; }
+    bool is_chd() const { return chd_.is_chd; }
     u32 sector_count() const { return sector_count_; }
 
     const std::vector<Track>& tracks() const { return tracks_; }
@@ -96,12 +105,14 @@ private:
     bool open_cue(const std::string& path);
     bool open_image(const std::string& path, SectorLayout layout);
     bool detect_layout(SectorLayout* out);
+    bool reject_if_chd(const std::string& display_name);
 
     std::FILE* file_ = nullptr;
     std::string path_;
     std::string last_error_;
 
     SectorLayout layout_ = SectorLayout::Cooked2048;
+    ChdInfo chd_;
     u32 sector_count_ = 0;
     std::vector<Track> tracks_;
 };

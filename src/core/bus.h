@@ -80,24 +80,44 @@ enum : u32 {
 // A write that lands in memory the CPU might later execute has to invalidate
 // the decode cache. Rather than have the bus know about the CPU, it records
 // that something happened and the console asks.
+// Which pages of memory have been written since the CPU's decode cache was last
+// brought up to date.
+//
+// This used to be a single low/high range, which is wrong in a way that only
+// shows up as slowness: two writes at opposite ends of memory in the same slice
+// make the range cover everything between them, and the whole span then gets
+// invalidated page by page. The OS legitimately writes across the whole of DRAM,
+// so the range was usually enormous, and the cost scaled with how much memory
+// the machine had rather than with how much was actually written.
+//
+// A set of dirty pages costs the same to record and makes invalidation
+// proportional to what was really touched.
 struct WriteWatch {
-    bool     dirty = false;
-    u32      low   = 0;
-    u32      high  = 0;
+    static constexpr u32 kPageBytes = 4096;
+    static constexpr u32 kPages     = (2u * 1024 * 1024) / kPageBytes;
+    static constexpr u32 kWords     = (kPages + 63u) / 64u;
+
+    bool dirty = false;
+    u64  bits[kWords] = {};
 
     void note(u32 address, u32 length) {
-        const u32 end = address + length;
-        if (!dirty) {
-            dirty = true;
-            low   = address;
-            high  = end;
-            return;
+        if (length == 0) return;
+        const u32 first = address / kPageBytes;
+        const u32 last  = (address + length - 1) / kPageBytes;
+        for (u32 page = first; page <= last && page < kPages; ++page) {
+            bits[page >> 6] |= (u64{1} << (page & 63));
         }
-        if (address < low) low = address;
-        if (end > high)    high = end;
+        dirty = true;
     }
 
-    void clear() { dirty = false; low = 0; high = 0; }
+    bool is_dirty(u32 page) const {
+        return page < kPages && (bits[page >> 6] >> (page & 63) & 1) != 0;
+    }
+
+    void clear() {
+        dirty = false;
+        for (u64& word : bits) word = 0;
+    }
 };
 
 class Bus {

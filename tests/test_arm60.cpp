@@ -347,8 +347,7 @@ TEST(the_bus_reports_writes_that_could_land_on_code) {
     Bus bus;
     bus.write32(0x9000u, 0x12345678u);
     CHECK(bus.write_watch().dirty);
-    CHECK(bus.write_watch().low <= 0x9000u);
-    CHECK(bus.write_watch().high >= 0x9004u);
+    CHECK(bus.write_watch().is_dirty(0x9000u / WriteWatch::kPageBytes));
 
     bus.write_watch().clear();
     CHECK(!bus.write_watch().dirty);
@@ -356,4 +355,17 @@ TEST(the_bus_reports_writes_that_could_land_on_code) {
     // A write to VRAM is not code and must not force an invalidation.
     bus.write32(kVramBase + 0x100u, 0u);
     CHECK(!bus.write_watch().dirty);
+}
+
+TEST(distant_writes_do_not_dirty_everything_between_them) {
+    // Recorded as a range, two writes at opposite ends of memory would make the
+    // whole span dirty and invalidation would cost as much as the machine has
+    // memory rather than as much as was written.
+    Bus bus;
+    bus.write32(0x1000u, 1u);
+    bus.write32(0x7f000u, 1u);
+    CHECK(bus.write_watch().is_dirty(0x1000u / WriteWatch::kPageBytes));
+    CHECK(bus.write_watch().is_dirty(0x7f000u / WriteWatch::kPageBytes));
+    // and nothing in between
+    CHECK(!bus.write_watch().is_dirty(0x40000u / WriteWatch::kPageBytes));
 }

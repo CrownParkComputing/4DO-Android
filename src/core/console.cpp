@@ -176,7 +176,12 @@ void Console::apply_write_watch() {
     if (!watch.dirty) {
         return;
     }
-    cpu_.invalidate_decode_cache(watch.low, watch.high - watch.low);
+    for (u32 page = 0; page < WriteWatch::kPages; ++page) {
+        if (watch.is_dirty(page)) {
+            cpu_.invalidate_decode_cache(page * WriteWatch::kPageBytes,
+                                         WriteWatch::kPageBytes);
+        }
+    }
     watch.clear();
 }
 

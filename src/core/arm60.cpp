@@ -60,9 +60,17 @@ struct Arm60::DecodeCache {
     static constexpr u32 kPageBytes   = 4096;
     static constexpr u32 kPageEntries = kPageBytes / 4;
 
+    // Validity is a generation stamp rather than a flag.
+    //
+    // Clearing a flag array meant every invalidation memset four kilobytes, and
+    // the machine invalidates constantly - the ROM's own memory test writes
+    // across the whole of DRAM. Bumping a counter instead makes invalidating a
+    // page O(1), which turns the cost of a memory test from proportional to
+    // memory size into nothing at all.
     struct Page {
         Decoded entries[kPageEntries];
-        bool    valid[kPageEntries];
+        u32     stamp[kPageEntries];
+        u32     generation;
     };
 
     std::unordered_map<u32, std::vector<Page>::size_type> page_index;
@@ -76,7 +84,8 @@ struct Arm60::DecodeCache {
         }
         pages.emplace_back();
         Page& page = pages.back();
-        std::memset(page.valid, 0, sizeof(page.valid));
+        std::memset(page.stamp, 0, sizeof(page.stamp));
+        page.generation = 1;
         page_index.emplace(key, pages.size() - 1);
         return page;
     }
@@ -91,9 +100,14 @@ struct Arm60::DecodeCache {
         const u32 last  = (address + length - 1) / kPageBytes;
         for (u32 key = first; key <= last; ++key) {
             auto it = page_index.find(key);
-            if (it != page_index.end()) {
-                std::memset(pages[it->second].valid, 0,
-                            sizeof(pages[it->second].valid));
+            if (it == page_index.end()) {
+                continue;
+            }
+            Page& page = pages[it->second];
+            if (++page.generation == 0) {
+                // Wrapped, so old stamps could look current again.
+                std::memset(page.stamp, 0, sizeof(page.stamp));
+                page.generation = 1;
             }
         }
     }
@@ -276,9 +290,9 @@ const Decoded& Arm60::decoded_at(u32 address) {
     DecodeCache::Page& page = cache_->page_for(address);
     const u32 slot = (address % DecodeCache::kPageBytes) / 4;
 
-    if (!page.valid[slot]) {
+    if (page.stamp[slot] != page.generation) {
         page.entries[slot] = decode(bus_.fetch32(address));
-        page.valid[slot] = true;
+        page.stamp[slot] = page.generation;
     }
     return page.entries[slot];
 }

@@ -101,7 +101,7 @@ void CdRomDevice::build_reply(u8 command) {
 
         case kCmdReadStatus:
             pending_reply_.push_back(kCmdReadStatus);
-            pending_reply_.push_back(drive_status() & ~kStatusSuccess);
+            pending_reply_.push_back(drive_status());
             break;
 
         case kCmdReadError:
@@ -151,7 +151,7 @@ void CdRomDevice::build_reply(u8 command) {
             pending_reply_.push_back(u8(lead_out >> 16));
             pending_reply_.push_back(u8(lead_out >> 8));
             pending_reply_.push_back(u8(lead_out));
-            pending_reply_.push_back(u8(drive_status() | kStatusSuccess));
+            pending_reply_.push_back(drive_status());
             break;
         }
 
@@ -214,7 +214,7 @@ void CdRomDevice::build_reply(u8 command) {
         case kCmdMotorOn:
             motor_on_ = true;
             pending_reply_.push_back(kCmdMotorOn);
-            pending_reply_.push_back(u8(drive_status() | kStatusSuccess));
+            pending_reply_.push_back(drive_status());
             break;
 
         case kCmdMotorOff:
@@ -306,10 +306,14 @@ u8 CdRomDevice::drive_status() const {
     // The door is shut. This drive is built into the machine rather than
     // plugged into it, so there is no state in which it is not - and the host
     // does look: reporting it changes which code the boot takes.
+    // Exactly the bits this BIOS's own driver defines - tray, disc, spin,
+    // error, double speed, ready. There is deliberately no "success" bit: MAME
+    // lists 0x08 as STATUS_SUCCESS but marks it unconfirmed, and the driver
+    // that actually boots this disc has no such bit at all. Setting one the
+    // host does not expect is not harmless.
     u8 status = kStatusDoor;
     if (disc_present_) status |= kStatusDiscIn;
     if (motor_on_)     status |= kStatusSpinUp | kStatusReady;
-    if (last_ok_)      status |= kStatusSuccess;
     return status;
 }
 
@@ -362,7 +366,6 @@ void CdRomDevice::write_command(u8 byte) {
         fprintf(stderr, "\n");
     }
 
-    last_ok_ = true;
     build_reply(last_command_);
 
     completion_pending_ = true;

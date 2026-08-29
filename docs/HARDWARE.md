@@ -1082,6 +1082,49 @@ takes a different path, because it never looks.
 **It is not an interrupt problem.** The machine takes about 126 FIQs a frame,
 and the real service routine reads the pending register thousands of times.
 
+## The poll register and drive status, settled
+
+Taken from the driver that actually boots this BIOS. Where it disagrees with
+MAME, this is the version to trust - MAME's own 3DO notes say its drive is
+"enough to load a few sectors and nothing else".
+
+Poll register - low nibble enables, high nibble state:
+
+| Bit | Meaning |
+|---|---|
+| 0x01 | status interrupt enable |
+| 0x02 | data interrupt enable |
+| 0x04 | media-access interrupt enable |
+| 0x08 | ready interrupt enable |
+| 0x10 | status available |
+| 0x20 | data available |
+| 0x40 | media access |
+| 0x80 | ready |
+
+MAME calls 0x40 "write valid" and 0x80 "media access"; the working driver calls
+them media-access and ready. That also explains the boot ROM's own scan testing
+`poll & (poll << 4)` against 0x70: it is checking each of the first three
+enables against its matching state bit.
+
+Drive status byte:
+
+| Bit | Meaning |
+|---|---|
+| 0x80 | tray closed |
+| 0x40 | disc present |
+| 0x20 | spinning |
+| 0x10 | error |
+| 0x02 | double speed |
+| 0x01 | ready |
+
+There is **no 0x08**. MAME lists one as STATUS_SUCCESS and marks it unconfirmed;
+the driver that boots this disc has no such bit, and setting one the host does
+not expect is not harmless. A healthy drive with a disc reads 0xE1 - tray, disc,
+spin, ready - which is exactly the value the working core logs.
+
+A READ is refused outright unless tray, disc and spin are all set, and on
+success the drive raises BOTH the data and status poll bits.
+
 ## The CD driver's state machine is healthy
 
 Worth recording, because it rules out a whole class of explanation. The driver

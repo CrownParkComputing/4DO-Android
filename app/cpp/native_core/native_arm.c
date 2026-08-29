@@ -1396,11 +1396,24 @@ opera_arm_execute(void)
   int isexeption;
 
   isexeption = false;
-  if((CPU.USER[15] == 0x94D60) &&
-     (CPU.USER[0] == 0x113000) &&
-     (CPU.USER[1] == 0x113000) &&
-     (CNBFIX == 0)             &&
-     (FIXMODE & FIX_BIT_TIMING_1))
+  /*
+     Per-game timing fixup. The condition is unchanged, but ordered so the two
+     tests that are false for almost every instruction come first.
+
+     This runs on EVERY instruction - around twelve million times a second - and
+     as originally written it loaded three CPU registers and compared them before
+     ever reaching the flag that says whether the fixup applies at all. FIXMODE
+     is a configuration bit and CNBFIX latches after the fixup has fired once, so
+     testing those two first short-circuits the whole thing for every game that
+     does not need it, and for the rest of the run once it has.
+
+     Pure AND of side-effect-free tests, so reordering cannot change behaviour.
+  */
+  if((FIXMODE & FIX_BIT_TIMING_1)  &&
+     (CNBFIX == 0)                 &&
+     (CPU.USER[15] == 0x94D60)     &&
+     (CPU.USER[0] == 0x113000)     &&
+     (CPU.USER[1] == 0x113000))
     {
       CPU.USER[15] = 0x9E9CC;
       CNBFIX = 1;

@@ -221,7 +221,7 @@ public class SetupWizardActivity extends AppCompatActivity {
         nextButton.setEnabled(true);
     }
 
-    /** Pick a pre-built 3DO Opera folder (already containing bios/ + games/) and
+    /** Pick a pre-built Retro-3DO folder (already containing bios/ + games/) and
      *  skip the rest of the wizard. */
     private void openExistingFolderPicker() {
         Intent intent = SafFileImporter.createOpenDocumentTreeIntent();

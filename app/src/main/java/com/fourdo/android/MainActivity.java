@@ -69,7 +69,7 @@ import java.util.function.Consumer;
 import java.util.function.IntConsumer;
 
 /**
- * 3DO Opera — Ymir-style single-Activity host.
+ * Retro-3DO — Ymir-style single-Activity host.
  *
  * Owns: the native surface, the play bar, the settings panel, the game library
  * screen, the in-game virtual pad, the controller-mapping overlay, the loading
@@ -714,7 +714,7 @@ public final class MainActivity extends AppCompatActivity {
         settingsHeader.setOrientation(LinearLayout.HORIZONTAL);
 
         TextView title = new TextView(this);
-        title.setText("3DO Opera Settings");
+        title.setText("Retro-3DO Settings");
         title.setTextColor(0xFFFFFFFF);
         title.setTextSize(16.0f);
         settingsHeader.addView(title, new LinearLayout.LayoutParams(

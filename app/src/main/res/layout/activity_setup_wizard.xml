@@ -83,7 +83,7 @@
                     android:layout_width="match_parent"
                     android:layout_height="wrap_content"
                     android:layout_marginTop="24dp"
-                    android:text="Use an existing 3DO Opera folder (skip setup)"
+                    android:text="Use an existing folder containing bios/ and games/ (skip setup)"
                     android:textColor="#FFFFFF"
                     android:backgroundTint="#2E7D5B"
                     android:textAllCaps="false" />

@@ -186,7 +186,7 @@ public final class SafFileImporter {
     }
 
     /**
-     * Adopt a pre-built "3DO Opera" folder (containing bios/ and optionally
+     * Adopt a pre-built "Retro-3DO" folder (containing bios/ and optionally
      * games/) picked via SAF, copying its contents into app-specific storage.
      * Returns the imported BIOS path and (optional) library path. Uses
      * DocumentFile/content URIs — no raw /storage access or all-files permission.
@@ -199,7 +199,7 @@ public final class SafFileImporter {
         }
         DocumentFile biosDir = tree.findFile("bios");
         if (biosDir == null || !biosDir.isDirectory()) {
-            throw new IOException("That folder has no 'bios' subfolder — pick a 3DO Opera folder");
+            throw new IOException("That folder has no 'bios' subfolder — pick a folder containing bios/ and games/");
         }
         DocumentFile chosenBios = null;
         DocumentFile[] biosChildren = biosDir.listFiles();

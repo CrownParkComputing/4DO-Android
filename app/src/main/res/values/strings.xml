@@ -1,5 +1,5 @@
 <resources>
-    <string name="app_name">3DO Opera</string>
+    <string name="app_name">Retro-3DO</string>
     <string name="start_emulator">Start Emulator</string>
     <string name="settings">Settings</string>
     <string name="pause">Pause</string>
@@ -36,7 +36,7 @@
     <string name="controller_map_button">Controller Map</string>
     
     <!-- Setup Wizard -->
-    <string name="setup_title">3DO Opera Setup Wizard</string>
+    <string name="setup_title">Retro-3DO Setup Wizard</string>
     <string name="setup_next">Next</string>
     <string name="setup_back">Back</string>
     <string name="setup_launch">Start Playing!</string>
@@ -47,8 +47,8 @@
     <string name="region_pal2">PAL Wide (384×288, 50 Hz)</string>
     
     <!-- Welcome Step -->
-    <string name="setup_welcome_title">Welcome to 3DO Opera!</string>
-    <string name="setup_welcome_text">This wizard will help you set up the 3DO emulator.\n\nPick one writable app storage folder, then 3DO Opera will create its bios, games, appdata, and bezels folders under it.</string>
+    <string name="setup_welcome_title">Welcome to Retro-3DO!</string>
+    <string name="setup_welcome_text">This wizard will help you set up the 3DO emulator.\n\nPick one writable app storage folder, then Retro-3DO will create its bios, games, appdata, and bezels folders under it.</string>
     <string name="setup_welcome_steps">1. A 3DO BIOS file (.bin or .rom)\n2. An app storage folder for imported data\n3. A games folder to scan and import</string>
     <string name="supported_formats">Supported: ZIP, 7Z, RAR, CUE, ISO, CHD, BIN</string>
     <string name="extract_archive">Extract Archive</string>
@@ -68,7 +68,7 @@
     
     <!-- App Storage Step -->
     <string name="setup_app_title">Step 2: Select App Storage Folder</string>
-    <string name="setup_app_explanation">Choose the folder where 3DO Opera will create its bios, games, appdata, and bezels folders.\n\nPick a writable folder on internal storage or your SD card.</string>
+    <string name="setup_app_explanation">Choose the folder where Retro-3DO will create its bios, games, appdata, and bezels folders.\n\nPick a writable folder on internal storage or your SD card.</string>
     <string name="setup_select_app">Select App Folder</string>
     <string name="setup_app_not_selected">No app folder selected</string>
     <string name="setup_app_selected">App storage: %1$s</string>

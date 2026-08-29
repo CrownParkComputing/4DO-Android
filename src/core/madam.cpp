@@ -154,13 +154,6 @@ u32 Madam::read(u32 offset) {
         case kMadamDmaEnable:  return dma_enable_;
         case kMadamVdlAddress: return vdl_address_;
         default:
-            if (getenv("UNIMPL")) {
-                static bool seen[2048/4] = {};
-                if (offset/4 < 2048/4 && !seen[offset/4]) {
-                    seen[offset/4] = true;
-                    fprintf(stderr, "  UNIMPLEMENTED MADAM read +%04X\n", offset);
-                }
-            }
             return 0;
     }
 }

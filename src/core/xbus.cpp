@@ -18,7 +18,6 @@ void CdRomDevice::tick(u32 cycles) {
 }
 
 u8 CdRomDevice::drive_status() const {
-    if (const char* e = getenv("CDSTATUS")) return (u8)strtoul(e, 0, 16);
     u8 status = kStatusReady;
     if (disc_present_) {
         status |= kStatusDiscIn | kStatusSpinUp;
@@ -38,7 +37,6 @@ void CdRomDevice::reset() {
 }
 
 #include <cstdio>
-size_t CdRomDevice::kReplyBytes = getenv("CDLEN") ? strtoul(getenv("CDLEN"),0,10) : 12;
 namespace { bool trace() { return getenv("CDTRACE") != nullptr; } }
 
 void CdRomDevice::write_command(u8 byte) {
@@ -80,19 +78,8 @@ void CdRomDevice::write_command(u8 byte) {
     // reads does not fail cleanly: it reads zeroes off the end of an empty
     // FIFO, takes them for part of the answer, and abandons the conversation
     // after a single command.
-    if (const char* r = getenv("CDREPLY")) {
-        // Bring-up hook: CDREPLY=hex sets the data bytes after the echo.
-        for (size_t i = 0; r[i * 2] && r[i * 2 + 1]; ++i) {
-            char b[3] = {r[i * 2], r[i * 2 + 1], 0};
-            status_.push_back((u8)strtoul(b, 0, 16));
-        }
-    }
-    const u8 fill = getenv("CDFILL") ? (u8)strtoul(getenv("CDFILL"), 0, 16) : 0x00;
     while (status_.size() < kReplyBytes) {
-        status_.push_back(fill);
-    }
-    while (status_.size() > kReplyBytes) {
-        status_.pop_back();
+        status_.push_back(0x00);
     }
 
     // A command completes in TWO phases. What has just been queued is only the
@@ -103,7 +90,7 @@ void CdRomDevice::write_command(u8 byte) {
     // device and testing the poll register for status-ready, and waits there
     // indefinitely. Queue only the acknowledgement and the machine hangs in
     // that loop having been told, as far as it can tell, nothing at all.
-    completion_pending_ = getenv("CDNOCOMP") == nullptr;
+    completion_pending_ = true;
     completion_delay_ = kCompletionDelay;
 }
 
@@ -113,7 +100,6 @@ u8 CdRomDevice::read_status() {
     }
     const u8 byte = status_.front();
     status_.pop_front();
-    if (trace()) fprintf(stderr, "[cd]   read %02X (%zu left)\n", byte, status_.size());
 
     return byte;
 }

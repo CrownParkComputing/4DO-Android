@@ -1,5 +1,4 @@
 #include "bus.h"
-#include <cstdio>
 
 #include <algorithm>
 #include <cstring>
@@ -157,11 +156,7 @@ u32 Bus::fetch32(u32 address) {
 // ---------------------------------------------------------------------------
 // Writes
 // ---------------------------------------------------------------------------
-bool g_trace_madam = false;
 void Bus::write32(u32 address, u32 value) {
-    if (g_trace_madam && address >= 0x03300000u && address < 0x03310000u) {
-        fprintf(stderr, "  MADAM+%04X = %08X\n", address - 0x03300000u, value);
-    }
     const u32 addr = address & ~u32{3};
 
     if (addr < kDramSize) {

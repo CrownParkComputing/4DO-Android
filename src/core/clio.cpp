@@ -336,13 +336,6 @@ u32 Clio::read(u32 offset) {
             return static_cast<u32>(timer_config_ >> 32);
 
         default:
-            if (getenv("UNIMPL")) {
-                static bool seen[2048/4] = {};
-                if (offset/4 < 2048/4 && !seen[offset/4]) {
-                    seen[offset/4] = true;
-                    fprintf(stderr, "  UNIMPLEMENTED CLIO read +%04X\n", offset);
-                }
-            }
             return 0;
     }
 }

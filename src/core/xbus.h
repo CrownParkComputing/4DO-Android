@@ -144,7 +144,9 @@ public:
     // finishes writing a command it reads RD_STAT exactly ten times, from a
     // single instruction, without consulting the poll register between reads -
     // so the reply length is fixed and the driver already knows it.
-    static size_t kReplyBytes;
+    // How many bytes the drive returns. Measured rather than guessed: over-
+    // supply the FIFO and the driver stops at exactly the count it expects.
+    static constexpr size_t kReplyBytes = 12;
 
 private:
     std::deque<u8> status_;

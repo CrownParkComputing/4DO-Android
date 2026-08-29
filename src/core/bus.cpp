@@ -44,6 +44,7 @@ void Bus::reset() {
     std::fill(dram_.begin(), dram_.end(), u8{0});
     std::fill(vram_.begin(), vram_.end(), u8{0});
     write_watch_.clear();
+    sport_accesses_ = 0;
     // ROM and NVRAM deliberately survive a reset, as they do in hardware.
 }
 
@@ -79,6 +80,10 @@ u32 Bus::read32(u32 address) {
     }
     if (clio_ != nullptr && addr >= kClioBase && addr < kClioBase + kClioSize) {
         return clio_->read(addr - kClioBase);
+    }
+    if (addr >= kSportBase && addr < kSportBase + kSportSize) {
+        ++sport_accesses_;
+        return 0;
     }
     if (madam_ != nullptr && addr >= kMadamBase && addr < kMadamBase + kMadamSize) {
         return madam_->read(addr - kMadamBase);
@@ -154,6 +159,10 @@ void Bus::write32(u32 address, u32 value) {
     }
     if (clio_ != nullptr && addr >= kClioBase && addr < kClioBase + kClioSize) {
         clio_->write(addr - kClioBase, value);
+        return;
+    }
+    if (addr >= kSportBase && addr < kSportBase + kSportSize) {
+        ++sport_accesses_;
         return;
     }
     if (madam_ != nullptr && addr >= kMadamBase && addr < kMadamBase + kMadamSize) {

@@ -36,7 +36,23 @@ enum : u32 {
     kNvramBase = 0x03140000,        // TODO(map): confirm base and stride
     kNvramSize = 32u * 1024,
 
-    kMadamBase = 0x03300000,        // TODO(map): confirm
+    // SPORT: the VRAM serial port, which does fast page copies and clears.
+    //
+    // Found by tracing the boot ROM's memory test, which builds addresses as
+    // `0x03200000 | (address >> 9)` and writes to them - the classic
+    // "the address IS the command" encoding. The test fills memory with an
+    // arithmetic pattern, waits for video lines 10..13, drives SPORT, then
+    // reads back and compares; the compare fails here because nothing is
+    // mapped at this address, so the writes go nowhere.
+    //
+    // Not implemented: the page size and exactly which operation a given
+    // address selects are not yet established. The region is mapped so that
+    // accesses are counted and visible rather than vanishing silently, which
+    // is what made this hard to find in the first place.
+    kSportBase = 0x03200000,
+    kSportSize = 0x00100000,
+
+    kMadamBase = 0x03300000,        // confirmed by the boot ROM
     kMadamSize = 0x00100000,
 
     kClioBase  = 0x03400000,        // TODO(map): confirm
@@ -106,6 +122,10 @@ public:
 
     WriteWatch& write_watch() { return write_watch_; }
 
+    // Accesses to regions that are recognised but not implemented. A silent
+    // drop is the hardest kind of gap to find, so they are counted.
+    u64 sport_accesses() const { return sport_accesses_; }
+
 private:
     std::vector<u8> dram_;
     std::vector<u8> vram_;
@@ -118,6 +138,7 @@ private:
     Clio*  clio_  = nullptr;
 
     WriteWatch write_watch_;
+    u64 sport_accesses_ = 0;
 };
 
 }  // namespace retro3do

@@ -438,7 +438,36 @@ runs on across two code regions and writes RAM.
 
 The lesson is that **zero is not a neutral default for a status register.** A
 register that reports a cause from a fixed set will hang the ROM if it reports
-none of them.
+none of them. Two more of the same shape followed.
+
+**CLIO `0x34` is the line counter, not the pixel counter.** The map had these
+the other way round. The ROM loads the literal `0x7FF` as a mask, reads this
+register and waits for exact values, with 390, 478 and 394 sitting in the same
+literal pool — those are line numbers in a 525-line frame, not pixel positions.
+
+**A slice must be shorter than a scanline.** The CPU and CLIO advance in
+alternating chunks, so the CPU can only observe a line number if CLIO happens to
+stop on it. With the old 4096-cycle slice — about five lines — the ROM's waits
+for an exact line simply never matched. `run_frame` now slices at half a
+scanline, which guarantees every line is observable. This is a general hazard
+for any polled counter, not just this one.
+
+**MADAM `0x04` reports the memory configuration**, and the ROM's own decode is
+what documents it: VRAM megabytes in bits 0-2, and DRAM as the sum of two
+two-bit bank fields at bits 3-4 and 5-6. A stock machine is `0x29`. Reporting
+zero says the machine has no memory, and the ROM fails its memory test.
+
+With those three in place the ROM gets meaningfully further: it passes the
+memory test, **relocates itself into DRAM and runs from there**, and writes
+VRAM. It then reaches a panic handler again — an `STMDB` into MADAM followed by
+a branch to itself — with `0xFFEEFFEE` in a register, which has the look of a
+memory-test pattern. That is the next thing to chase.
+
+A useful thing to recognise: the routine at DRAM `0x100` is a **nested delay
+loop**, not a hang, and its inner count is chosen by comparing PC against
+`0x03000000` — 45 iterations when running from ROM, 2192 from DRAM. It is
+calibrating against memory speed. Roughly 7.4 million iterations, so a trace
+budget of 40 million instructions stops inside it and looks exactly like a hang.
 
 A harness trap worth recording alongside it: the first trace stepped the CPU
 directly and never ticked CLIO, so every poll of a video counter waited forever.

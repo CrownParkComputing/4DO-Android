@@ -54,8 +54,17 @@ enum : u32 {
     // what confirmed the MADAM and CLIO base addresses below.
     kClioCstatBits    = 0x0028,
     kClioWatchdog     = 0x0030,
-    kClioHCount       = 0x0034,   // pixel within the line
-    kClioVCount       = 0x0038,   // current scanline
+
+    // The current scanline, as an 11-bit value.
+    //
+    // Established from the boot ROM, which was previously mapped the other way
+    // round here: it loads the literal 0x7FF as a mask, reads this register,
+    // and waits for exact values (4, then 0x0A..0x0D), with 390, 478 and 394
+    // sitting in the same literal pool. Those are line numbers in a 525-line
+    // frame, not pixel positions.
+    kClioVCount       = 0x0034,
+    kClioHCount       = 0x0038,   // TODO(clio): position within the line
+    kClioLineMask     = 0x07ff,
     kClioSeed         = 0x003c,
 
     // Interrupt bank 0. Reads give pending; writes set or clear.

@@ -42,13 +42,30 @@ class Bus;
 // MADAM register offsets, relative to the base of its window.
 enum : u32 {
     kMadamRevision   = 0x0000,
-    kMadamCcbCtl0    = 0x0004,   // TODO(madam): confirm
+
+    // Memory configuration: how much DRAM and VRAM the machine is fitted with.
+    //
+    // The boot ROM decodes this field by field, and the decode is what tells us
+    // the layout. At 0x03000518 it reads this register into r3 and then:
+    //   VRAM megabytes  = (r3 & 7)
+    //   a               = (r3 >> 5) & 3, capped at 4
+    //   b               = (r3 >> 3) & 3, capped at 4
+    //   DRAM megabytes  = a + b   (or 16 if b > 2)
+    // So a stock machine - 2 MB of DRAM in two banks of one, and 1 MB of VRAM -
+    // is 0x29. Reporting zero says the machine has no memory at all, and the
+    // ROM then fails its memory test and jumps to a panic handler that stores
+    // registers to MADAM in an infinite loop.
+    kMadamMemConfig  = 0x0004,
     kMadamClipXY     = 0x0008,   // TODO(madam): confirm
     kMadamCelStart   = 0x0100,   // writing here starts the engine on a list
     kMadamPipStart   = 0x0104,   // TODO(madam): confirm
     kMadamMatrixBase = 0x7000,   // the hardware matrix unit
     kMadamWindowSize = 0x10000,
 };
+
+// The stock configuration: 2 MB DRAM, 1 MB VRAM, derived from the ROM's own
+// decode above.
+constexpr u32 kMadamMemConfigStock = 0x29;
 
 // Flags in the CCB's first word. Only the ones acted on are named.
 enum : u32 {
@@ -150,6 +167,7 @@ private:
     Bus& bus_;
 
     u32 revision_ = 0;
+    u32 mem_config_ = kMadamMemConfigStock;
     u32 clip_width_ = 320;
     u32 clip_height_ = 240;
 

@@ -169,8 +169,8 @@ u32 Clio::read(u32 offset) {
         case kClioVint1:       return vint1_line_;
         case kClioCstatBits:   return cstat_bits_;
         case kClioWatchdog:    return watchdog_;
+        case kClioVCount:      return scanline_ & kClioLineMask;
         case kClioHCount:      return pixel_in_line_;
-        case kClioVCount:      return scanline_;
         case kClioSeed:        return seed_;
 
         case kClioIrq0Pending: return irq0_pending_;

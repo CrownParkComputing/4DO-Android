@@ -17,6 +17,12 @@ u32 cycles_per_frame(Region region) {
     return region == Region::Pal ? kCpuHz / 50 : kCpuHz / 60;
 }
 
+u32 cycles_per_scanline(Region region) {
+    const u32 lines = region == Region::Pal ? 313u : 263u;
+    const u32 per_line = cycles_per_frame(region) / lines;
+    return per_line < 2 ? 2 : per_line;
+}
+
 }  // namespace
 
 Console::Console() : cpu_(bus_), clio_(cpu_), vdlp_(bus_), madam_(bus_) {
@@ -166,10 +172,19 @@ void Console::apply_write_watch() {
 u32 Console::run_frame() {
     const u32 budget = cycles_per_frame(region_);
 
-    // Run the CPU in slices so that self-modifying code and DMA get their
-    // decode-cache invalidation applied promptly, rather than only at the frame
-    // boundary. The 3DO's OS does relocate code, so this is not theoretical.
-    constexpr u32 kSliceCycles = 4096;
+    // Run the CPU in slices, and keep a slice SHORTER THAN A SCANLINE.
+    //
+    // Two reasons. The obvious one is that self-modifying code and DMA need
+    // their decode-cache invalidation applied promptly rather than only at the
+    // frame boundary; the 3DO's OS does relocate code, so that is not
+    // theoretical.
+    //
+    // The one that actually bites: the CPU and CLIO advance in alternating
+    // chunks, so the CPU can only observe a line number if CLIO stops on it.
+    // The boot ROM waits for *exact* line values, and with a slice several
+    // lines long it simply never sees them and waits forever. Half a scanline
+    // guarantees every line is observable.
+    const u32 kSliceCycles = cycles_per_scanline(region_) / 2;
     u32 spent = 0;
     while (spent < budget) {
         const u32 slice = (budget - spent) < kSliceCycles ? (budget - spent)

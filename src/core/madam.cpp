@@ -103,6 +103,7 @@ Madam::Madam(Bus& bus) : bus_(bus) {
 
 void Madam::reset() {
     revision_ = 0;
+    mem_config_ = kMadamMemConfigStock;
     clip_width_ = 320;
     clip_height_ = 240;
     target_address_ = kVramBase;
@@ -121,8 +122,9 @@ void Madam::set_clip(u32 width, u32 height) {
 u32 Madam::read(u32 offset) {
     offset &= (kMadamWindowSize - 1);
     switch (offset) {
-        case kMadamRevision: return revision_;
-        default:             return 0;
+        case kMadamRevision:  return revision_;
+        case kMadamMemConfig: return mem_config_;
+        default:              return 0;
     }
 }
 
@@ -131,6 +133,9 @@ void Madam::write(u32 offset, u32 value) {
     switch (offset) {
         case kMadamRevision:
             revision_ = value;
+            break;
+        case kMadamMemConfig:
+            mem_config_ = value;
             break;
         case kMadamCelStart:
             // Writing the list address is what starts the engine. The real chip

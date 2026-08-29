@@ -665,7 +665,14 @@ It then waits on a **software flag in RAM** — `[0x000FDA70 + 0xFC]` — which 
 completion handler would set. Nothing sets it, because there is no real device
 behind XBUS to complete anything and raise the interrupt that would.
 
-Two things were ruled out while narrowing this, both worth not repeating:
+Three things were ruled out while narrowing this, all worth not repeating:
+
+- **It is not waiting for an interrupt — at all.** Every source in both banks
+  was raised in turn, repeatedly, and none of them moved the machine: 64 trials,
+  each still spinning in the same ten instructions. That rules out the entire
+  "which interrupt signals completion" line of enquiry, which was where I would
+  otherwise have kept looking. The flag must be set by code that runs only when
+  a device actually answers with meaningful data.
 
 - **It is not the timers.** Forcing every programmed timer to run regardless of
   the enable register changed nothing. (The enable encoding does still look
@@ -674,8 +681,20 @@ Two things were ruled out while narrowing this, both worth not repeating:
 - **It is not a missing interrupt enable.** By this point the CPU has interrupts
   unmasked and CLIO has several sources enabled and pending.
 
-So XBUS proper is the next piece, and its shape is now known: a ready bit, a
-command port, a completion bit, and an interrupt on completion.
+The routine the loop calls each iteration turned out to be a red herring worth
+naming: it only increments a counter at `[0x0002F2F0 + 0x50]`. It looks like a
+timeout or a poll, and is neither — it is a spin counter.
+
+So XBUS proper is the next piece, and what it needs is now clear: not just a
+ready bit and a completion bit, but a **device that answers commands with
+meaningful data**. The 3DO's CD-ROM drive is built in, so enumeration should
+find a device present with no disc in it — "no device at all" is not a state the
+machine is ever really in, and may itself be why the driver never initialises.
+
+That is the point at which guessing stops being productive. The remaining work
+needs the actual XBUS command set rather than inference from one ROM's spin
+loops; inventing replies would produce a driver that initialises for the wrong
+reason and mislead everything after it.
 
 ## Still to be written
 

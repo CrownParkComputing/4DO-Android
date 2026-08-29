@@ -25,9 +25,11 @@ struct UiIntent {
     bool toggle_pause = false;
     bool bios_chosen = false;
     std::string bios_path;
+    std::string bios_name;
     bool test_pattern = false;
     bool disc_chosen = false;
     std::string disc_path;
+    std::string disc_name;
     bool eject = false;
 };
 

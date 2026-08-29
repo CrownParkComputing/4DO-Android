@@ -35,6 +35,12 @@
         android:name="android.hardware.microphone"
         android:required="false" /> -->
 
+    <!-- This app requests NO storage permission. Files are reached through the
+         Storage Access Framework: the user grants individual folders and the
+         app sees exactly those, and nothing else. All files access would need a
+         Play sensitive permission declaration and review, which this app does
+         not need and does not want. -->
+
     <!-- Camera support -->
     <!-- if you want to record video, uncomment this. -->
     <!--

@@ -21,9 +21,10 @@ public:
     void close();
     bool is_open() const { return open_; }
 
-    // Draw it. Returns true on the frame a file was chosen, with the full path
-    // in `chosen_path`.
-    bool draw(std::string* chosen_path);
+    // Returns true on the frame a file was chosen. `chosen_path` gets a
+    // filesystem path on desktop, or a document URI on Android — the caller
+    // passes either straight to Console, which knows the difference.
+    bool draw(std::string* chosen_path, std::string* chosen_name);
 
 private:
     void navigate_to(const std::string& directory);
@@ -31,7 +32,16 @@ private:
     struct Entry {
         std::string name;
         bool is_directory = false;
+        // Empty on desktop, where `name` plus the current directory is enough.
+        // On Android this is the document URI, because a SAF child cannot be
+        // addressed by joining strings — the URI is opaque and must be carried.
+        std::string uri;
     };
+
+    // Android hands out document URIs rather than paths, so the browser has two
+    // modes. They differ only in how a location is named and listed; everything
+    // the user sees is the same.
+    bool using_documents_ = false;
 
     bool open_ = false;
     std::string title_;

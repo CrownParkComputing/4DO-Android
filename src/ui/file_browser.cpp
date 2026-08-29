@@ -6,6 +6,7 @@
 #include <cctype>
 
 #include "imgui.h"
+#include "platform/android_storage.h"
 #include "platform/storage.h"
 
 namespace retro3do {
@@ -70,6 +71,22 @@ void FileBrowser::open(const std::string& title,
         ext = lowercased(ext);
     }
 
+    using_documents_ = AndroidStorage::available();
+
+    if (using_documents_) {
+        // Start at the first folder the user has granted. If they have granted
+        // none, the list is empty and the window shows the "add a folder"
+        // prompt instead of a confusing blank listing.
+        const std::vector<DocumentEntry> roots = AndroidStorage::granted_roots();
+        directory_ = roots.empty() ? std::string() : roots.front().uri;
+        entries_.clear();
+        error_.clear();
+        if (!directory_.empty()) {
+            navigate_to(directory_);
+        }
+        return;
+    }
+
     const std::vector<StorageLocation> roots = Storage::browse_roots();
     navigate_to(roots.empty() ? std::string("/") : roots.front().path);
 }
@@ -85,6 +102,19 @@ void FileBrowser::navigate_to(const std::string& directory) {
     entries_.clear();
     error_.clear();
 
+    if (using_documents_) {
+        for (const DocumentEntry& child : AndroidStorage::list(directory)) {
+            if (child.is_directory || has_extension(child.name, extensions_)) {
+                entries_.push_back(Entry{child.name, child.is_directory, child.uri});
+            }
+        }
+        // The Java side has already sorted folders before files.
+        if (entries_.empty()) {
+            error_ = "Nothing here that this app can open.";
+        }
+        return;
+    }
+
     EnumerationState state;
     if (!SDL_EnumerateDirectory(directory.c_str(), on_entry, &state)) {
         // A directory that cannot be read is normal on mobile — shared storage
@@ -96,7 +126,7 @@ void FileBrowser::navigate_to(const std::string& directory) {
 
     for (auto& entry : state.entries) {
         if (entry.second || has_extension(entry.first, extensions_)) {
-            entries_.push_back(Entry{entry.first, entry.second});
+            entries_.push_back(Entry{entry.first, entry.second, std::string()});
         }
     }
 
@@ -108,7 +138,7 @@ void FileBrowser::navigate_to(const std::string& directory) {
     });
 }
 
-bool FileBrowser::draw(std::string* chosen_path) {
+bool FileBrowser::draw(std::string* chosen_path, std::string* chosen_name) {
     if (!open_) {
         return false;
     }
@@ -126,27 +156,57 @@ bool FileBrowser::draw(std::string* chosen_path) {
 
     if (ImGui::Begin(title_.c_str(), &open_,
                      ImGuiWindowFlags_NoCollapse | ImGuiWindowFlags_NoSavedSettings)) {
-        // Shortcuts to the places worth starting from. On a phone this is the
-        // whole navigation story.
-        for (const StorageLocation& root : Storage::browse_roots()) {
-            if (ImGui::Button(root.label.c_str())) {
-                navigate_to(root.path);
+        if (using_documents_) {
+            // Only folders the user has explicitly granted. The app asks for
+            // these one at a time rather than for access to everything, so what
+            // it can see is always exactly what was handed to it.
+            const std::vector<DocumentEntry> roots = AndroidStorage::granted_roots();
+            for (const DocumentEntry& root : roots) {
+                if (ImGui::Button(root.name.c_str())) {
+                    navigate_to(root.uri);
+                }
+                ImGui::SameLine();
             }
+            if (ImGui::Button("+ Add folder")) {
+                AndroidStorage::pick_folder();
+            }
+            ImGui::NewLine();
+
+            if (roots.empty()) {
+                ImGui::Spacing();
+                ImGui::TextWrapped(
+                    "No folders yet. Choose \"Add folder\" and pick the folder "
+                    "your discs are in. This app only ever sees the folders you "
+                    "hand it.");
+            }
+        } else {
+            for (const StorageLocation& root : Storage::browse_roots()) {
+                if (ImGui::Button(root.label.c_str())) {
+                    navigate_to(root.path);
+                }
+                ImGui::SameLine();
+            }
+            ImGui::NewLine();
+        }
+
+        ImGui::Separator();
+        if (!using_documents_) {
+            ImGui::TextWrapped("%s", directory_.c_str());
+            ImGui::Separator();
+        }
+
+        // Going up is filesystem-only: a SAF document URI carries no parent
+        // that can be derived from the string, and walking back up out of a
+        // granted tree is exactly what scoped access is meant to prevent.
+        if (!using_documents_) {
+            const std::string parent = Storage::parent_of(directory_);
+            ImGui::BeginDisabled(parent.empty());
+            if (ImGui::Button("Up")) {
+                navigate_to(parent);
+            }
+            ImGui::EndDisabled();
             ImGui::SameLine();
         }
-        ImGui::NewLine();
-
-        ImGui::Separator();
-        ImGui::TextWrapped("%s", directory_.c_str());
-        ImGui::Separator();
-
-        const std::string parent = Storage::parent_of(directory_);
-        ImGui::BeginDisabled(parent.empty());
-        if (ImGui::Button("Up")) {
-            navigate_to(parent);
-        }
-        ImGui::EndDisabled();
-        ImGui::SameLine();
         if (ImGui::Button("Cancel")) {
             close();
             ImGui::End();
@@ -169,11 +229,14 @@ bool FileBrowser::draw(std::string* chosen_path) {
             if (ImGui::Selectable(label.c_str(), false,
                                   ImGuiSelectableFlags_AllowDoubleClick,
                                   ImVec2(0, ImGui::GetTextLineHeight() * 1.8f))) {
-                const std::string full = Storage::join(directory_, entry.name);
+                const std::string target =
+                    using_documents_ ? entry.uri
+                                     : Storage::join(directory_, entry.name);
                 if (entry.is_directory) {
-                    navigate_to(full);
+                    navigate_to(target);
                 } else {
-                    *chosen_path = full;
+                    *chosen_path = target;
+                    if (chosen_name != nullptr) *chosen_name = entry.name;
                     chose = true;
                 }
             }

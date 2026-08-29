@@ -4,6 +4,10 @@
 #include <cctype>
 #include <cstring>
 
+#if !defined(_WIN32)
+#include <unistd.h>
+#endif
+
 namespace retro3do {
 namespace {
 
@@ -134,6 +138,61 @@ bool Disc::open(const std::string& path) {
     track.length_sectors = sector_count_;
     tracks_.push_back(track);
 
+    return true;
+}
+
+bool Disc::open_fd(int fd, const std::string& display_name) {
+    close();
+    last_error_.clear();
+
+    if (fd < 0) {
+        last_error_ = "Invalid file descriptor for: " + display_name;
+        return false;
+    }
+
+    const std::string ext = lowercase_extension(display_name);
+    if (ext == ".cue") {
+        // A cue names a separate image file, and a descriptor gives no way to
+        // find it. Saying so is much better than opening the cue as though it
+        // were an image and reporting a corrupt disc.
+        last_error_ =
+            "A cue sheet cannot be opened by descriptor; open the image it "
+            "names instead: " + display_name;
+        ::close(fd);
+        return false;
+    }
+
+    // fdopen adopts the descriptor: closing the FILE* closes it, so ownership
+    // passes here and the caller must not close it again.
+    file_ = ::fdopen(fd, "rb");
+    if (file_ == nullptr) {
+        last_error_ = "Could not read the descriptor for: " + display_name;
+        ::close(fd);
+        return false;
+    }
+    path_ = display_name;
+
+    SectorLayout detected = SectorLayout::Cooked2048;
+    if (!detect_layout(&detected)) {
+        close();
+        return false;
+    }
+    layout_ = detected;
+
+    const long size = file_size(file_);
+    sector_count_ = static_cast<u32>(size / bytes_per_sector(layout_));
+    if (sector_count_ == 0) {
+        last_error_ = "Disc image is too small to contain a sector: " + display_name;
+        close();
+        return false;
+    }
+
+    Track track;
+    track.number = 1;
+    track.is_audio = false;
+    track.start_lba = 0;
+    track.length_sectors = sector_count_;
+    tracks_.push_back(track);
     return true;
 }
 

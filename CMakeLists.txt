@@ -105,6 +105,7 @@ set(RETRO3DO_APP_SOURCES
     src/ui/ui.cpp
     src/ui/file_browser.cpp
     src/platform/storage.cpp
+    src/platform/android_storage.cpp
 )
 
 if(ANDROID)

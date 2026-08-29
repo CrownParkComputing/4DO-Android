@@ -329,10 +329,44 @@ trailing separator (`/a/b/` must give `/a`, not `/a/b`, or the first press of
 Up appears to do nothing) and a top-level entry (`/foo` must give `/`, not an
 empty string, or navigation dead-ends a level early).
 
-**Open question for Android**: reading shared storage needs a permission this
-app does not currently request. App storage works without one. Requesting
-all-files access is a Play policy decision with real consequences — the previous
-app removed it in 2.0.9 — so it has deliberately not been added here.
+### Android: scoped access, no storage permission at all
+
+The app requests **no storage permission of any kind**. The user grants
+individual folders through the Storage Access Framework and the app sees exactly
+those and nothing else, persisted across restarts. All-files access would need a
+Play sensitive-permission declaration and review; this app does not need it and
+does not want it. The whole APK declares one permission, `VIBRATE` — the SDL
+template's `CAMERA` and `INTERNET` were removed as unused, and `CAMERA` in
+particular is a dangerous permission an emulator has no business holding.
+
+The consequence shapes the core, not just the UI: **SAF hands out content URIs,
+not paths.** Nothing it returns can be `fopen`ed. So `Disc` and `Console` grew
+open-by-descriptor paths, and the file browser has two modes — filesystem paths
+elsewhere, document URIs on Android — differing only in how a location is named
+and listed.
+
+Three things that are easy to get wrong here, each with a comment where it
+matters:
+
+- The grant must be taken with `takePersistableUriPermission` at the moment it
+  arrives. Without it the grant dies with the process and the app silently
+  forgets the user's library on every restart, which reads as a bug in the app
+  rather than a missing call.
+- The descriptor must be **detached** from its `ParcelFileDescriptor` before
+  being handed to C++. Passing the attached fd lets Java close it underneath
+  native code at the next garbage collection — an intermittent read failure that
+  would be very hard to attribute.
+- A JNI call that leaves a pending Java exception makes the *next* unrelated JNI
+  call fail, so exceptions are cleared at every boundary.
+
+There is no "Up" button in document mode. A SAF document URI carries no
+derivable parent, and walking up out of a granted tree is precisely what scoped
+access exists to prevent.
+
+A cue sheet cannot be opened by descriptor, because it names a sibling file a
+descriptor gives no way to reach. That is refused with a message saying to open
+the image instead, which beats opening the cue as though it were an image and
+then reporting a corrupt disc.
 
 ## Still to be written
 

@@ -1,6 +1,10 @@
 #include "console.h"
 
 #include <cstdio>
+
+#if !defined(_WIN32)
+#include <unistd.h>
+#endif
 #include <vector>
 
 namespace retro3do {
@@ -66,6 +70,57 @@ bool Console::load_disc(const std::string& path) {
         last_error_ = disc_.last_error();
         return false;
     }
+    last_error_.clear();
+    return true;
+}
+
+bool Console::load_disc_fd(int fd, const std::string& display_name) {
+    if (!disc_.open_fd(fd, display_name)) {
+        last_error_ = disc_.last_error();
+        return false;
+    }
+    last_error_.clear();
+    return true;
+}
+
+bool Console::load_bios_fd(int fd, const std::string& display_name) {
+    if (fd < 0) {
+        last_error_ = "Could not open " + display_name;
+        return false;
+    }
+
+    // fdopen adopts the descriptor, so closing the FILE* closes it too.
+    std::FILE* file = ::fdopen(fd, "rb");
+    if (file == nullptr) {
+        last_error_ = "Could not read " + display_name;
+        ::close(fd);
+        return false;
+    }
+
+    std::fseek(file, 0, SEEK_END);
+    const long size = std::ftell(file);
+    std::fseek(file, 0, SEEK_SET);
+
+    if (size <= 0) {
+        std::fclose(file);
+        last_error_ = "BIOS file is empty: " + display_name;
+        return false;
+    }
+
+    std::vector<u8> data(static_cast<size_t>(size));
+    const size_t read = std::fread(data.data(), 1, data.size(), file);
+    std::fclose(file);
+
+    if (read != data.size()) {
+        last_error_ = "BIOS file could not be read in full: " + display_name;
+        return false;
+    }
+    if (!bus_.load_bios(data.data(), data.size())) {
+        last_error_ = "BIOS image is larger than the 3DO's ROM window";
+        return false;
+    }
+
+    cpu_.invalidate_decode_cache();
     last_error_.clear();
     return true;
 }

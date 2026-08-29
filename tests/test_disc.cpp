@@ -277,3 +277,93 @@ TEST(raw_reads_hand_back_the_whole_sector) {
     CHECK_EQ(sector[0], 0x00u);
     CHECK_EQ(sector[1], 0xffu);
 }
+
+// ---------------------------------------------------------------------------
+// Opening by descriptor
+// ---------------------------------------------------------------------------
+//
+// Android's scoped storage hands out content URIs, not paths: there is no
+// filename to open, only a descriptor the system opened for us. These cover the
+// same ground as the path tests, because the two routes must agree.
+
+#include <fcntl.h>
+#if !defined(_WIN32)
+#include <unistd.h>
+#endif
+
+namespace {
+
+int open_read_fd(const char* path) {
+    return ::open(path, O_RDONLY);
+}
+
+}  // namespace
+
+TEST(a_descriptor_reads_the_same_data_as_a_path) {
+    const char* path = scratch("fd-cooked.iso");
+    write_file(path, make_cooked(4));
+
+    Disc by_path;
+    CHECK(by_path.open(path));
+    u8 expected[2048];
+    CHECK(by_path.read_sector(2, expected));
+
+    Disc by_fd;
+    CHECK(by_fd.open_fd(open_read_fd(path), "fd-cooked.iso"));
+    CHECK_EQ(by_fd.sector_count(), by_path.sector_count());
+
+    u8 actual[2048];
+    CHECK(by_fd.read_sector(2, actual));
+    CHECK_EQ(actual[0], expected[0]);
+    CHECK_EQ(actual[2047], expected[2047]);
+}
+
+TEST(layout_detection_works_on_a_descriptor_too) {
+    // The descriptor carries no filename, so detection cannot fall back on the
+    // extension even in principle — which is the behaviour we wanted anyway.
+    const char* path = scratch("fd-raw.bin");
+    write_file(path, make_raw(8, 2));
+
+    Disc disc;
+    CHECK(disc.open_fd(open_read_fd(path), "fd-raw.bin"));
+    CHECK(disc.layout() == SectorLayout::Raw2352Mode2);
+
+    u8 sector[2048];
+    CHECK(disc.read_sector(5, sector));
+    CHECK_EQ(sector[0], 6u);
+}
+
+TEST(a_bad_descriptor_is_reported_not_crashed_on) {
+    Disc disc;
+    CHECK(!disc.open_fd(-1, "nothing.iso"));
+    CHECK(!disc.last_error().empty());
+    CHECK(!disc.is_open());
+}
+
+TEST(a_cue_by_descriptor_is_refused_with_a_useful_message) {
+    // A cue names a sibling image, and a descriptor gives no way to reach it.
+    // Refusing clearly beats opening the cue as though it were an image and
+    // then reporting a corrupt disc.
+    const char* path = scratch("fd-refuse.cue");
+    write_text(path, "FILE \"x.bin\" BINARY\n  TRACK 01 MODE1/2352\n");
+
+    Disc disc;
+    CHECK(!disc.open_fd(open_read_fd(path), "fd-refuse.cue"));
+    CHECK(disc.last_error().find("cue") != std::string::npos);
+}
+
+TEST(closing_the_disc_releases_the_descriptor) {
+    // fdopen adopts the descriptor, so it must not be closed twice and must not
+    // leak. Opening many in a row would exhaust the process limit if it leaked.
+    const char* path = scratch("fd-leak.iso");
+    write_file(path, make_cooked(2));
+
+    for (int i = 0; i < 512; ++i) {
+        Disc disc;
+        CHECK(disc.open_fd(open_read_fd(path), "fd-leak.iso"));
+        disc.close();
+    }
+    // Getting here without running out of descriptors is the assertion.
+    Disc final_check;
+    CHECK(final_check.open_fd(open_read_fd(path), "fd-leak.iso"));
+}

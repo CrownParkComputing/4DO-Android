@@ -59,6 +59,20 @@ public:
     // image is detected rather than assumed. Returns false and sets
     // last_error().
     bool open(const std::string& path);
+
+    // Open an already-opened file descriptor, taking ownership of it.
+    //
+    // This exists for Android's Storage Access Framework, which hands out
+    // content URIs rather than paths: there is no filename to fopen, only a
+    // descriptor the system opened on the app's behalf. `display_name` is used
+    // for messages and to recognise the extension, since the descriptor carries
+    // neither.
+    //
+    // A cue sheet cannot be opened this way — it names a sibling file that a
+    // descriptor gives no way to reach. Callers holding a cue must resolve the
+    // sibling themselves and pass the image.
+    bool open_fd(int fd, const std::string& display_name);
+
     void close();
 
     bool is_open() const { return file_ != nullptr; }

@@ -7,6 +7,7 @@
 #include "core/console.h"
 #include "core/frame_mailbox.h"
 #include "core/pad.h"
+#include "platform/android_storage.h"
 #include "platform/emulator_thread.h"
 #include "ui/ui.h"
 
@@ -359,16 +360,26 @@ void App::tick() {
                    emu.frame_ms, console_->audio().underruns());
 
     if (intent.bios_chosen && !intent.bios_path.empty()) {
-        if (console_->load_bios(intent.bios_path)) {
-            SDL_Log("BIOS loaded from %s", intent.bios_path.c_str());
-        } else {
-            SDL_Log("%s", console_->last_error().c_str());
-        }
+        // A document URI is not a path and cannot be opened by name, so it goes
+        // through the system for a descriptor instead. Everything downstream is
+        // the same either way.
+        const bool ok =
+            AndroidStorage::available()
+                ? console_->load_bios_fd(
+                      AndroidStorage::open_document(intent.bios_path),
+                      intent.bios_name.empty() ? intent.bios_path : intent.bios_name)
+                : console_->load_bios(intent.bios_path);
+        SDL_Log("%s", ok ? "BIOS loaded" : console_->last_error().c_str());
     }
     if (intent.disc_chosen && !intent.disc_path.empty()) {
-        if (console_->load_disc(intent.disc_path)) {
-            SDL_Log("Disc inserted: %s (%u sectors)", intent.disc_path.c_str(),
-                    console_->disc().sector_count());
+        const bool ok =
+            AndroidStorage::available()
+                ? console_->load_disc_fd(
+                      AndroidStorage::open_document(intent.disc_path),
+                      intent.disc_name.empty() ? intent.disc_path : intent.disc_name)
+                : console_->load_disc(intent.disc_path);
+        if (ok) {
+            SDL_Log("Disc inserted (%u sectors)", console_->disc().sector_count());
         } else {
             SDL_Log("%s", console_->last_error().c_str());
         }

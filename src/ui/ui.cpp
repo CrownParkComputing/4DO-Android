@@ -216,17 +216,20 @@ void Ui::draw_launcher(Console& console, UiIntent& intent) {
     // Drawn after the launcher so it floats above it, and routed to whichever
     // field asked for it.
     std::string picked;
-    if (browser_.draw(&picked)) {
+    std::string picked_name;
+    if (browser_.draw(&picked, &picked_name)) {
         if (browsing_ == Browsing::Bios) {
             std::snprintf(bios_path_buffer_, sizeof(bios_path_buffer_), "%s",
-                          picked.c_str());
+                          picked_name.empty() ? picked.c_str() : picked_name.c_str());
             intent.bios_chosen = true;
             intent.bios_path = picked;
+            intent.bios_name = picked_name;
         } else if (browsing_ == Browsing::Disc) {
             std::snprintf(disc_path_buffer_, sizeof(disc_path_buffer_), "%s",
-                          picked.c_str());
+                          picked_name.empty() ? picked.c_str() : picked_name.c_str());
             intent.disc_chosen = true;
             intent.disc_path = picked;
+            intent.disc_name = picked_name;
         }
         browsing_ = Browsing::None;
     }

@@ -51,6 +51,14 @@ public:
     // Insert a disc image. The disc is opened and its table of contents read;
     // nothing is executed until the machine asks for a sector.
     bool load_disc(const std::string& path);
+
+    // Insert a disc from an already-open descriptor, taking ownership of it.
+    // Android's scoped storage hands out descriptors rather than paths;
+    // `display_name` supplies the filename the descriptor does not carry.
+    bool load_disc_fd(int fd, const std::string& display_name);
+
+    // Load a BIOS from a descriptor, same reason.
+    bool load_bios_fd(int fd, const std::string& display_name);
     void eject_disc();
     bool disc_loaded() const { return disc_.is_open(); }
     const Disc& disc() const { return disc_; }

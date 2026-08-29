@@ -104,6 +104,7 @@ platform header, it belongs in `src/platform/` instead.
 - [x] Controller: keyboard and gamepad through SDL
 - [ ] DSP — the machine is silent until this exists
 - [x] File browser, so the app is usable without a keyboard
+- [x] Android scoped storage (SAF): the user grants folders, the app requests no storage permission
 - [ ] Save states, on-screen pad for touch
 
 ## Licence

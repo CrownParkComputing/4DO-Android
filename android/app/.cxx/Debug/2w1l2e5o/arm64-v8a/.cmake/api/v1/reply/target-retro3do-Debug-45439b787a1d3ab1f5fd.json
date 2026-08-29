@@ -26,19 +26,19 @@
 			{
 				"command" : 0,
 				"file" : 0,
-				"line" : 113,
+				"line" : 114,
 				"parent" : 0
 			},
 			{
 				"command" : 1,
 				"file" : 0,
-				"line" : 120,
+				"line" : 121,
 				"parent" : 0
 			},
 			{
 				"command" : 2,
 				"file" : 0,
-				"line" : 121,
+				"line" : 122,
 				"parent" : 0
 			}
 		]
@@ -100,7 +100,8 @@
 				2,
 				3,
 				4,
-				5
+				5,
+				6
 			],
 			"sysroot" : 
 			{
@@ -180,7 +181,8 @@
 				2,
 				3,
 				4,
-				5
+				5,
+				6
 			]
 		}
 	],
@@ -220,6 +222,12 @@
 			"backtrace" : 1,
 			"compileGroupIndex" : 0,
 			"path" : "/home/jon/StudioProjects/Retro-3DO/src/platform/storage.cpp",
+			"sourceGroupIndex" : 0
+		},
+		{
+			"backtrace" : 1,
+			"compileGroupIndex" : 0,
+			"path" : "/home/jon/StudioProjects/Retro-3DO/src/platform/android_storage.cpp",
 			"sourceGroupIndex" : 0
 		}
 	],

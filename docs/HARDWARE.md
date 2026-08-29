@@ -755,6 +755,53 @@ byte happens to be at address `0x14` as its command. That is the *consequence*
 of no device having been enumerated, not the cause — the table is populated by
 whatever answers the bus first.
 
+### The expansion bus, from the 3DO Company's own patent
+
+`WO 94/16382 "Expansion Bus"` documents the protocol properly, which removes the
+guesswork the previous sections were stuck behind. It is a granted patent —
+public by construction, and on this project's permitted-sources list.
+
+**The bus is a FIFO model.** Each device holds its own FIFOs: a Command FIFO the
+system writes into, a Data Return FIFO the device sends bulk data back through,
+a Status Return FIFO for status, and (on writable devices) a Data Write FIFO.
+So a reply does not come back as bits in a status port, which is exactly what
+this core's behaviour had already implied.
+
+**Every command returns at least one Status Byte** when it completes, and
+interrupts signal that the Status or Data Return FIFO has something in it. The
+Status Return interrupt means "the command has finished".
+
+Status Byte: bit 4 is **ERROR**; all other bits are device-dependent. A status
+byte with no error also asserts that all expected data reached the Data Return
+FIFO.
+
+Poll Register:
+
+| Bit | Name | Meaning |
+|---|---|---|
+| 0 | Reserved | reads 0 |
+| 1 | Interrupt Disable- | disables interrupts when low |
+| 2 | Media Access | high if the media may have been physically accessed; writing 1 clears it |
+| 3 | Reset- | resets the device; must not disturb its address |
+| 4 | StatValid- | **high when the Status Return FIFO has nothing left** |
+| 5 | ChunkValid- | **high when the Data Return FIFO holds no complete chunk** |
+| 6, 7 | Reserved | read 0 |
+
+Note both valid bits are **active low**, which is the opposite of the obvious
+reading and would have been a very easy thing to get backwards.
+
+Transactions are selected by three control lines: `SELECTION` (a device stays
+selected until a SELECTION naming a different address), `WR_COM`, `RD_STAT`,
+`WR_DATA`, `RD_DATA`, `RD_POL`, `WR_POL`. Devices are numbered 0-15 and take
+their address at power-up by counting strobes, so the CD-ROM's address is a
+consequence of where it sits on the chain rather than something fixed in silicon.
+
+Against the machine's observed behaviour: the boot ROM writes a command byte to
+**CLIO `0x0500`** (a `WR_COM`) and reads **CLIO `0x0540`**, testing bit 4. With
+the definitions above, `0x0540` is a poll or status read and bit 4 is either
+StatValid- or ERROR — which is now a question with two candidate answers rather
+than an open field.
+
 ### The honest boundary
 
 Getting from the logo to the animated startup needs the **expansion-bus command

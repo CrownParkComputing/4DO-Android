@@ -39,6 +39,11 @@ do not read those sources while writing these ones.
   manuals, hardware and graphics programming guides), which were distributed to
   licensed developers and have since been published.
 - Granted patents covering the hardware, which are public by construction.
+  In use: The 3DO Company's own PCT applications, archived at
+  `github.com/trapexit/3DO-information/hardware/patents`. `WO 94/16382
+  "Expansion Bus"` documents the XBUS I/O model, transaction types, Poll
+  Register and Status Byte in full; `WO 94/10642` covers the sprite (cel)
+  rendering processor and `WO 95/12876` the display-list mechanism.
 - Community hardware documentation that is itself independently derived, where
   its own provenance is clear.
 - Black-box measurement: behaviour of real hardware, and of software running on

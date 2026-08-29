@@ -14,6 +14,7 @@
 #include "arm60.h"
 #include "bus.h"
 #include "clio.h"
+#include "madam.h"
 #include "vdlp.h"
 #include "types.h"
 
@@ -58,6 +59,7 @@ public:
     Bus& bus() { return bus_; }
     Clio& clio() { return clio_; }
     Vdlp& vdlp() { return vdlp_; }
+    Madam& madam() { return madam_; }
 
     const std::string& last_error() const { return last_error_; }
 
@@ -68,6 +70,7 @@ private:
     Arm60 cpu_;
     Clio  clio_;
     Vdlp  vdlp_;
+    Madam madam_;
 
     Region region_ = Region::Ntsc;
     int frame_width_  = 320;

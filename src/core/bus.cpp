@@ -4,6 +4,7 @@
 #include <cstring>
 
 #include "clio.h"
+#include "madam.h"
 
 namespace retro3do {
 namespace {
@@ -79,9 +80,12 @@ u32 Bus::read32(u32 address) {
     if (clio_ != nullptr && addr >= kClioBase && addr < kClioBase + kClioSize) {
         return clio_->read(addr - kClioBase);
     }
-    // MADAM is not wired up yet. Reading an unmapped region returns zero rather
-    // than aborting, which keeps early boot alive while the chips are still
-    // being written; it should become a real data abort once MADAM exists.
+    if (madam_ != nullptr && addr >= kMadamBase && addr < kMadamBase + kMadamSize) {
+        return madam_->read(addr - kMadamBase);
+    }
+    // Reading an unmapped region returns zero rather than aborting. That is
+    // scaffolding: it should become a real data abort once enough of the
+    // machine exists that an unmapped read is definitely a bug.
     return 0;
 }
 
@@ -152,8 +156,11 @@ void Bus::write32(u32 address, u32 value) {
         clio_->write(addr - kClioBase, value);
         return;
     }
-    // ROM is read-only; MADAM register writes are dropped until that chip
-    // exists.
+    if (madam_ != nullptr && addr >= kMadamBase && addr < kMadamBase + kMadamSize) {
+        madam_->write(addr - kMadamBase, value);
+        return;
+    }
+    // ROM is read-only.
 }
 
 void Bus::write16(u32 address, u16 value) {

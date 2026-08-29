@@ -7,10 +7,10 @@ One C++ codebase builds for Android, iOS, Linux and Windows. There is no
 per-platform front end: SDL provides the window, input, audio and GPU on every
 target, and Dear ImGui draws the launcher and the in-game overlay.
 
-> **Status: early.** The CPU, interrupt controller, video timing and display
-> path all run — the app can draw a test pattern through the real hardware path
-> without a BIOS. What is missing is MADAM, which is what actually draws a
-> game, and audio. See [Roadmap](#roadmap).
+> **Status: early, but it draws.** CPU, interrupts, video timing, the CEL engine
+> and the display path all run: cels are rotated, scaled and drawn through the
+> palette. What is missing is audio and the CD-ROM, so no real disc boots yet.
+> See [Roadmap](#roadmap).
 
 ## Why this exists rather than another Opera port
 
@@ -94,7 +94,7 @@ platform header, it belongs in `src/platform/` instead.
 - [x] Android and iOS build paths off one CMake tree
 - [x] CLIO — interrupts, timers, video counters
 - [x] VDLP — display list to framebuffer
-- [ ] MADAM — the CEL engine, written for SIMD and threading from the start
+- [x] MADAM — the CEL engine: affine mapping, indexed and direct cels
 - [ ] DSP — audio
 - [ ] CD-ROM: CUE/BIN, ISO, CHD
 - [ ] Save states, controller mapping, on-screen pad

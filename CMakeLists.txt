@@ -25,6 +25,7 @@ add_library(retro3do_core STATIC
     src/core/bus.cpp
     src/core/clio.cpp
     src/core/console.cpp
+    src/core/madam.cpp
     src/core/vdlp.cpp
 )
 target_include_directories(retro3do_core PUBLIC src)
@@ -141,6 +142,7 @@ if(RETRO3DO_BUILD_TESTS)
         tests/test_arm60.cpp
         tests/test_bus.cpp
         tests/test_clio.cpp
+        tests/test_madam.cpp
         tests/test_vdlp.cpp
     )
     target_link_libraries(retro3do_tests PRIVATE retro3do_core)

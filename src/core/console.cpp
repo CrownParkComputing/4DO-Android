@@ -15,8 +15,9 @@ u32 cycles_per_frame(Region region) {
 
 }  // namespace
 
-Console::Console() : cpu_(bus_), clio_(cpu_), vdlp_(bus_) {
+Console::Console() : cpu_(bus_), clio_(cpu_), vdlp_(bus_), madam_(bus_) {
     bus_.attach_clio(&clio_);
+    bus_.attach_madam(&madam_);
     set_region(Region::Ntsc);
     reset();
 }
@@ -67,6 +68,9 @@ void Console::set_region(Region region) {
     // A field carries more lines than are visible: the rest is vertical blank,
     // which is when the machine does its display-list work.
     clio_.set_scanlines_per_field(region == Region::Pal ? 313 : 263);
+    madam_.set_clip(static_cast<u32>(frame_width_),
+                    static_cast<u32>(frame_height_));
+    madam_.set_target(kVramBase, static_cast<u32>(frame_width_) * 2u);
     framebuffer_.assign(static_cast<size_t>(frame_width_) * frame_height_, 0xff000000u);
 }
 
@@ -75,6 +79,7 @@ void Console::reset() {
     cpu_.reset();
     clio_.reset();
     vdlp_.reset();
+    madam_.reset();
     frame_count_ = 0;
     std::fill(framebuffer_.begin(), framebuffer_.end(), 0xff000000u);
 }

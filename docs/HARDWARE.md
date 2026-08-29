@@ -123,8 +123,65 @@ entry claiming zero lines, and a walk longer than 1024 entries all terminate.
 Games do write garbage here during startup, and an infinite walk would look like
 a freeze.
 
+## MADAM (`src/core/madam.cpp`)
+
+The graphics engine. MADAM draws by walking a linked list of Cel Control Blocks;
+each CCB names its source pixels, their encoding, and a 2x2 matrix of 16.16
+fixed-point deltas mapping the source rectangle onto the destination. Because
+that is a general affine step rather than a blit, a cel can be scaled, rotated
+and sheared — every textured polygon in a 3DO game is a cel.
+
+Implemented: CCB walking with absolute and relative pointers, the full
+fixed-point mapping including the row-to-row bend (`hddx`/`hddy`) that makes a
+cel a quad rather than a parallelogram, direct 16-bit cels, indexed 1/2/4/6/8-bit
+cels through the PLUT, colour-zero transparency, and clipping.
+
+### Two things worth writing down
+
+**Forward mapping leaves holes.** The engine walks *source* pixels, so writing
+one destination pixel per source pixel makes any magnified cel come out as a
+grid of dots. Each source pixel therefore fills its whole destination footprint,
+with the step counts derived from the step vectors — so a 1:1 cel still costs
+exactly one write per pixel, and only magnified cels pay more, proportional to
+the destination area they actually cover. Because the footprint follows the step
+vectors rather than being a rectangle, it stays correct under rotation. All three
+properties have tests; the failure mode looks like a texture effect rather than a
+bug, so it would otherwise survive a long time.
+
+**Cels cannot be threaded.** They are drawn in list order and later ones paint
+over earlier ones, so handing each CCB to a different thread races on the
+destination and produces an intermittently wrong picture rather than a crash.
+The safe parallelism is destination row bands *inside* one large cel. This is
+recorded because "just thread the cel list" is the natural thing to try and
+would be very hard to diagnose afterwards.
+
+Marked `TODO(madam)`: most CCB flag bits, the PRE0/PRE1 field layout (isolated
+in two functions so a correction is local), PIXC blending, run-length-coded
+source data, and which flag overrides colour-zero transparency.
+
+Note that the size fields are ten bits each, so a cel cannot claim to be larger
+than 1024 in either direction. That is what actually bounds the work; the
+explicit dimension guard in the renderer is defence in case those field widths
+turn out to be wrong.
+
+### Measured throughput
+
+On this development machine (x86-64 desktop, `-O2`, single-threaded). **These are
+not phone numbers** — a handheld core is several times slower — but they show
+where the headroom is:
+
+| Part | Throughput | |
+|---|---|---|
+| ARM60 | 128 Mcycle/s | 10.2x realtime against a 12.5 MHz 3DO |
+| MADAM | 82 frames/s | 200 rotated, doubled 32x32 cels — 709k pixels a frame, heavier than most real frames |
+| VDLP | 6150 frames/s | 320x240; negligible |
+
+The CPU having ten times realtime in a plain interpreter is the decode cache
+earning its place, and it means a dynarec is not needed yet. MADAM is the part
+with the least margin, which is the expected answer and the reason its inner
+loop was built to vectorise from the start.
+
 ## Still to be written
 
-MADAM (the CEL engine), the DSP, SPORT and the CD-ROM interface. Each needs its
-own section here as it lands, naming the documentation it was built from and how
-it was verified.
+The DSP, SPORT and the CD-ROM interface. Each needs its own section here as it
+lands, naming the documentation it was built from and how it was verified.

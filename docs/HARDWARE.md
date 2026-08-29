@@ -648,11 +648,34 @@ zero there leaves a fully booted machine sitting on a static logo, which is
 exactly what it looked like.
 
 Reporting the bus ready lets it proceed into actual transactions: it writes a
-command at `+0x100` from that base and polls status at `+0x140` for bit `0x10`.
+command byte to **CLIO `0x0500`** and polls **CLIO `0x0540`** for bit `0x10`,
+meaning the command has completed.
 
-That is the CD-ROM protocol, and XBUS is now the next piece of hardware. The
-ready bit is currently a stub — the bus reports itself ready with nothing
-attached, which is enough to get the ROM moving and no more.
+**An empty bus still has to answer.** The machine must run its attract sequence
+with no disc in the drive, so "nothing attached" cannot mean "never replies" —
+that is a hang, not an empty drive. Reporting every command complete lets the
+ROM's device enumeration finish and find nothing, rather than waiting forever
+for a device to speak.
+
+With that, the ROM gets substantially further. It now programs the timer bank
+(four timers with real reload values), configures XBUS, writes several more
+MADAM display registers, **enables interrupts at the CPU** and services them.
+
+It then waits on a **software flag in RAM** — `[0x000FDA70 + 0xFC]` — which a
+completion handler would set. Nothing sets it, because there is no real device
+behind XBUS to complete anything and raise the interrupt that would.
+
+Two things were ruled out while narrowing this, both worth not repeating:
+
+- **It is not the timers.** Forcing every programmed timer to run regardless of
+  the enable register changed nothing. (The enable encoding does still look
+  wrong — the ROM programs timers 0-3 and then writes a value that this
+  implementation reads as enabling timer 12 — but that is not what blocks it.)
+- **It is not a missing interrupt enable.** By this point the CPU has interrupts
+  unmasked and CLIO has several sources enabled and pending.
+
+So XBUS proper is the next piece, and its shape is now known: a ready bit, a
+command port, a completion bit, and an interrupt on completion.
 
 ## Still to be written
 

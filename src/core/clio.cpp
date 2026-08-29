@@ -211,10 +211,15 @@ u32 Clio::read(u32 offset) {
 
         case kClioMode:        return mode_;
 
-        // Report the bus as ready but with nothing attached. The ROM needs the
-        // ready bit to stop spinning; what it finds afterwards is the job of a
-        // real XBUS implementation, which does not exist yet.
+        // An empty bus that answers.
+        //
+        // The machine must run its attract sequence with no disc in the drive,
+        // so "nothing attached" cannot mean "never replies" - that is a hang,
+        // not an empty drive. The bus reports itself ready, and every command
+        // reports itself complete, so the ROM's enumeration finishes and finds
+        // no devices rather than waiting forever for one.
         case kClioXbusStatus:  return kXbusReady;
+        case kClioXbusResult:  return kXbusComplete;
         case kClioBadBits:     return 0;
         case kClioTimerEnable: return timer_enabled_;
 

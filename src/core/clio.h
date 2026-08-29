@@ -126,9 +126,22 @@ enum : u32 {
     // Returning zero here is what leaves a booted machine sitting on a static
     // logo: it has finished starting up and is waiting for the disc hardware to
     // answer.
-    kClioXbusStatus   = 0x0400,
-    kClioXbusData     = 0x0404,   // TODO(clio): confirm
+    // The ROM's device enumeration, decoded from the loop it spins in:
+    //
+    //   ADD  r0, r0, #0x03400000
+    //   ...
+    //   STR  r1, [r0, #0x100]     ; command byte -> 0x03400500
+    //   LDR  r0, [r0, #0x140]     ; status       <- 0x03400540
+    //   AND  r0, r0, #0xFF
+    //   TST  r0, #0x10            ; wait for the operation to complete
+    //   BEQ  -5
+    //
+    kClioXbusStatus   = 0x0400,   // bit 0x80: the bus itself is ready
+    kClioXbusCommand  = 0x0500,   // command byte written here
+    kClioXbusResult   = 0x0540,   // bit 0x10: the command has completed
+
     kXbusReady        = 0x0080,
+    kXbusComplete     = 0x0010,
 
     // The DSP lives inside CLIO's window rather than having its own chip
     // select. The boot ROM uploads a program here, starts it, waits, and then

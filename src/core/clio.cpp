@@ -274,24 +274,19 @@ u32 Clio::read(u32 offset) {
     if (offset >= kClioXbusSelect && offset < kClioXbusData + kClioXbusWindow) {
         switch (offset & ~(kClioXbusWindow - 1)) {
             case kClioXbusSelect:
-                return xbus_sel_low_ | xbus_sel_high_;
+                return xbus_sel_;
             case kClioXbusPoll: {
-                u32 poll;
-                if (xbus_sel_low_ == kXbusSelBusIndex) {
-                    poll = xbus_poll_;              // the bus itself
-                } else if (xbus_sel_low_ == 0) {
-                    poll = xbus_poll_for_device();  // the built-in drive
-                    media_changed_ = false;         // media-access is read-clear
-                } else {
-                    poll = kXbusPollUnfitted;       // nothing in that slot
+                // Device zero is the built-in drive and answers with its own
+                // register; anything else reads the bus-level one.
+                if (xbus_sel_ != 0) {
+                    return xbus_poll_;
                 }
-                if ((xbus_sel_high_ & kXbusSelMaskPoll) != 0) {
-                    poll &= 0x0fu;
-                }
+                const u32 poll = xbus_poll_for_device();
+                media_changed_ = false;   // media-access is read-clear
                 return poll;
             }
             case kClioXbusCommand: {            // RD_STAT
-                if (xbus_sel_low_ != 0) {
+                if (xbus_sel_ != 0) {
                     return 0;
                 }
                 const u8 byte = cdrom_.read_status();
@@ -301,7 +296,7 @@ u32 Clio::read(u32 offset) {
                 return byte;
             }
             case kClioXbusData:                 // RD_DATA
-                return xbus_sel_low_ == 0 ? cdrom_.read_data() : 0;
+                return xbus_sel_ == 0 ? cdrom_.read_data() : 0;
             default:
                 break;
         }
@@ -409,23 +404,29 @@ void Clio::write(u32 offset, u32 value) {
                 // SELECTION names the device by VALUE. 0x8F is a probe rather
                 // than a device: answering it wrongly leaves CLIO reporting
                 // "too many devices on the bus" and the enumeration fails.
-                xbus_sel_low_  = value & 0x0fu;
-                xbus_sel_high_ = value & 0xf0u;
+                // SELECTION names the device by value. 0x8F is the device-count
+                // probe rather than a device: answering it as an ordinary
+                // selection leaves CLIO reporting "too many devices".
+                xbus_sel_ = value & 0xffu;
+                if (xbus_sel_ == kXbusSelectProbe) {
+                    xbus_poll_ &= 0x0fu;
+                } else {
+                    xbus_poll_ = (xbus_poll_ & 0x0fu) | kXbusPollUnfitted;
+                }
                 return;
 
             case kClioXbusPoll:
                 // Only the control nibble is writable.
-                if (xbus_sel_low_ == kXbusSelBusIndex) {
-                    xbus_poll_ = (xbus_poll_ & 0xf0u) | (value & 0x0fu);
-                }
-                if (xbus_sel_low_ == 0) {
+                if (xbus_sel_ == 0) {
                     xbus_device_poll_ = (value & 0x0fu) | (xbus_device_poll_ & 0xf0u);
                     raise_xbus_interrupt_if_pending();
+                } else {
+                    xbus_poll_ = value & 0xffu;
                 }
                 return;
 
             case kClioXbusCommand: {
-                if (xbus_sel_low_ != 0) {
+                if (xbus_sel_ != 0) {
                     return;
                 }
                 const bool was_empty = cdrom_.status_empty();
@@ -507,8 +508,17 @@ void Clio::write(u32 offset, u32 value) {
             update_cpu_interrupt_line();
             break;
 
-        case kClioDmaRequest:
-            if ((value & kClioDmaXbusStart) != 0) {
+        case kClioDmaRequestSet:
+        case kClioDmaRequestClear:
+            if (offset == kClioDmaRequestSet) {
+                xbus_dma_enable_ |= value;
+            } else {
+                xbus_dma_enable_ &= ~value;
+            }
+            // The expansion transfer runs when the request bit and the bus
+            // control's own enable are BOTH set.
+            if ((xbus_dma_enable_ & kClioDmaXbusBit) != 0 &&
+                (xbus_control_ & kXbusCtlDmaEnable) != 0) {
                 xbus_dma_requested_ = true;
             }
             return;

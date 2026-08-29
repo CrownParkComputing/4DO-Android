@@ -105,14 +105,13 @@ void CdRomDevice::build_reply(u8 command) {
             break;
 
         case kCmdReadError:
-            // Ten bytes: the opcode, the last error code eight times over, and
-            // the DRIVE STATUS - not a disc-present flag. MAME guesses here and
-            // says so ("perhaps just the status byte?"); the driver that boots
-            // this disc returns the status byte, and the BIOS branches on it.
-            // Returning 1 instead sends the whole boot down a different path.
+            // Ten bytes: the opcode, eight bytes of error detail, and a final
+            // byte reporting whether there is media. Per MAME's cr560b, which
+            // notes it is unsure whether that last byte should instead be the
+            // status - so this is a place to revisit if the boot turns on it.
             pending_reply_.push_back(kCmdReadError);
-            for (int i = 0; i < 8; ++i) pending_reply_.push_back(last_error_);
-            pending_reply_.push_back(drive_status());
+            for (int i = 0; i < 8; ++i) pending_reply_.push_back(0x00);
+            pending_reply_.push_back(disc_present_ ? 1 : 0);
             break;
 
         case kCmdSetMode:
@@ -316,16 +315,12 @@ u8 CdRomDevice::drive_status() const {
     // lists 0x08 as STATUS_SUCCESS but marks it unconfirmed, and the driver
     // that actually boots this disc has no such bit at all. Setting one the
     // host does not expect is not harmless.
-    // A drive with a disc in it powers up READY, tray closed, disc present and
-    // ALREADY SPINNING - it does not wait to be told to spin up. Reporting the
-    // motor stopped until a MOTOR ON arrives makes the host see a drive in a
-    // state it never asked about, and it takes a different branch entirely.
-    //
-    // Empty, it still reports ready with the tray shut; only the disc and the
-    // motor are missing.
-    u8 status = kStatusDoor | kStatusReady;
-    if (disc_present_ && motor_on_) status |= kStatusDiscIn | kStatusSpinUp;
-    else if (disc_present_)         status |= kStatusDiscIn;
+    // Only what is true. Per MAME's cr560b a drive out of reset reports media
+    // if a disc is in it and nothing else; the motor is reported once it has
+    // been told to spin up.
+    u8 status = kStatusDoor;
+    if (disc_present_) status |= kStatusDiscIn;
+    if (motor_on_)     status |= kStatusSpinUp | kStatusReady;
     return status;
 }
 
@@ -336,9 +331,8 @@ void CdRomDevice::reset() {
     completion_delay_ = 0;
     media_changed_ = false;
     interrupt_request_ = false;
-    // Spinning from power-on when there is something to spin.
-    motor_on_ = disc_present_;
-    ready_ = true;
+    motor_on_ = false;
+    ready_ = false;
     last_error_ = 0;
     streaming_ = false;
     pending_reply_.clear();
@@ -380,7 +374,6 @@ void CdRomDevice::write_command(u8 byte) {
         fprintf(stderr, "\n");
     }
 
-    ready_ = true;
     build_reply(last_command_);
 
     completion_pending_ = true;

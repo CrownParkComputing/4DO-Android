@@ -19,6 +19,27 @@ Whatever the enforceability of a clause reaching at "knowledge obtained by
 studying", the cheap and certain option is to not rely on the argument. So we
 do not read those sources while writing these ones.
 
+## Running a prohibited emulator is allowed; reading it is not
+
+This distinction is the whole rule, and it is easy to lose in the moment:
+
+- **Running** FreeDO, Opera or anything descended from them, and observing what
+  it does from the outside - command traces, register values, timing, screen
+  output - is black-box measurement. It is permitted, and it is one of the most
+  useful tools available.
+- **Reading their source** is not permitted, whatever the intention, and the
+  knowledge does not stop being derived once acquired.
+
+This was breached during development: Opera's sources were read and facts about
+the CD-ROM's poll register, status bits, selection model and DMA trigger were
+transcribed into `src/core/`. Those commits were reverted and the same facts
+re-derived from MAME (BSD-3-Clause) and from behavioural observation. It is
+recorded here rather than quietly fixed, because a clean-room claim is only
+worth anything if its failures are visible.
+
+The practical guard: if a fact came out of a debugger or a log, it is fine. If
+it came out of an editor, it is not.
+
 ## Rules for contributors
 
 1. **Do not read FreeDO, 4DO, Opera or `opera-libretro` source while working on

@@ -1082,78 +1082,65 @@ takes a different path, because it never looks.
 **It is not an interrupt problem.** The machine takes about 126 FIQs a frame,
 and the real service routine reads the pending register thousands of times.
 
-## The drive is not the problem any more
+## What the CD conversation looks like
 
-The CD model has been checked byte for byte against the driver that boots this
-disc, by building that core as a standalone Linux binary and logging both sides.
-They now agree exactly:
+The command set and reply shapes come from MAME's cr560b device
+(BSD-3-Clause). The sequencing comes from BLACK-BOX observation of a reference
+emulator - its command trace and register reads, logged from the outside while
+it ran. Its source is not a permitted input here; see docs/CLEANROOM.md, which
+now says so explicitly, after that line was crossed once and had to be walked
+back.
 
-```
-0x83 (read id)     83 00 10 00 01 00 00 00 00 00 00 E1   12 bytes
-0x82 (last status) 82 00 00 00 00 00 00 00 00 E1         10 bytes
-```
-
-Same opcodes, same lengths, same bytes, same poll register - 0x0F idle, 0x1F
-while status is waiting - and the same power-on state, 0xE1 with a disc.
-
-And the boot still diverges at the THIRD command. The working core sets mode and
-goes on to read four sectors; this one runs a data-path check instead:
+The boot's command sequence, observed:
 
 ```
-this:   83 82 80 02 8B 8C 8D 85 09 09 09 09 09 10 83 83 ...
-working: 83 82 09 8B 8C 10 10 10 10 8D 8B 8C 10 10 10 10 ...
+83 82 09 8B 8C 10 10 10 10 8D 8B 8C 10 10 10 10 ...
 ```
 
-Since the drive answers identically, whatever the BIOS is branching on is not
-coming from the drive. 0x80 is a data-path check - the command a host issues
-when it is not confident the bus is working - so the difference is somewhere in
-the machine around the bus, not in the device on the end of it.
+Read id, last status, set mode, disc info, read TOC, then repeated reads - LBA
+0, 1, 2, 3, and later 122299 onwards, which is the directory region.
 
-That is worth stating plainly because it redirects the search: further work on
-the CD-ROM model is not what will make this boot.
+This emulator issues one read and stops, diverging at the third command: it runs
+a data-path check (0x80) where the reference sets mode. A data-path check is
+what a host issues when it doubts the bus is working, and by that point the
+drive's replies are byte-identical, so what the BIOS branches on is not coming
+from the drive. That redirects the search away from the CD-ROM model.
 
-## The poll register and drive status, settled
+## The poll register and drive status
 
-Taken from the driver that actually boots this BIOS. Where it disagrees with
-MAME, this is the version to trust - MAME's own 3DO notes say its drive is
-"enough to load a few sectors and nothing else".
+From MAME's 3DO CLIO and cr560b devices (BSD-3-Clause).
 
 Poll register - low nibble enables, high nibble state:
 
 | Bit | Meaning |
 |---|---|
 | 0x01 | status interrupt enable |
-| 0x02 | data interrupt enable |
-| 0x04 | media-access interrupt enable |
-| 0x08 | ready interrupt enable |
-| 0x10 | status available |
-| 0x20 | data available |
-| 0x40 | media access |
-| 0x80 | ready |
+| 0x02 | read interrupt enable |
+| 0x04 | write interrupt enable |
+| 0x08 | reset |
+| 0x10 | status valid |
+| 0x20 | read valid |
+| 0x40 | write valid |
+| 0x80 | media access, cleared by reading |
 
-MAME calls 0x40 "write valid" and 0x80 "media access"; the working driver calls
-them media-access and ready. That also explains the boot ROM's own scan testing
-`poll & (poll << 4)` against 0x70: it is checking each of the first three
-enables against its matching state bit.
+That is consistent with the boot ROM's own device scan testing
+`poll & (poll << 4)` against 0x70: it checks each of the first three enables
+against its matching state bit.
 
 Drive status byte:
 
 | Bit | Meaning |
 |---|---|
-| 0x80 | tray closed |
+| 0x80 | door closed |
 | 0x40 | disc present |
-| 0x20 | spinning |
+| 0x20 | motor spinning |
 | 0x10 | error |
+| 0x08 | success - MAME marks this unconfirmed |
 | 0x02 | double speed |
 | 0x01 | ready |
 
-There is **no 0x08**. MAME lists one as STATUS_SUCCESS and marks it unconfirmed;
-the driver that boots this disc has no such bit, and setting one the host does
-not expect is not harmless. A healthy drive with a disc reads 0xE1 - tray, disc,
-spin, ready - which is exactly the value the working core logs.
-
-A READ is refused outright unless tray, disc and spin are all set, and on
-success the drive raises BOTH the data and status poll bits.
+A READ is refused unless door, disc and spin are all set, and on success the
+drive raises both the data and status poll bits.
 
 ## The CD driver's state machine is healthy
 

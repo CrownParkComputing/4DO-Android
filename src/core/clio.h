@@ -235,26 +235,30 @@ enum : u32 {
     // driver's own writes confirm the control bits: it reads the register,
     // masks to the low four bits, and ORs in 1, 2 or 4 at three different call
     // sites - the three interrupt enables below, in order.
+    // From MAME's 3DO CLIO (BSD-3-Clause), which documents the register:
+    //   ---- ---x  status interrupt enable
+    //   ---- --x-  read interrupt enable
+    //   ---- -x--  write interrupt enable
+    //   ---- x---  reset
+    //   ---x ----  status valid
+    //   --x- ----  read valid
+    //   -x-- ----  write valid
+    //   x--- ----  media access, cleared by reading
     kXbusStatusIrqEnable = 0x0001,
     kXbusReadIrqEnable   = 0x0002,
     kXbusWriteIrqEnable  = 0x0004,
     kXbusReset           = 0x0008,
-    kXbusStatusReady     = 0x0010,   // status valid
-    kXbusChunkReady      = 0x0020,   // read valid
+    kXbusStatusReady     = 0x0010,
+    kXbusChunkReady      = 0x0020,
     kXbusWriteValid      = 0x0040,
     kXbusMediaAccess     = 0x0080,
 
     // Written to SELECTION as a device-count probe. Answering it wrongly makes
     // CLIO report "too many devices on the bus".
     kXbusSelectProbe     = 0x008f,
-    kXbusSelBusIndex     = 0x000f,   // addresses the bus, not a device
-    kXbusSelMaskPoll     = 0x0080,   // read the poll register's low nibble only
-
-    // What an address with nothing fitted answers. Not zero: an empty slot
-    // reads as status-and-data-available with no enables set, which the boot
-    // ROM's scan correctly reads as "nothing to do here".
-    kXbusPollUnfitted    = 0x0030,
-    kXbusPollEnableAll   = 0x000f,
+    // Selecting anything other than the device-count probe leaves the bus-level
+    // poll register flagged. From MAME's CLIO, which sets exactly this.
+    kXbusPollUnfitted    = 0x0090,
 
     kXbusReady        = 0x0080,
 
@@ -272,11 +276,14 @@ enum : u32 {
     //   bit 15  active
     //   bit 14  happened before reset
     //   bits 0..7  device number
-    // Writing bit 20 here is what actually STARTS an expansion-bus DMA. The
-    // address and length are set in MADAM beforehand and mean nothing on their
-    // own - this is the trigger, and it is pulled once per transfer.
-    kClioDmaRequest   = 0x0304,
-    kClioDmaXbusStart = 0x00100000,
+    // DMA request enable and disable, per MAME's CLIO. The expansion-bus
+    // transfer runs when request bit 20 is set AND bit 11 of the bus control
+    // register is set; the address and length live in MADAM and mean nothing on
+    // their own.
+    kClioDmaRequestSet   = 0x0304,
+    kClioDmaRequestClear = 0x0308,
+    kClioDmaXbusBit      = 0x00100000,
+    kXbusCtlDmaEnable    = 0x00000800,   // bit 11
 
     kClioDipir1       = 0x0410,
     kClioDipir2       = 0x0414,
@@ -373,17 +380,10 @@ private:
     // when a device other than the built-in drive is selected; the drive keeps
     // its own control nibble in `xbus_device_poll_`.
     u32 control_ = 0;
-    // SELECTION splits: the low nibble is the device index, the high nibble is
-    // flags. Bit 7 masks a poll read down to its low nibble, and index 0x0F
-    // addresses the bus itself rather than a device.
-    u32 xbus_sel_low_ = 0;
-    u32 xbus_sel_high_ = 0;
+    u32 xbus_sel_ = 0;
+    u32 xbus_dma_enable_ = 0;
     u32 xbus_poll_ = 0;
-    // The drive powers up with every interrupt enable already set. Starting
-    // them clear means no condition can ever be both asserted and enabled, so
-    // the drive can never interrupt and the host reads a register that says
-    // nothing is switched on.
-    u32 xbus_device_poll_ = kXbusPollEnableAll;
+    u32 xbus_device_poll_ = 0;
     bool media_changed_ = false;
     bool xbus_dma_requested_ = false;
     u32 xbus_control_ = kXbusReady;

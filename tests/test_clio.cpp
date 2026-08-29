@@ -438,11 +438,10 @@ TEST(selection_names_a_device_by_value_not_by_address) {
     c.clio.tick(100000);
     CHECK_EQ(c.clio.read(kClioXbusPoll) & kXbusStatusReady, kXbusStatusReady);
 
-    // Select a slot with nothing in it. It answers as unfitted - status and
-    // data flagged with no enables, which the boot ROM's scan reads as nothing
-    // to do - and passes nothing to the drive.
+    // Select a slot with nothing in it. CLIO flags it and passes nothing to
+    // the drive.
     c.clio.write(kClioXbusSelect, 3);
-    CHECK_EQ(c.clio.read(kClioXbusPoll), kXbusPollUnfitted);
+    CHECK_EQ(c.clio.read(kClioXbusPoll) & kXbusPollUnfitted, kXbusPollUnfitted);
 
     const u64 before = c.clio.cdrom().commands_received();
     for (int i = 0; i < 7; ++i) {
@@ -451,26 +450,16 @@ TEST(selection_names_a_device_by_value_not_by_address) {
     CHECK_EQ(c.clio.cdrom().commands_received(), before);
 }
 
-TEST(selection_splits_into_a_device_index_and_flags) {
-    // The low nibble of a SELECTION is the device index and the high nibble is
-    // flags, so the drive at index 0 answers 0x00, 0x10 and 0x20 alike. Index
-    // 0x0F addresses the bus itself rather than any device.
+TEST(the_device_count_probe_must_be_answered_cleanly) {
+    // 0x8F written to SELECTION is a probe rather than a device. Treating it as
+    // an ordinary selection leaves CLIO reporting "too many devices on the bus"
+    // and enumeration fails before the drive is ever reached.
     Chip c;
-    for (int i = 0; i < 7; ++i) {
-        c.clio.write(kClioXbusCommand, i == 0 ? kCmdVersion : 0x00u);
-    }
-    c.clio.tick(100000);
+    c.clio.write(kClioXbusSelect, 7);
+    CHECK_EQ(c.clio.read(kClioXbusPoll) & kXbusPollUnfitted, kXbusPollUnfitted);
 
-    c.clio.write(kClioXbusSelect, 0x20);        // still index 0
-    CHECK_EQ(c.clio.read(kClioXbusPoll) & kXbusStatusReady, kXbusStatusReady);
-
-    // Bit 7 masks a poll read down to its low nibble.
-    c.clio.write(kClioXbusSelect, 0x80);
-    CHECK_EQ(c.clio.read(kClioXbusPoll) & 0xf0u, 0u);
-
-    // The bus index answers for the bus, not the drive.
-    c.clio.write(kClioXbusSelect, kXbusSelBusIndex);
-    CHECK_EQ(c.clio.read(kClioXbusPoll) & kXbusStatusReady, 0u);
+    c.clio.write(kClioXbusSelect, kXbusSelectProbe);
+    CHECK_EQ(c.clio.read(kClioXbusPoll) & kXbusPollUnfitted, 0u);
 }
 
 TEST(only_the_control_nibble_of_the_poll_register_is_writable) {

@@ -216,6 +216,7 @@ void Arm60::check_interrupts() {
     if (fiq_line_ && (cpsr_ & kFlagF) == 0) {
         // R14_fiq holds the address of the instruction after the one that was
         // interrupted, plus the pipeline offset.
+        ++fiqs_taken_;
         enter_exception(kVectorFiq, Mode::Fiq, regs_[15] + 4, true);
         return;
     }

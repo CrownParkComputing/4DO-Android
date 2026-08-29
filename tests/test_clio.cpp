@@ -474,3 +474,24 @@ TEST(both_ports_of_an_interrupt_pair_read_the_same_mask) {
     CHECK_EQ(c.clio.read(kClioIrq0Pending), kIrqVerticalBlank1);
     CHECK_EQ(c.clio.read(kClioIrq0Clear), kIrqVerticalBlank1);
 }
+
+TEST(the_expansion_bus_always_reports_ready) {
+    // The boot ROM clears the ready bit and then spins until hardware sets it
+    // again. Honouring that clear literally hangs the machine on its own bus
+    // setup, so the bit reads set however software writes it.
+    Chip c;
+    CHECK_EQ(c.clio.read(kClioXbusCtlSet) & kXbusReady, kXbusReady);
+
+    c.clio.write(kClioXbusCtlClear, kXbusReady);
+    CHECK_EQ(c.clio.read(kClioXbusCtlSet) & kXbusReady, kXbusReady);
+
+    // The writable control bits still behave as a set/clear pair.
+    c.clio.write(kClioXbusCtlSet, 0x0800);
+    CHECK_EQ(c.clio.read(kClioXbusCtlSet) & 0x0800u, 0x0800u);
+    c.clio.write(kClioXbusCtlClear, 0x0800);
+    CHECK_EQ(c.clio.read(kClioXbusCtlSet) & 0x0800u, 0u);
+
+    // Bits outside the writable mask are ignored.
+    c.clio.write(kClioXbusCtlSet, 0x0001);
+    CHECK_EQ(c.clio.read(kClioXbusCtlSet) & 0x0001u, 0u);
+}

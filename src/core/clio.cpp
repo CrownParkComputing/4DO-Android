@@ -326,7 +326,16 @@ u32 Clio::read(u32 offset) {
         case kClioControl:     return control_;
         case kClioMode:        return mode_;
 
-        case kClioXbusStatus:  return kXbusReady;
+        // Bit 7 is a hardware completion flag, not a software one. The boot ROM
+        // clears it and then spins until it comes back set, so honouring the
+        // clear literally hangs the machine on its own bus setup - a million
+        // reads of this one register and no further progress. Our bus finishes
+        // a transaction the moment it starts, so it is always ready.
+        case kClioXbusCtlSet:
+        case kClioXbusCtlClear:  return xbus_control_ | kXbusReady;
+        case kClioXbusXferCount: return xbus_xfer_count_;
+        case kClioDipir1:        return dipir1_;
+        case kClioDipir2:        return dipir2_;
         case kClioBadBits:     return 0;
         case kClioTimerConfigSet0:
         case kClioTimerConfigClear0:
@@ -481,6 +490,19 @@ void Clio::write(u32 offset, u32 value) {
             irq1_enabled_ &= ~value;
             update_cpu_interrupt_line();
             break;
+
+        case kClioXbusCtlSet:
+            xbus_control_ |= (value & kClioXbusCtlMask);
+            return;
+        case kClioXbusCtlClear:
+            xbus_control_ &= ~(value & kClioXbusCtlMask);
+            return;
+        case kClioXbusType0:
+            xbus_type0_ = value;
+            return;
+        case kClioXbusXferCount:
+            xbus_xfer_count_ = value;
+            return;
 
         case kClioControl: {
             // Only bits whose write-enable is set in the next nibble change.

@@ -953,6 +953,21 @@ wait:  poll(device); tst r0,#16
        tst r0,#8                     ; test bit 3
 ```
 
+## The expansion-bus control register
+
+`CLIO+0x0400` is a set/clear pair like the interrupt registers, writable only
+through the mask `0xca80`. Bit 7 is a hardware completion flag rather than a
+software one: the boot ROM CLEARS it and then spins until it comes back set.
+
+Honouring that clear literally hangs the machine on its own bus setup - a
+million reads of this one register and no further progress. Our bus finishes a
+transaction the moment it starts, so the bit always reads set.
+
+`CLIO+0x0410` and `0x0414` are DIPIR - "disc inserted player interrupt request"
+- carrying an active flag, a happened-before-reset flag, and a device number.
+They are implemented, but worth recording: **this BIOS never reads them**, so
+whatever tells it about a disc, it is not these.
+
 ## Where this reaches
 
 The BIOS boots, initialises the OS, brings up the expansion bus, assigns device

@@ -155,6 +155,10 @@ public:
     // have completely different causes.
     u64 irqs_taken() const { return irqs_taken_; }
 
+    // CLIO drives FIQ, so this is the one that says whether the machine is
+    // being serviced at all.
+    u64 fiqs_taken() const { return fiqs_taken_; }
+
     // Cycles executed since reset. The scheduler drives everything from this.
     u64 total_cycles() const { return total_cycles_; }
 
@@ -218,6 +222,7 @@ private:
 
     u64 total_cycles_ = 0;
     u64 irqs_taken_ = 0;
+    u64 fiqs_taken_ = 0;
 
     // Decode cache, one entry per instruction slot of addressable code memory.
     // Allocated lazily per region rather than for the whole 4 GB space.

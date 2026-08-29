@@ -250,6 +250,25 @@ enum : u32 {
 
     kXbusReady        = 0x0080,
 
+    // Expansion-bus control, as a set/clear pair like the interrupt registers.
+    // Only these bits are writable.
+    kClioXbusCtlSet   = 0x0400,
+    kClioXbusCtlClear = 0x0404,
+    kClioXbusCtlMask  = 0xca80,
+    kClioXbusType0    = 0x0408,
+    kClioXbusXferCount= 0x040c,
+
+    // DIPIR - "disc inserted player interrupt request". How the machine learns
+    // which device had media change under it.
+    //
+    //   bit 15  active
+    //   bit 14  happened before reset
+    //   bits 0..7  device number
+    kClioDipir1       = 0x0410,
+    kClioDipir2       = 0x0414,
+    kDipirActive      = 0x8000,
+    kDipirBeforeReset = 0x4000,
+
     // The DSP lives inside CLIO's window rather than having its own chip
     // select. The boot ROM uploads a program here, starts it, waits, and then
     // gives up - so the DSP is on the critical path to booting, not merely to
@@ -344,6 +363,11 @@ private:
     u32 xbus_poll_ = 0;
     u32 xbus_device_poll_ = 0;
     bool media_changed_ = false;
+    u32 xbus_control_ = kXbusReady;
+    u32 xbus_type0_ = 0;
+    u32 xbus_xfer_count_ = 0;
+    u32 dipir1_ = 0;
+    u32 dipir2_ = 0;
 
     u32 vint0_line_ = 0;
     u32 vint1_line_ = 0;

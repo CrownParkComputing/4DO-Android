@@ -530,3 +530,39 @@ TEST(the_expansion_bus_always_reports_ready) {
     c.clio.write(kClioXbusCtlSet, 0x0001);
     CHECK_EQ(c.clio.read(kClioXbusCtlSet) & 0x0001u, 0u);
 }
+
+TEST(a_read_command_streams_sectors_from_the_disc) {
+    // READ carries its start address in MSF unless bit 0 of byte 4 says
+    // otherwise, and a count of sectors. The reply is only an acknowledgement -
+    // the sector data itself comes back through the data FIFO.
+    Chip c;
+    c.clio.cdrom().set_disc_present(true);
+
+    // MSF 00:02:00 is LBA 0: the first two seconds of a CD are lead-in.
+    const u8 command[7] = {kCmdRead, 0x00, 0x02, 0x00, 0x00, 0x00, 0x01};
+    for (u8 byte : command) c.clio.write(kClioXbusCommand, byte);
+    c.clio.tick(100000);
+
+    CHECK_EQ(c.clio.read(kClioXbusCommand), kCmdRead);
+    CHECK_EQ(c.clio.read(kClioXbusCommand) & kStatusSpinUp, kStatusSpinUp);
+
+    // With no disc attached there is nothing to stream, but the command must
+    // still have been accepted rather than rejected.
+    CHECK_EQ(c.clio.cdrom().last_command(), kCmdRead);
+}
+
+TEST(read_capacity_reports_the_lead_out_in_msf) {
+    Chip c;
+    const u8 command[7] = {kCmdReadCapacity, 0, 0, 0, 0, 0, 0};
+    for (u8 byte : command) c.clio.write(kClioXbusCommand, byte);
+    c.clio.tick(100000);
+
+    CHECK_EQ(c.clio.read(kClioXbusCommand), kCmdReadCapacity);
+    c.clio.read(kClioXbusCommand);                       // reserved
+    const u32 m = c.clio.read(kClioXbusCommand);
+    const u32 s = c.clio.read(kClioXbusCommand);
+    c.clio.read(kClioXbusCommand);                       // frames
+    // An empty drive still answers, and lead-out sits at the lead-in offset.
+    CHECK_EQ(m, 0u);
+    CHECK_EQ(s, 2u);
+}

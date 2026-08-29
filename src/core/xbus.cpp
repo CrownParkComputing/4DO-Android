@@ -1,7 +1,33 @@
 #include <cstdlib>
 #include "xbus.h"
 
+#include "disc.h"
+
 namespace retro3do {
+
+namespace {
+
+// A CD address is minutes:seconds:frames, 75 frames a second, and the first two
+// seconds are the lead-in - hence the 150.
+constexpr u32 kLeadInFrames = 150;
+
+u32 msf_to_lba(u32 msf) {
+    const u32 m = (msf >> 16) & 0xffu;
+    const u32 s = (msf >> 8) & 0xffu;
+    const u32 f = msf & 0xffu;
+    const u32 frames = (m * 60u + s) * 75u + f;
+    return frames < kLeadInFrames ? 0u : frames - kLeadInFrames;
+}
+
+u32 lba_to_msf(u32 lba) {
+    const u32 frames = lba + kLeadInFrames;
+    return ((frames / (60u * 75u)) << 16) |
+           (((frames / 75u) % 60u) << 8) |
+           (frames % 75u);
+}
+
+}  // namespace
+
 
 void CdRomDevice::tick(u32 cycles) {
     if (!completion_pending_) {
@@ -61,10 +87,122 @@ void CdRomDevice::build_reply(u8 command) {
             pending_reply_.push_back(drive_status());
             break;
 
+        case kCmdReadStatus:
+            pending_reply_.push_back(kCmdReadStatus);
+            pending_reply_.push_back(drive_status() & ~kStatusSuccess);
+            break;
+
+        case kCmdReadError:
+            pending_reply_.push_back(kCmdReadError);
+            for (int i = 0; i < 8; ++i) pending_reply_.push_back(0x00);
+            pending_reply_.push_back(disc_present_ ? 1 : 0);
+            break;
+
+        case kCmdSetMode:
+            // Sub-command 0 carries the sector size the host wants back.
+            if (last_command_bytes_.size() >= 5 && last_command_bytes_[1] == 0x00) {
+                const u32 size = (u32(last_command_bytes_[3]) << 8) |
+                                  u32(last_command_bytes_[4]);
+                if (size != 0) sector_size_ = size;
+            }
+            pending_reply_.push_back(kCmdSetMode);
+            pending_reply_.push_back(drive_status());
+            break;
+
+        case kCmdReadCapacity: {
+            pending_reply_.push_back(kCmdReadCapacity);
+            const u32 lead_out = lba_to_msf(disc_sectors());
+            pending_reply_.push_back(0x00);
+            pending_reply_.push_back(u8(lead_out >> 16));
+            pending_reply_.push_back(u8(lead_out >> 8));
+            pending_reply_.push_back(u8(lead_out));
+            pending_reply_.push_back(0x00);
+            pending_reply_.push_back(0x00);
+            pending_reply_.push_back(u8(drive_status() | kStatusReady));
+            break;
+        }
+
+        case kCmdReadDiscInfo: {
+            // First track, last track and where the lead-out starts. This is
+            // how the machine learns a disc's shape before reading any of it.
+            pending_reply_.push_back(kCmdReadDiscInfo);
+            if (disc_ == nullptr || !disc_present_) {
+                pending_reply_.push_back(u8((drive_status() & ~kStatusReady) |
+                                            kStatusError));
+                break;
+            }
+            motor_on_ = true;
+            const u32 lead_out = lba_to_msf(disc_sectors());
+            pending_reply_.push_back(0x00);              // disc type: CD-ROM
+            pending_reply_.push_back(0x01);              // first track
+            pending_reply_.push_back(u8(last_track()));
+            pending_reply_.push_back(u8(lead_out >> 16));
+            pending_reply_.push_back(u8(lead_out >> 8));
+            pending_reply_.push_back(u8(lead_out));
+            pending_reply_.push_back(u8(drive_status() | kStatusSuccess));
+            break;
+        }
+
+        case kCmdReadToc: {
+            // Byte 2 names the track; zero asks about the lead-out.
+            const u8 track = last_command_bytes_.size() >= 3
+                                 ? last_command_bytes_[2] : 0u;
+            pending_reply_.push_back(kCmdReadToc);
+            if (disc_ == nullptr || !disc_present_ || track > last_track()) {
+                pending_reply_.push_back(u8((drive_status() & ~kStatusReady) |
+                                            kStatusError));
+                break;
+            }
+            motor_on_ = true;
+            u32 start = 0;
+            u8  adr   = 0x14;    // data track, TOC entry
+            if (track == 0) {
+                start = disc_sectors();
+            } else {
+                const auto& list = disc_->tracks();
+                const size_t index = track - 1;
+                if (index < list.size()) {
+                    start = list[index].start_lba;
+                    adr = list[index].is_audio ? 0x10 : 0x14;
+                }
+            }
+            const u32 msf = lba_to_msf(start);
+            pending_reply_.push_back(0x00);
+            pending_reply_.push_back(adr);
+            pending_reply_.push_back(track == 0 ? 0x01 : track);
+            pending_reply_.push_back(track == 0 ? u8(last_track()) : 0x00);
+            pending_reply_.push_back(u8(msf >> 16));
+            pending_reply_.push_back(u8(msf >> 8));
+            pending_reply_.push_back(u8(msf));
+            pending_reply_.push_back(0x00);
+            pending_reply_.push_back(u8(drive_status() | kStatusReady));
+            break;
+        }
+
+        case kCmdRead: {
+            // Byte 4 selects addressing: 0 means the start is MSF rather than a
+            // logical block number.
+            u32 start = 0;
+            u32 count = 0;
+            if (last_command_bytes_.size() >= 7) {
+                start = (u32(last_command_bytes_[1]) << 16) |
+                        (u32(last_command_bytes_[2]) << 8) |
+                         u32(last_command_bytes_[3]);
+                if ((last_command_bytes_[4] & 0x01) == 0) start = msf_to_lba(start);
+                count = (u32(last_command_bytes_[5]) << 8) |
+                         u32(last_command_bytes_[6]);
+            }
+            start_transfer(start, count);
+            motor_on_ = true;
+            pending_reply_.push_back(kCmdRead);
+            pending_reply_.push_back(drive_status());
+            break;
+        }
+
         case kCmdMotorOn:
             motor_on_ = true;
             pending_reply_.push_back(kCmdMotorOn);
-            pending_reply_.push_back(drive_status());
+            pending_reply_.push_back(u8(drive_status() | kStatusSuccess));
             break;
 
         case kCmdMotorOff:
@@ -80,6 +218,55 @@ void CdRomDevice::build_reply(u8 command) {
             pending_reply_.push_back(drive_status());
             break;
     }
+}
+
+u32 CdRomDevice::last_track() const {
+    if (disc_ == nullptr || disc_->tracks().empty()) {
+        return 1;
+    }
+    return static_cast<u32>(disc_->tracks().size());
+}
+
+u32 CdRomDevice::disc_sectors() const {
+    return disc_ != nullptr ? disc_->sector_count() : 0u;
+}
+
+void CdRomDevice::start_transfer(u32 lba, u32 sectors) {
+    transfer_lba_ = lba;
+    transfer_sectors_ = sectors;
+    data_.clear();
+    data_pos_ = 0;
+    fill_next_sector();
+}
+
+// Pull one sector into the data FIFO. The drive streams a transfer sector by
+// sector rather than materialising all of it, which matters: a read can ask for
+// far more than would be reasonable to hold at once.
+bool CdRomDevice::fill_next_sector() {
+    if (disc_ == nullptr || transfer_sectors_ == 0) {
+        return false;
+    }
+    u8 sector[kSectorUserBytes];
+    if (!disc_->read_sector(transfer_lba_, sector)) {
+        transfer_sectors_ = 0;
+        return false;
+    }
+    data_.assign(sector, sector + kSectorUserBytes);
+    data_pos_ = 0;
+    ++transfer_lba_;
+    --transfer_sectors_;
+    return true;
+}
+
+bool CdRomDevice::has_chunk() const {
+    return data_pos_ < data_.size() || transfer_sectors_ > 0;
+}
+
+u8 CdRomDevice::read_data() {
+    if (data_pos_ >= data_.size() && !fill_next_sector()) {
+        return 0;
+    }
+    return data_pos_ < data_.size() ? data_[data_pos_++] : 0;
 }
 
 u8 CdRomDevice::drive_status() const {
@@ -101,6 +288,11 @@ void CdRomDevice::reset() {
     interrupt_request_ = false;
     motor_on_ = false;
     pending_reply_.clear();
+    transfer_lba_ = 0;
+    transfer_sectors_ = 0;
+    sector_size_ = kSectorUserBytes;
+    data_.clear();
+    data_pos_ = 0;
 
     commands_ = 0;
     last_command_ = 0;

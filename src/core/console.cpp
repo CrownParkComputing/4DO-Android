@@ -80,6 +80,7 @@ bool Console::load_disc(const std::string& path) {
     // Tell the drive. Opening the image and reporting an empty tray to the
     // machine are two different things, and only the second one is visible to
     // the software running on it.
+    clio_.cdrom().attach_disc(&disc_);
     clio_.cdrom().set_disc_present(true);
     last_error_.clear();
     return true;
@@ -90,6 +91,7 @@ bool Console::load_disc_fd(int fd, const std::string& display_name) {
         last_error_ = disc_.last_error();
         return false;
     }
+    clio_.cdrom().attach_disc(&disc_);
     clio_.cdrom().set_disc_present(true);
     last_error_.clear();
     return true;
@@ -139,6 +141,7 @@ bool Console::load_bios_fd(int fd, const std::string& display_name) {
 
 void Console::eject_disc() {
     disc_.close();
+    clio_.cdrom().attach_disc(nullptr);
     clio_.cdrom().set_disc_present(false);
 }
 

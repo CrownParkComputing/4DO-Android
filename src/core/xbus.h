@@ -31,6 +31,8 @@
 
 namespace retro3do {
 
+class Disc;
+
 // Poll Register bits, from the patent's table.
 enum : u32 {
     kPollReserved0      = 1u << 0,  // reads 0
@@ -65,6 +67,8 @@ enum : u8 {
     kCmdReadError     = 0x82,
     kCmdVersion       = 0x83,
     kCmdReadCapacity  = 0x85,
+    kCmdReadDiscInfo  = 0x8b,
+    kCmdReadToc       = 0x8c,
 };
 
 // Drive status byte, from The 3DO Company's own SDK header <cdrom.h>. The bus
@@ -127,6 +131,11 @@ class CdRomDevice : public XbusDevice {
 public:
     void write_command(u8 byte) override;
     u8 read_status() override;
+    u8 read_data() override;
+    bool has_chunk() const override;
+
+    // The disc the drive is reading. Null means an empty tray.
+    void attach_disc(Disc* disc) { disc_ = disc; }
     bool status_empty() const override { return status_.empty(); }
     void tick(u32 cycles) override;
     void reset() override;
@@ -198,6 +207,20 @@ private:
     bool disc_present_ = false;
     bool media_changed_ = false;
     bool motor_on_ = false;
+
+    Disc* disc_ = nullptr;
+
+    // A transfer set up by READ and drained through the data FIFO.
+    u32 transfer_lba_ = 0;
+    u32 transfer_sectors_ = 0;
+    u32 sector_size_ = 2048;
+    std::vector<u8> data_;
+    size_t data_pos_ = 0;
+
+    u32  disc_sectors() const;
+    u32  last_track() const;
+    void start_transfer(u32 lba, u32 sectors);
+    bool fill_next_sector();
     u64 commands_ = 0;
     u8 last_command_ = 0;
     std::vector<u8> last_command_bytes_;

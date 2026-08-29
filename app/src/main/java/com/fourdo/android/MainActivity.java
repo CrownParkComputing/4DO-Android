@@ -12,6 +12,8 @@ import android.graphics.Color;
 import android.graphics.drawable.ColorDrawable;
 import android.graphics.drawable.GradientDrawable;
 import android.net.Uri;
+import android.os.ParcelFileDescriptor;
+import androidx.documentfile.provider.DocumentFile;
 import android.os.Build;
 import android.os.Bundle;
 import android.os.Handler;
@@ -88,6 +90,15 @@ public final class MainActivity extends AppCompatActivity {
     public static final String KEY_LAST_GAME_PATH = "last_game_path";
     public static final String KEY_APP_STORAGE_ROOT = "app_storage_root";
     public static final String KEY_LIBRARY_FOLDER = "library_folder";
+    /**
+     * A SAF tree holding the game library, read in place.
+     *
+     * The library used to be adopted by COPYING every game into app storage. On
+     * a real library that means duplicating gigabytes onto internal storage -
+     * slow, wasteful, and simply impossible on a device without the headroom -
+     * to gain nothing, because SAF can read the originals where they are.
+     */
+    public static final String KEY_LIBRARY_TREE_URI = "library_tree_uri";
     public static final String KEY_LIBRARY_REFRESH_REQUIRED = "library_refresh_required";
     public static final String KEY_DEBUG_OVERLAY_ENABLED = "debug_overlay_enabled";
     public static final String KEY_VIEW_STYLE = "view_style";
@@ -271,6 +282,7 @@ public final class MainActivity extends AppCompatActivity {
     private int resolutionScale = 0;
     private int outputResolutionPreset = 0;
     private boolean flipVertical = false;
+    private ParcelFileDescriptor mGameDescriptor;
     private String mGamePath = null;
     private final EmulatorAudioEngine audioEngine = new EmulatorAudioEngine();
     private String appVersion = "";
@@ -2599,6 +2611,38 @@ public final class MainActivity extends AppCompatActivity {
         return games;
     }
 
+    /** Enumerate a SAF tree in place. Nothing is copied. */
+    private List<GameLibraryEntry> scanGameTree(Uri treeUri) {
+        List<GameLibraryEntry> games = new ArrayList<>();
+        DocumentFile root = DocumentFile.fromTreeUri(this, treeUri);
+        if (root == null || !root.isDirectory()) return games;
+        scanGameTreeDirectory(root, games, 0);
+        games.sort(Comparator.comparing(entry -> entry.displayName.toLowerCase(Locale.US)));
+        return games;
+    }
+
+    private void scanGameTreeDirectory(DocumentFile dir, List<GameLibraryEntry> games, int depth) {
+        if (dir == null || depth > 6 || games.size() >= 1000) return;
+        for (DocumentFile child : dir.listFiles()) {
+            if (games.size() >= 1000) return;
+            String name = child.getName();
+            if (name == null) continue;
+            if (child.isDirectory()) {
+                if (!name.startsWith(".")) scanGameTreeDirectory(child, games, depth + 1);
+            } else if (isSupportedLibraryName(name)) {
+                games.add(new GameLibraryEntry(name, null, child.getUri()));
+            }
+        }
+    }
+
+    private boolean isSupportedLibraryName(String name) {
+        String lower = name.toLowerCase(Locale.US);
+        // .bin is deliberately excluded here: in a tree we cannot cheaply tell a
+        // raw disc image from the data track a .cue already refers to, and
+        // listing both would show every game twice.
+        return lower.endsWith(".cue") || lower.endsWith(".iso") || lower.endsWith(".chd");
+    }
+
     private void scanGameDirectory(File directory, List<GameLibraryEntry> games, int depth) {
         if (directory == null || depth > 6 || games.size() >= 1000) return;
         File[] files = directory.listFiles();
@@ -2796,11 +2840,13 @@ public final class MainActivity extends AppCompatActivity {
     }
 
     private void loadGameFromLibrary(GameLibraryEntry entry) {
-        if (entry == null || entry.file == null || !entry.file.isFile()) {
+        if (entry == null) return;
+        String path = resolveGamePath(entry);
+        if (path == null) {
             toast("Game file not found");
             return;
         }
-        mGamePath = entry.file.getAbsolutePath();
+        mGamePath = path;
         EmulatorPathStore.saveLastGamePath(this, mGamePath);
         currentBezelPath = "";
         applyBezelVisibility();
@@ -2809,6 +2855,40 @@ public final class MainActivity extends AppCompatActivity {
         if (mapperOverlay != null) mapperOverlay.setVisibility(View.GONE);
         overlayPaused = false;
         performHardReset(mGamePath);
+    }
+
+    /**
+     * The path to hand the emulator core.
+     *
+     * A game in a SAF tree has no filesystem path, so it is opened here and
+     * passed as /proc/self/fd/N - the descriptor names the file, and the core
+     * opens it with an ordinary ifstream exactly as it would any other path.
+     * The descriptor has to outlive the load, so it is held until the next one
+     * replaces it.
+     */
+    private String resolveGamePath(GameLibraryEntry entry) {
+        if (entry.file != null && entry.file.isFile()) {
+            closeGameDescriptor();
+            return entry.file.getAbsolutePath();
+        }
+        if (entry.uri == null) return null;
+        try {
+            ParcelFileDescriptor pfd =
+                    getContentResolver().openFileDescriptor(entry.uri, "r");
+            if (pfd == null) return null;
+            closeGameDescriptor();
+            mGameDescriptor = pfd;
+            return "/proc/self/fd/" + pfd.getFd();
+        } catch (Exception e) {
+            Log.w("3DO-Main", "Could not open game: " + entry.displayName, e);
+            return null;
+        }
+    }
+
+    private void closeGameDescriptor() {
+        if (mGameDescriptor == null) return;
+        try { mGameDescriptor.close(); } catch (IOException ignored) { }
+        mGameDescriptor = null;
     }
 
     private void beginIgdbMatching() {
@@ -3574,14 +3654,22 @@ public final class MainActivity extends AppCompatActivity {
 
     private static final class GameLibraryEntry {
         final String displayName;
+        /** Set when the game is a real file in app storage. */
         final File file;
+        /** Set when the game lives in a SAF tree and is read in place. */
+        final Uri uri;
         IgdbService.IgdbGame igdbGame;
         Bitmap coverBitmap;
         boolean igdbLookupStarted;
 
         GameLibraryEntry(String displayName, File file) {
+            this(displayName, file, null);
+        }
+
+        GameLibraryEntry(String displayName, File file, Uri uri) {
             this.displayName = displayName;
             this.file = file;
+            this.uri = uri;
         }
     }
 }

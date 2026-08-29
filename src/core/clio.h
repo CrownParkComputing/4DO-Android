@@ -193,8 +193,14 @@ public:
     bool register_written(u32 offset) const;
     u32  register_last_write(u32 offset) const;
 
+    // Reads are tracked too. Which ports software *interrogates*, and how often,
+    // says as much about a protocol as which ones it writes - and a port that is
+    // read but never written is usually the reply half of a transaction.
+    u64  register_reads(u32 offset) const;
+
 private:
     void note_write(u32 offset, u32 value);
+    void note_read(u32 offset);
     void update_cpu_interrupt_line();
     void tick_timers(u32 cycles);
 
@@ -231,6 +237,7 @@ private:
     u32 timer_slack_ = 0;
     u32 written_value_[kTrackedRegisters] = {};
     bool written_flag_[kTrackedRegisters] = {};
+    u64 read_count_[kTrackedRegisters] = {};
 
     // The DSP is not emulated. Its window is backed by plain storage so that an
     // uploaded program is retained and can be read back and inspected, rather

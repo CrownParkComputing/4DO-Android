@@ -691,10 +691,32 @@ meaningful data**. The 3DO's CD-ROM drive is built in, so enumeration should
 find a device present with no disc in it — "no device at all" is not a state the
 machine is ever really in, and may itself be why the driver never initialises.
 
-That is the point at which guessing stops being productive. The remaining work
-needs the actual XBUS command set rather than inference from one ROM's spin
-loops; inventing replies would produce a driver that initialises for the wrong
-reason and mislead everything after it.
+### What the flag actually is, and why the reply must be DMA
+
+Scanning DRAM for the instruction that would set the awaited flag found six
+candidates, and all of them sit inside **structure initialisers** — runs of
+stores filling consecutive fields at `0xFC`, `0x100`, `0x104`, `0x108`. So the
+flag is not a completion signal at all: it is a field in a **driver record**,
+populated when the CD driver is installed. The wait loop means "wait until the
+driver exists", and the driver is only built once a device enumerates.
+
+Tracking reads as well as writes then narrowed it further. Across a whole run
+the ROM reads **CLIO `0x0540` exactly once**, writes `0x0500` once, and never
+reads any other port in that range. One command, one status read, and it stops.
+So the device's *reply* does not come back through a port at all.
+
+What it does do is program **MADAM `0x0218`, `0x021C`, `0x0238`, `0x023C`**,
+which have the shape of DMA channel setup. That is where a reply would land: the
+device DMAs its identification into memory and the ROM reads it from there.
+
+Five different status replies were tried — complete, error, ready-with-error,
+several combinations — and none moved the machine. That is consistent with the
+reply being data in memory rather than bits in a status port.
+
+So the next piece is **XBUS together with MADAM's DMA**, and that is genuinely
+beyond what one ROM's spin loops can specify. Inventing replies here would
+produce a driver that initialises for the wrong reason and mislead everything
+built on top of it.
 
 ## Still to be written
 

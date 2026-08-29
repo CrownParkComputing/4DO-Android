@@ -180,6 +180,7 @@ void Clio::tick_timers(u32 cycles) {
 // ---------------------------------------------------------------------------
 u32 Clio::read(u32 offset) {
     offset &= (kClioWindowSize - 1);
+    note_read(offset);
 
     if (offset >= kClioDspBase && offset < kClioDspEnd) {
         return dsp_window_[(offset - kClioDspBase) / 4];
@@ -237,6 +238,18 @@ bool Clio::register_written(u32 offset) const {
 u32 Clio::register_last_write(u32 offset) const {
     const u32 index = offset / 4;
     return index < kTrackedRegisters ? written_value_[index] : 0;
+}
+
+u64 Clio::register_reads(u32 offset) const {
+    const u32 index = offset / 4;
+    return index < kTrackedRegisters ? read_count_[index] : 0;
+}
+
+void Clio::note_read(u32 offset) {
+    const u32 index = offset / 4;
+    if (index < kTrackedRegisters) {
+        ++read_count_[index];
+    }
 }
 
 void Clio::note_write(u32 offset, u32 value) {

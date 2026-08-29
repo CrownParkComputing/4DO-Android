@@ -215,11 +215,25 @@ enum : u32 {
 
     // Poll register bits. The patent defines the underlying bus signals as
     // ACTIVE LOW; CLIO presents them to software inverted, so a set bit means
-    // the FIFO has something. The boot ROM settles it - it issues a command and
-    // waits for bit 4 to be SET, and implementing the bus polarity here instead
-    // hangs the machine on its very first command.
-    kXbusStatusReady  = 0x0010,
-    kXbusChunkReady   = 0x0020,
+    // the FIFO has something. The boot ROM agrees - it issues a command and
+    // waits for bit 4 to be SET.
+    //
+    // The low nibble is writable control, the high nibble read-only state. The
+    // driver's own writes confirm the control bits: it reads the register,
+    // masks to the low four bits, and ORs in 1, 2 or 4 at three different call
+    // sites - the three interrupt enables below, in order.
+    kXbusStatusIrqEnable = 0x0001,
+    kXbusReadIrqEnable   = 0x0002,
+    kXbusWriteIrqEnable  = 0x0004,
+    kXbusReset           = 0x0008,
+    kXbusStatusReady     = 0x0010,   // status valid
+    kXbusChunkReady      = 0x0020,   // read valid
+    kXbusWriteValid      = 0x0040,
+    kXbusMediaAccess     = 0x0080,
+
+    // Written to SELECTION as a device-count probe. Answering it wrongly makes
+    // CLIO report "too many devices on the bus".
+    kXbusSelectProbe     = 0x008f,
 
     kXbusReady        = 0x0080,
 
@@ -308,6 +322,15 @@ private:
     // Four configuration bits per timer, packed low timer first.
     u64 timer_config_ = 0;
 
+    // The expansion bus selects a device by the VALUE written to SELECTION, not
+    // by the address written to. `xbus_poll_` is the bus-level register used
+    // when a device other than the built-in drive is selected; the drive keeps
+    // its own control nibble in `xbus_device_poll_`.
+    u32 xbus_sel_ = 0;
+    u32 xbus_poll_ = 0;
+    u32 xbus_device_poll_ = 0;
+    bool media_changed_ = false;
+
     u32 vint0_line_ = 0;
     u32 vint1_line_ = 0;
 
@@ -353,8 +376,7 @@ public:
     void set_xbus_result_register(XbusResultRegister which) { xbus_result_ = which; }
 
 private:
-    XbusDevice* xbus_device(u32 index);
-    u32 xbus_poll_register(const XbusDevice* device) const;
+    u32 xbus_poll_for_device() const;
 
 
     CdRomDevice cdrom_;

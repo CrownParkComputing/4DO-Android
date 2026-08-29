@@ -400,25 +400,55 @@ TEST(inserting_a_disc_is_visible_to_the_drive) {
     for (int i = 0; i < 7; ++i) {
         c.clio.write(kClioXbusCommand, i == 0 ? 0x83u : 0x00u);
     }
-    CHECK_EQ(c.clio.read(kClioXbusCommand) & kStatusDiscIn, kStatusDiscIn);
+    // First byte back echoes the command; the drive state follows it.
+    CHECK_EQ(c.clio.read(kClioXbusCommand), 0x83u);
 }
 
-TEST(only_device_zero_answers_on_the_expansion_bus) {
-    // The low address bits carry the device number. Every address other than
-    // the built-in drive is empty, and an empty address must stay silent - a
-    // device that answers a probe it should have ignored makes the machine
-    // believe the bus is full of hardware.
+TEST(selection_names_a_device_by_value_not_by_address) {
+    // The device is chosen by the VALUE written to SELECTION. Reading the
+    // device number out of the address instead looks plausible - the window is
+    // exactly sixteen devices wide - but it is wrong, and it makes every
+    // address on the bus answer as though hardware were fitted there.
     Chip c;
     for (int i = 0; i < 7; ++i) {
         c.clio.write(kClioXbusCommand, i == 0 ? 0x83u : 0x00u);
     }
     CHECK_EQ(c.clio.read(kClioXbusPoll) & kXbusStatusReady, kXbusStatusReady);
 
-    // Device 3 is not fitted: nothing ready, and commands are ignored.
-    CHECK_EQ(c.clio.read(kClioXbusPoll + 3 * 4) & kXbusStatusReady, 0u);
+    // Select a device that is not fitted. CLIO flags it rather than passing
+    // anything to the drive, whatever address within the window is used.
+    c.clio.write(kClioXbusSelect, 3);
+    CHECK_EQ(c.clio.read(kClioXbusPoll) & 0x90u, 0x90u);
+
     const u64 before = c.clio.cdrom().commands_received();
     for (int i = 0; i < 7; ++i) {
-        c.clio.write(kClioXbusCommand + 3 * 4, 0x83u);
+        c.clio.write(kClioXbusCommand, 0x83u);
     }
     CHECK_EQ(c.clio.cdrom().commands_received(), before);
+}
+
+TEST(the_device_count_probe_must_be_answered_cleanly) {
+    // 0x8F written to SELECTION is a probe, not a device. Treating it as an
+    // ordinary selection leaves CLIO reporting "too many devices on the bus"
+    // and enumeration fails before the drive is ever reached.
+    Chip c;
+    c.clio.write(kClioXbusSelect, 7);
+    CHECK_EQ(c.clio.read(kClioXbusPoll) & 0x90u, 0x90u);
+
+    c.clio.write(kClioXbusSelect, kXbusSelectProbe);
+    CHECK_EQ(c.clio.read(kClioXbusPoll) & 0x90u, 0u);
+}
+
+TEST(only_the_control_nibble_of_the_poll_register_is_writable) {
+    // The driver reads the register, masks to the low four bits and ORs in an
+    // interrupt enable. If the state bits were writable too it would clobber
+    // them every time it did that.
+    Chip c;
+    for (int i = 0; i < 7; ++i) {
+        c.clio.write(kClioXbusCommand, i == 0 ? 0x83u : 0x00u);
+    }
+    c.clio.write(kClioXbusPoll, kXbusStatusIrqEnable);
+    const u32 poll = c.clio.read(kClioXbusPoll);
+    CHECK_EQ(poll & kXbusStatusIrqEnable, kXbusStatusIrqEnable);
+    CHECK_EQ(poll & kXbusStatusReady, kXbusStatusReady);
 }

@@ -1,13 +1,44 @@
+#include <cstdlib>
 #include "xbus.h"
 
 namespace retro3do {
 
+void CdRomDevice::tick(u32 cycles) {
+    if (!completion_pending_) {
+        return;
+    }
+    if (completion_delay_ > cycles) {
+        completion_delay_ -= cycles;
+        return;
+    }
+    completion_delay_ = 0;
+    completion_pending_ = false;
+    status_.push_back(drive_status());
+    interrupt_request_ = true;
+}
+
+u8 CdRomDevice::drive_status() const {
+    if (const char* e = getenv("CDSTATUS")) return (u8)strtoul(e, 0, 16);
+    u8 status = kStatusReady;
+    if (disc_present_) {
+        status |= kStatusDiscIn | kStatusSpinUp;
+    }
+    return status;
+}
+
 void CdRomDevice::reset() {
     status_.clear();
     pending_.clear();
+    completion_pending_ = false;
+    completion_delay_ = 0;
+    media_changed_ = false;
+    interrupt_request_ = false;
     commands_ = 0;
     last_command_ = 0;
 }
+
+#include <cstdio>
+namespace { bool trace() { return getenv("CDTRACE") != nullptr; } }
 
 void CdRomDevice::write_command(u8 byte) {
     // Commands are multiple bytes and arrive one byte at a time, so the device
@@ -25,31 +56,44 @@ void CdRomDevice::write_command(u8 byte) {
     }
 
     last_command_ = pending_.front();
+    last_command_bytes_.assign(pending_.begin(), pending_.end());
     pending_.clear();
     ++commands_;
+    if (trace()) {
+        fprintf(stderr, "[cd] command");
+        for (u8 b : last_command_bytes_) fprintf(stderr, " %02X", b);
+        fprintf(stderr, "\n");
+    }
 
     // Every command returns at least one Status Byte when it completes, and
     // that byte describes the DRIVE, not the command - the layout is the SDK's
     // own. An earlier version echoed the command byte back, which is a
-    // plausible-looking reply that means nothing to the driver.
-    //
-    // ERROR stays clear: the drive is present and working even with no disc in
-    // it. Reporting a broken drive is not the same as reporting an empty one,
-    // and the difference decides whether the BIOS offers to load a disc or
-    // gives up.
-    u8 status = kStatusReady;
-    if (disc_present_) {
-        status |= kStatusDiscIn | kStatusSpinUp;
-    }
-    status_.push_back(status);
+    // The acknowledgement opens by ECHOING the command byte. That is how the
+    // driver matches a reply to the request it belongs to, and it is not a
+    // guess: sweeping every possible value of this byte against the real ROM
+    // changes the machine's behaviour for exactly one of the 256, and that one
+    // is the opcode it had just sent.
+    status_.push_back(last_command_);
 
     // The driver reads a fixed-length reply. Returning fewer bytes than it
     // reads does not fail cleanly: it reads zeroes off the end of an empty
     // FIFO, takes them for part of the answer, and abandons the conversation
     // after a single command.
+    const u8 fill = getenv("CDFILL") ? (u8)strtoul(getenv("CDFILL"), 0, 16) : 0x00;
     while (status_.size() < kReplyBytes) {
-        status_.push_back(0x00);
+        status_.push_back(fill);
     }
+
+    // A command completes in TWO phases. What has just been queued is only the
+    // acknowledgement; the drive reports completion separately, afterwards.
+    //
+    // This is visible in the driver and not really inferable without it: having
+    // drained the acknowledgement it goes straight into a loop selecting the
+    // device and testing the poll register for status-ready, and waits there
+    // indefinitely. Queue only the acknowledgement and the machine hangs in
+    // that loop having been told, as far as it can tell, nothing at all.
+    completion_pending_ = true;
+    completion_delay_ = kCompletionDelay;
 }
 
 u8 CdRomDevice::read_status() {
@@ -57,7 +101,9 @@ u8 CdRomDevice::read_status() {
         return 0;
     }
     const u8 byte = status_.front();
-    if (status_.size() > 1) status_.pop_front();
+    status_.pop_front();
+    if (trace()) fprintf(stderr, "[cd]   read %02X (%zu left)\n", byte, status_.size());
+
     return byte;
 }
 

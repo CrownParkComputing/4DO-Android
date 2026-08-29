@@ -40,21 +40,12 @@ Clio::Clio(Arm60& cpu) : cpu_(cpu) {
 
 // The Poll Register, as the patent defines it. Both "valid" bits are ACTIVE
 // LOW: high means the corresponding FIFO has nothing to offer.
-XbusDevice* Clio::xbus_device(u32 index) {
-    // Only device 0 is fitted: the CD-ROM drive, which is built into the machine
-    // rather than plugged in. Every other address on the bus is empty, and an
-    // empty address must stay silent - a device that answers a probe it should
-    // have ignored makes the machine believe the bus is full of hardware.
-    return index == 0 ? &cdrom_ : nullptr;
-}
-
-u32 Clio::xbus_poll_register(const XbusDevice* device) const {
-    if (device == nullptr) {
-        return 0;   // nothing there: no status, no data
-    }
-    u32 poll = 0;
-    if (!device->status_empty()) poll |= kXbusStatusReady;
-    if (device->has_chunk())     poll |= kXbusChunkReady;
+u32 Clio::xbus_poll_for_device() const {
+    // Control nibble as software left it, state nibble from the drive.
+    u32 poll = xbus_device_poll_ & 0x0fu;
+    if (!cdrom_.status_empty()) poll |= kXbusStatusReady;
+    if (cdrom_.has_chunk())     poll |= kXbusChunkReady;
+    if (media_changed_)         poll |= kXbusMediaAccess;
     return poll;
 }
 
@@ -157,6 +148,14 @@ void Clio::update_cpu_interrupt_line() {
 // Timing
 // ---------------------------------------------------------------------------
 void Clio::tick(u32 cycles) {
+    cdrom_.tick(cycles);
+    if (cdrom_.take_media_changed()) {
+        media_changed_ = true;
+    }
+    if (cdrom_.take_interrupt_request()) {
+        raise(kIrqExpansionBus);
+    }
+
     // CLIO acknowledges the sources it delivered, once the CPU has accepted
     // them. Software is not what clears them: across a whole boot the ROM
     // writes no CLIO clear port at all, and reads no pending register either -
@@ -262,21 +261,33 @@ u32 Clio::read(u32 offset) {
     offset &= (kClioWindowSize - 1);
     note_read(offset);
 
-    // Expansion bus windows. The low address bits name the device.
+    // Expansion bus windows.
     if (offset >= kClioXbusSelect && offset < kClioXbusData + kClioXbusWindow) {
-        const u32 base   = offset & ~(kClioXbusWindow - 1);
-        const u32 device = (offset - base) / 4;
-        XbusDevice* dev  = xbus_device(device);
-
-        switch (base) {
+        switch (offset & ~(kClioXbusWindow - 1)) {
             case kClioXbusSelect:
-                return 0;                       // reserved on read
-            case kClioXbusPoll:
-                return xbus_poll_register(dev);
-            case kClioXbusCommand:              // RD_STAT
-                return dev != nullptr ? dev->read_status() : 0;
+                return xbus_sel_;
+            case kClioXbusPoll: {
+                // Device zero is the built-in drive and answers with its own
+                // register; anything else reads the bus-level one.
+                if (xbus_sel_ != 0) {
+                    return xbus_poll_;
+                }
+                const u32 poll = xbus_poll_for_device();
+                media_changed_ = false;   // media-access is read-clear
+                return poll;
+            }
+            case kClioXbusCommand: {            // RD_STAT
+                if (xbus_sel_ != 0) {
+                    return 0;
+                }
+                const u8 byte = cdrom_.read_status();
+                if (cdrom_.take_interrupt_request()) {
+                    raise(kIrqExpansionBus);
+                }
+                return byte;
+            }
             case kClioXbusData:                 // RD_DATA
-                return dev != nullptr ? dev->read_data() : 0;
+                return xbus_sel_ == 0 ? cdrom_.read_data() : 0;
             default:
                 break;
         }
@@ -362,22 +373,42 @@ void Clio::write(u32 offset, u32 value) {
     note_write(offset, value);
 
     if (offset >= kClioXbusSelect && offset < kClioXbusData + kClioXbusWindow) {
-        const u32 base   = offset & ~(kClioXbusWindow - 1);
-        const u32 device = (offset - base) / 4;
-        XbusDevice* dev  = xbus_device(device);
-        if (dev == nullptr) {
-            return;   // an unselected or absent device ignores everything
-        }
-        if (base == kClioXbusCommand) {
-            const bool was_empty = dev->status_empty();
-            dev->write_command(static_cast<u8>(value & 0xffu));
-            // A completed command has put a Status Byte in the return FIFO.
-            // Announce it: the OS blocks on EXINT rather than polling.
-            if (was_empty && !dev->status_empty()) {
-                raise(kIrqExpansionBus);
+        switch (offset & ~(kClioXbusWindow - 1)) {
+            case kClioXbusSelect:
+                // SELECTION names the device by VALUE. 0x8F is a probe rather
+                // than a device: answering it wrongly leaves CLIO reporting
+                // "too many devices on the bus" and the enumeration fails.
+                xbus_sel_ = value & 0xffu;
+                if (xbus_sel_ == kXbusSelectProbe) {
+                    xbus_poll_ &= 0x0fu;
+                } else {
+                    xbus_poll_ = (xbus_poll_ & 0x0fu) | 0x90u;
+                }
+                return;
+
+            case kClioXbusPoll:
+                // Only the control nibble is writable.
+                if (xbus_sel_ == 0) {
+                    xbus_device_poll_ = (value & 0x0fu) | (xbus_device_poll_ & 0xf0u);
+                } else {
+                    xbus_poll_ = value & 0xffu;
+                }
+                return;
+
+            case kClioXbusCommand: {
+                if (xbus_sel_ != 0) {
+                    return;
+                }
+                const bool was_empty = cdrom_.status_empty();
+                cdrom_.write_command(static_cast<u8>(value & 0xffu));
+                if (was_empty && !cdrom_.status_empty()) {
+                    raise(kIrqExpansionBus);
+                }
+                return;
             }
+            default:
+                return;
         }
-        return;
     }
 
 

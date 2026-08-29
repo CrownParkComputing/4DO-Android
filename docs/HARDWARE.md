@@ -868,6 +868,72 @@ the CPU never takes it.
 CLIO therefore tracks **which sources have already been signalled** and raises a
 fresh edge for any newly-active one. Both failure modes are pinned by tests.
 
+## Expansion bus: selection is by VALUE
+
+The device is named by the value written to SELECTION, not by the address
+written to. Reading the device number out of the address is a very plausible
+mistake - the window is 0x40 bytes, which is exactly sixteen devices at four
+bytes each - and it was made here. It makes every address on the bus answer as
+though hardware were fitted there.
+
+`0x8F` written to SELECTION is a probe rather than a device: it asks whether
+the bus is over-populated. Answering it as an ordinary selection leaves CLIO
+reporting "too many devices" and enumeration fails before the drive is reached.
+
+The poll register splits into a writable control nibble and a read-only state
+nibble:
+
+| Bit | Meaning |
+|---|---|
+| 0 | status interrupt enable |
+| 1 | read interrupt enable |
+| 2 | write interrupt enable |
+| 3 | reset |
+| 4 | status valid |
+| 5 | read valid |
+| 6 | write valid |
+| 7 | media access (read-clear) |
+
+The driver confirms the control bits directly: at three separate call sites it
+reads the register, masks to the low four bits, and ORs in 1, 2 or 4.
+
+## The CD conversation, read out of the driver
+
+The driver was disassembled from the running machine's DRAM - black-box
+analysis of software we are entitled to observe - which settled what no
+document to hand covers.
+
+The reply reader:
+
+```
+loop:  poll(device); tst r0,#16      ; status valid?
+       beq exit                      ; not ready -> stop early
+       read RD_STAT -> buffer
+       loop while bytes remain
+exit:  poll(device); tst r0,#16
+       strne <error>, [r3,#92]       ; STILL ready -> record an ERROR
+```
+
+Two things follow, and both had been got wrong. The FIFO must hold **exactly**
+the number of bytes expected and be empty afterwards - anything left over is an
+error, so a completion queued the instant the acknowledgement is drained fails
+every command and produces a fifteen-deep retry loop. And the drive does not
+answer instantly: the completion has to arrive late enough that the reply loop
+has already finished.
+
+The acknowledgement opens by **echoing the command byte**. That is not a guess:
+sweeping all 256 values of that byte against the real ROM changes the machine's
+behaviour for exactly one of them, and it is the opcode just sent.
+
+After the reply the driver waits on a separate asynchronous event:
+
+```
+wait:  poll(device); tst r0,#16
+       beq wait
+       read RD_STAT
+       tst r0,#8                     ; test bit 3
+```
+
 ## Where this reaches
 
 The BIOS boots, initialises the OS, brings up the expansion bus, assigns device

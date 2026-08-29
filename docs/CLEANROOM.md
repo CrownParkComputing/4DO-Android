@@ -44,6 +44,18 @@ do not read those sources while writing these ones.
   "Expansion Bus"` documents the XBUS I/O model, transaction types, Poll
   Register and Status Byte in full; `WO 94/10642` covers the sprite (cel)
   rendering processor and `WO 95/12876` the display-list mechanism.
+- **MAME**, specifically its 3DO devices (`src/mame/misc/3do_*.cpp`), which are
+  `license:BSD-3-Clause`, copyright Angelo Salese and Wilbert Pol. This is an
+  independent implementation and not part of the FreeDO lineage, and BSD-3 
+  permits commercial use.
+
+  **If any code here is derived from MAME, this project must ship MAME's
+  copyright notice and the BSD-3 licence text.** See `docs/THIRD_PARTY.md`.
+  What has been taken so far is register documentation rather than code - the
+  expansion bus poll-register bit layout and the fact that SELECTION names a
+  device by value - but the obligation attaches to the derivation, not to the
+  number of lines, so the notice ships regardless.
+
 - Community hardware documentation that is itself independently derived, where
   its own provenance is clear.
 - Black-box measurement: behaviour of real hardware, and of software running on

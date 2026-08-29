@@ -24,6 +24,7 @@
 #pragma once
 
 #include <deque>
+#include <vector>
 #include <string>
 
 #include "types.h"
@@ -75,6 +76,17 @@ public:
     virtual u8 read_data() { return 0; }
     virtual bool has_chunk() const { return false; }
 
+    // True once if the device has just queued something the host should be
+    // interrupted about. Consumed by the caller.
+    virtual bool take_interrupt_request() { return false; }
+
+    // Let time pass. A drive does not answer instantly, and here that is not a
+    // cosmetic detail: the driver checks that the reply FIFO is EMPTY once it
+    // has read the bytes it expected, and treats anything still waiting as an
+    // error. A completion queued the instant the acknowledgement is drained
+    // therefore fails every command.
+    virtual void tick(u32 cycles) { (void)cycles; }
+
     virtual void reset() = 0;
     virtual const char* name() const = 0;
 };
@@ -88,13 +100,39 @@ public:
     void write_command(u8 byte) override;
     u8 read_status() override;
     bool status_empty() const override { return status_.empty(); }
+    void tick(u32 cycles) override;
     void reset() override;
+    u8 drive_status() const;
     const char* name() const override { return "CD-ROM"; }
 
     // Whether a disc is in the drive. With none, commands still complete; they
     // report no media.
-    void set_disc_present(bool present) { disc_present_ = present; }
+    // Inserting a disc is an EVENT, not just a state. The BIOS finishes its
+    // start-up with the expansion-bus interrupt armed and then idles; what it
+    // is waiting for is to be told the media changed. Setting the flag quietly
+    // leaves it idling next to a disc it has no reason to look at.
+    void set_disc_present(bool present) {
+        if (present == disc_present_) {
+            return;
+        }
+        disc_present_ = present;
+        media_changed_ = true;
+        interrupt_request_ = true;
+    }
+
+    // Media-access is read-clear.
+    bool take_media_changed() {
+        const bool changed = media_changed_;
+        media_changed_ = false;
+        return changed;
+    }
     bool disc_present() const { return disc_present_; }
+
+    bool take_interrupt_request() override {
+        const bool pending = interrupt_request_;
+        interrupt_request_ = false;
+        return pending;
+    }
 
     u64 commands_received() const { return commands_; }
     u8 last_command() const { return last_command_; }
@@ -111,9 +149,20 @@ public:
 private:
     std::deque<u8> status_;
     std::deque<u8> pending_;   // bytes of the command still being assembled
+
+    // A command has been acknowledged but has not yet reported completion.
+    // Work in flight, and how long until the drive reports it. The exact figure
+    // is not critical - it only has to be long enough that the driver finishes
+    // reading the acknowledgement first.
+    static constexpr u32 kCompletionDelay = 20000;
+    u32  completion_delay_ = 0;
+    bool completion_pending_ = false;
+    bool interrupt_request_  = false;
     bool disc_present_ = false;
+    bool media_changed_ = false;
     u64 commands_ = 0;
     u8 last_command_ = 0;
+    std::vector<u8> last_command_bytes_;
 };
 
 }  // namespace retro3do

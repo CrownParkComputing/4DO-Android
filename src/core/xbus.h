@@ -210,6 +210,13 @@ private:
     bool last_ok_ = false;
     bool streaming_ = false;
 
+    // A drive delivers sectors at its rotational rate - 75 a second at single
+    // speed, 150 at double - not instantly. Data-ready has to pulse per sector
+    // rather than stick on, or the host is told a sector is waiting before one
+    // is.
+    static constexpr u32 kSectorDelay = 12500000u / 150u;
+    u32 sector_delay_ = 0;
+
     Disc* disc_ = nullptr;
 
     // A transfer set up by READ and drained through the data FIFO.
@@ -222,7 +229,7 @@ private:
     u32  disc_sectors() const;
     u32  last_track() const;
     void start_transfer(u32 lba, u32 sectors);
-    bool fill_next_sector();
+    bool fill_next_sector_now();
     u64 commands_ = 0;
     u8 last_command_ = 0;
     std::vector<u8> last_command_bytes_;

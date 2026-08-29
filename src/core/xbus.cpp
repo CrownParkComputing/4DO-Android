@@ -30,6 +30,18 @@ u32 lba_to_msf(u32 lba) {
 
 
 void CdRomDevice::tick(u32 cycles) {
+    // Fetch the next sector when the drive would have reached it.
+    if (streaming_ && data_pos_ >= data_.size()) {
+        if (sector_delay_ > cycles) {
+            sector_delay_ -= cycles;
+        } else {
+            sector_delay_ = kSectorDelay;
+            if (fill_next_sector_now()) {
+                interrupt_request_ = true;
+            }
+        }
+    }
+
     if (!completion_pending_) {
         return;
     }
@@ -238,13 +250,14 @@ void CdRomDevice::start_transfer(u32 lba, u32 sectors) {
     streaming_ = true;
     data_.clear();
     data_pos_ = 0;
-    fill_next_sector();
+    sector_delay_ = kSectorDelay;
+    fill_next_sector_now();
 }
 
 // Pull one sector into the data FIFO. The drive streams a transfer sector by
 // sector rather than materialising all of it, which matters: a read can ask for
 // far more than would be reasonable to hold at once.
-bool CdRomDevice::fill_next_sector() {
+bool CdRomDevice::fill_next_sector_now() {
     // The count in a READ is a floor, not a limit. The drive goes on delivering
     // consecutive sectors for as long as the host keeps draining them, and the
     // host decides how much it actually wants by how much it DMAs.
@@ -280,8 +293,8 @@ bool CdRomDevice::has_chunk() const {
 }
 
 u8 CdRomDevice::read_data() {
-    if (data_pos_ >= data_.size() && !fill_next_sector()) {
-        return 0;
+    if (data_pos_ >= data_.size()) {
+        return 0;   // the next sector arrives when the drive reaches it
     }
     return data_pos_ < data_.size() ? data_[data_pos_++] : 0;
 }

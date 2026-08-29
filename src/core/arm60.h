@@ -149,6 +149,12 @@ public:
 
     Mode mode() const { return static_cast<Mode>(cpsr_ & kModeMask); }
 
+    // How many IRQ exceptions have been taken since reset. A bring-up
+    // diagnostic: "is the handler running at all" is otherwise very hard to
+    // tell apart from "the handler runs and does nothing useful", and the two
+    // have completely different causes.
+    u64 irqs_taken() const { return irqs_taken_; }
+
     // Cycles executed since reset. The scheduler drives everything from this.
     u64 total_cycles() const { return total_cycles_; }
 
@@ -211,6 +217,7 @@ private:
     bool fiq_line_ = false;
 
     u64 total_cycles_ = 0;
+    u64 irqs_taken_ = 0;
 
     // Decode cache, one entry per instruction slot of addressable code memory.
     // Allocated lazily per region rather than for the whole 4 GB space.

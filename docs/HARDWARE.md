@@ -796,27 +796,99 @@ selected until a SELECTION naming a different address), `WR_COM`, `RD_STAT`,
 their address at power-up by counting strobes, so the CD-ROM's address is a
 consequence of where it sits on the chain rather than something fixed in silicon.
 
-Against the machine's observed behaviour: the boot ROM writes a command byte to
-**CLIO `0x0500`** (a `WR_COM`) and reads **CLIO `0x0540`**, testing bit 4. With
-the definitions above, `0x0540` is a poll or status read and bit 4 is either
-StatValid- or ERROR — which is now a question with two candidate answers rather
-than an open field.
+## The expansion bus, as the ROM actually drives it
+
+The port map was settled by logging every expansion-bus access **in order**,
+with the PC that made it, and reading that trace against the patent. Counting
+accesses alone had produced a wrong answer twice; the ordering is what made it
+legible.
+
+| Port | Role | How it was established |
+|---|---|---|
+| `CLIO+0x0400` | bus status | read fifteen times, before anything else |
+| `CLIO+0x0500` | strobe / select | **eighteen writes of zero** at start-up |
+| `CLIO+0x0540` | result read | read after every strobe |
+| `CLIO+0x0580` | Command FIFO (`WR_COM`) | `0x83` then six more bytes |
+
+The opening burst of eighteen zero writes to `0x0500` is what identified it. The
+patent describes an ID-assignment procedure in which the system strobes
+seventeen times after reset so each device can determine its own address by
+counting. Nothing else in the protocol looks like that, and no other port
+receives such a burst.
+
+That in turn moved the Command FIFO to `0x0580`. An earlier reading had the
+command port at `0x0500`, which is where the strobes go — so the ID-assignment
+burst was being delivered to the drive as eighteen commands.
+
+### Commands are seven bytes
+
+The ROM writes `0x83` followed by exactly six further bytes before it begins
+polling for a reply, and every later command is the same width. Replying per
+byte — which is what the first implementation did — makes one command look like
+seven, so the reply FIFO runs six answers ahead of the conversation and every
+subsequent exchange reads the previous command's answer.
+
+### The poll bits are presented inverted
+
+The patent defines `StatValid-` and `ChunkValid-` as **active low**. CLIO does
+not present them that way: the ROM issues a command and then waits for bit 4 to
+be **set**. Implementing the bus polarity at the register interface hangs the
+machine on its very first command. CLIO inverts them, and software sees "the
+FIFO has something" as a one.
+
+### Completion is an interrupt, and it is bit 9
+
+Every command returns at least one Status Byte, and the Status Return interrupt
+is how the system learns the command finished. Which CLIO bit carries it was
+settled by asking the ROM rather than guessing: once the OS boots it enables
+`0x60000206` and idles. Bits 1 and 2 — vertical blank and the timer — do fire.
+Bits 9, 29 and 30 are enabled and never fire, so the source the idle OS is
+blocked on is one of those three. Bit 3, the original guess, is not even enabled.
+
+## Interrupts: the edge is per source
+
+This one was wrong twice, in opposite directions, and both failures are worth
+recording because each looks like the other's fix.
+
+**Holding the line livelocks the machine.** The boot ROM enables vertical blank
+and then never acknowledges it — across a whole run it writes no CLIO clear port
+at all, because it drives the boot animation by polling the line counter
+(`CLIO+0x0034`, read over 155,000 times in 120 frames) instead. A level-held
+line therefore re-enters the vertical-blank handler forever, before the OS
+finishes starting.
+
+**But a single edge flag for the whole line is just as wrong**, and fails much
+later and far more confusingly. It stays latched for as long as *any* enabled
+source is pending, so once vertical blank goes pending and stays pending, no
+other source can ever produce an edge again. Symptom: the OS boots, asks the CD
+drive fifteen questions, and idles forever — while the expansion-bus completion
+bit sits plainly pending and enabled, with interrupts unmasked at the CPU, and
+the CPU never takes it.
+
+CLIO therefore tracks **which sources have already been signalled** and raises a
+fresh edge for any newly-active one. Both failure modes are pinned by tests.
+
+## Where this reaches
+
+The BIOS boots, initialises the OS, brings up the expansion bus, assigns device
+addresses, installs the CD driver, issues commands to the drive and receives
+their replies — and renders **the 3DO startup logo**, correctly: red diamond,
+blue block, dithered gold sphere, contact shadow and wordmark, on the light
+panel over black.
 
 ### The honest boundary
 
-Getting from the logo to the animated startup needs the **expansion-bus command
-set**: what a `0x8F` command means, and the shape of the reply a CD-ROM drive
-DMAs back. Everything around it is now in place and characterised — the ready
-bit, the command port, the completion bit, the DMA channels, and the knowledge
-that the reply is data in memory rather than bits in a port.
+The logo is drawn but does not yet animate. The machine reaches the OS idle loop
+— a counter increment, touching no hardware at all — having completed its CD
+conversation. What is missing is the **command set**: what `0x83` and `0x8F`
+mean, and the shape of the reply the drive DMAs back. The transport is now
+complete and characterised; the vocabulary spoken over it is not.
 
-What is left cannot be inferred from one ROM's spin loops, and fabricating a
-reply until the driver initialises would be actively harmful: it would produce a
-driver that works for the wrong reason, and every later conclusion would rest on
-it. That needs documentation, not more guessing.
+Fabricating replies until the animation runs would be actively harmful: it would
+produce a driver that works for the wrong reason, and every later conclusion
+would rest on it. That needs documentation, not more guessing.
 
 ## Still to be written
 
-The DSP, SPORT, and the XBUS interface through which the machine actually asks
-for sectors — the disc layer above is ready but nothing connects it to the CPU
-yet. Each needs its own section here as it lands.
+The DSP, and the CD command set above the transport. Each needs its own section
+here as it lands.

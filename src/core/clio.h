@@ -17,9 +17,11 @@
 // docs/CLEANROOM.md.
 #pragma once
 
+#include <memory>
 #include <vector>
 
 #include "types.h"
+#include "xbus.h"
 
 namespace retro3do {
 
@@ -38,7 +40,20 @@ enum : u32 {
     kIrqVerticalBlank0 = 1u << 0,
     kIrqVerticalBlank1 = 1u << 1,
     kIrqTimer          = 1u << 2,   // TODO(clio): confirm the timer's bit
-    kIrqExpansionBus   = 1u << 3,   // TODO(clio): confirm
+    // The expansion bus completion interrupt. WO 94/16382: every command
+    // returns at least one Status Byte when it completes, and the Status Return
+    // interrupt is how the system learns that has happened.
+    //
+    // Bit 9, not the bit 3 guessed here originally. Settled by asking the ROM
+    // rather than guessing: after the OS boots it enables 0x60000206 and then
+    // idles. Bits 1 and 2 (vertical blank and the timer) do fire. Bits 9, 29
+    // and 30 are enabled and never fire, so the source the idle OS is blocked
+    // on is one of those three - and bit 3 is not even enabled, which rules the
+    // original guess out outright.
+    kIrqExpansionBus   = 1u << 9,
+
+    // Bank 1 does not reach the CPU on its own; it sets a summary bit in bank 0.
+    kIrqSecondaryBank  = 1u << 31,  // TODO(clio): confirm the chain bit
 };
 
 // Register offsets from the base of the CLIO window. Everything the chip
@@ -136,12 +151,30 @@ enum : u32 {
     //   TST  r0, #0x10            ; wait for the operation to complete
     //   BEQ  -5
     //
-    kClioXbusStatus   = 0x0400,   // bit 0x80: the bus itself is ready
-    kClioXbusCommand  = 0x0500,   // command byte written here
-    kClioXbusResult   = 0x0540,   // bit 0x10: the command has completed
+    // The expansion bus, as the boot ROM drives it. Established by logging the
+    // traffic in order and reading it against WO 94/16382:
+    //
+    //   +0x0500  eighteen writes of zero at start-up, then single bytes.
+    //            That opening burst is the patent's ID-assignment procedure -
+    //            the system strobes seventeen times so each device can count
+    //            its own address - so this is the bus strobe / select port.
+    //   +0x0580  the Command FIFO. The ROM writes 0x83 followed by six more
+    //            bytes: one multi-byte command, exactly as WR_COM describes.
+    //   +0x0540  the result read.
+    //
+    // The patent defines the bus signals StatValid- and ChunkValid- as ACTIVE
+    // LOW, but the ROM waits for bit 4 to be SET after issuing a command, so
+    // CLIO presents them to software already inverted. Implementing the bus
+    // polarity here instead would hang on every command.
+    kClioXbusStatus   = 0x0400,
+    kClioXbusStrobe   = 0x0500,
+    kClioXbusResult   = 0x0540,
+    kClioXbusCommand  = 0x0580,
+
+    kXbusStatusReady  = 0x0010,   // status FIFO has something (active high)
+    kXbusChunkReady   = 0x0020,   // data FIFO has a chunk (active high)
 
     kXbusReady        = 0x0080,
-    kXbusComplete     = 0x0010,
 
     // The DSP lives inside CLIO's window rather than having its own chip
     // select. The boot ROM uploads a program here, starts it, waits, and then
@@ -208,6 +241,10 @@ private:
 
     // Bank 0 is the one wired to the CPU. Bank 1 raises a bit in bank 0 rather
     // than reaching the CPU directly, so a handler always reads bank 0 first.
+    // Which enabled sources have already had an edge signalled. See
+    // update_cpu_interrupt_line().
+    u32 signalled_ = 0;
+
     u32 irq0_pending_ = 0;
     u32 irq0_enabled_ = 0;
     u32 irq1_pending_ = 0;
@@ -226,7 +263,7 @@ private:
 
     bool field_complete_ = false;
     bool field_odd_ = false;
-    bool irq_asserted_ = false;
+    bool irq_asserted_ = false;  // retained for reset bookkeeping
 
     u32 revision_ = 0;
     u32 mode_ = 0;
@@ -250,6 +287,22 @@ public:
     // What the machine has written into the DSP window, for diagnostics.
     u64 dsp_writes() const { return dsp_writes_; }
     u32 dsp_word(u32 offset) const;
+
+    // The expansion bus. The CD-ROM drive is built into the machine, so it is
+    // always attached; whether a disc is in it is a separate question.
+    CdRomDevice& cdrom() { return cdrom_; }
+
+    // Which register 0x0540 actually is has not been settled from the ROM's
+    // behaviour alone, and the two candidates behave differently. Selectable so
+    // both can be tried against a real boot ROM rather than argued about.
+    enum class XbusResultRegister { Poll, Status };
+    void set_xbus_result_register(XbusResultRegister which) { xbus_result_ = which; }
+
+private:
+    u32 xbus_poll_register() const;
+
+    CdRomDevice cdrom_;
+    XbusResultRegister xbus_result_ = XbusResultRegister::Poll;
 };
 
 }  // namespace retro3do

@@ -38,6 +38,17 @@ Clio::Clio(Arm60& cpu) : cpu_(cpu) {
     reset();
 }
 
+// The Poll Register, as the patent defines it. Both "valid" bits are ACTIVE
+// LOW: high means the corresponding FIFO has nothing to offer.
+u32 Clio::xbus_poll_register() const {
+    // Presented active high: a set bit means the FIFO has something. See the
+    // note on polarity beside the register definitions.
+    u32 poll = 0;
+    if (!cdrom_.status_empty()) poll |= kXbusStatusReady;
+    if (cdrom_.has_chunk())     poll |= kXbusChunkReady;
+    return poll;
+}
+
 u32 Clio::dsp_word(u32 offset) const {
     if (offset < kClioDspBase || offset >= kClioDspEnd) return 0;
     return dsp_window_[(offset - kClioDspBase) / 4];
@@ -62,6 +73,7 @@ void Clio::reset() {
     field_complete_ = false;
     field_odd_ = false;
     irq_asserted_ = false;
+    signalled_ = 0;
 
     mode_ = 0;
     csys_bits_ = 0;
@@ -74,11 +86,13 @@ void Clio::reset() {
 
     std::fill(dsp_window_.begin(), dsp_window_.end(), 0u);
     dsp_writes_ = 0;
+    cdrom_.reset();
     watchdog_ = 0;
     seed_ = 0;
     timer_slack_ = 0;
 
     irq_asserted_ = false;
+    signalled_ = 0;
     cpu_.set_irq(false);
 }
 
@@ -96,26 +110,35 @@ void Clio::raise_secondary(u32 sources) {
     // handler always reads bank 0 first and only then looks at bank 1. Which
     // bit that is has not been confirmed.
     if ((irq1_pending_ & irq1_enabled_) != 0) {
-        irq0_pending_ |= kIrqExpansionBus;  // TODO(clio): confirm the chain bit
+        irq0_pending_ |= kIrqSecondaryBank;
     }
     update_cpu_interrupt_line();
 }
 
 void Clio::update_cpu_interrupt_line() {
-    const bool asserted = (irq0_pending_ & irq0_enabled_) != 0;
-
-    // Signal on the RISING EDGE only, rather than holding the line.
+    // Signal an edge PER SOURCE, rather than once for the line as a whole.
     //
-    // The boot ROM settles this. Its vertical-blank handler reads a software
-    // flag in RAM, returns, and never writes any CLIO register to acknowledge
-    // the source - across a whole run it touches only seven CLIO registers,
-    // none of them an acknowledgement. With a held line the machine livelocks
-    // on its own startup interrupt: enter handler, return, re-enter, forever,
-    // and the boot animation never advances.
-    if (asserted && !irq_asserted_) {
+    // Holding the line does not work: the boot ROM enables vertical blank and
+    // then never acknowledges it - across a whole run it writes no CLIO clear
+    // port at all, because it drives the boot animation by polling the line
+    // counter instead. A held line therefore livelocks the machine inside its
+    // own vertical-blank handler before the OS finishes starting.
+    //
+    // But a single edge flag for the whole line is just as wrong, and fails
+    // much later and more confusingly. It stays latched while ANY enabled
+    // source is pending, so once vertical blank goes pending and stays pending,
+    // no other source can ever produce an edge again. The expansion bus would
+    // raise its completion interrupt, the bit would sit plainly pending and
+    // enabled with interrupts unmasked at the CPU, and the CPU would still
+    // never take it - which is exactly how the OS came to boot and then idle
+    // forever waiting on a CD command that had in fact already completed.
+    //
+    // Tracking the signalled set per source gives each one its own edge.
+    const u32 active = irq0_pending_ & irq0_enabled_;
+    if ((active & ~signalled_) != 0) {
         cpu_.signal_irq();
     }
-    irq_asserted_ = asserted;
+    signalled_ = active;
 }
 
 // ---------------------------------------------------------------------------
@@ -212,15 +235,16 @@ u32 Clio::read(u32 offset) {
 
         case kClioMode:        return mode_;
 
-        // An empty bus that answers.
-        //
-        // The machine must run its attract sequence with no disc in the drive,
-        // so "nothing attached" cannot mean "never replies" - that is a hang,
-        // not an empty drive. The bus reports itself ready, and every command
-        // reports itself complete, so the ROM's enumeration finishes and finds
-        // no devices rather than waiting forever for one.
         case kClioXbusStatus:  return kXbusReady;
-        case kClioXbusResult:  return kXbusComplete;
+
+        // The device answers here. Which register this is - the Poll Register
+        // or a status-FIFO read - is selectable, because the ROM's behaviour
+        // alone does not distinguish them.
+        case kClioXbusResult:
+            if (xbus_result_ == XbusResultRegister::Status) {
+                return cdrom_.read_status();
+            }
+            return xbus_poll_register();
         case kClioBadBits:     return 0;
         case kClioTimerEnable: return timer_enabled_;
 
@@ -263,6 +287,20 @@ void Clio::note_write(u32 offset, u32 value) {
 void Clio::write(u32 offset, u32 value) {
     offset &= (kClioWindowSize - 1);
     note_write(offset, value);
+
+    if (offset == kClioXbusCommand) {
+        // WR_COM: a single byte into the device's Command FIFO. Commands are
+        // multiple bytes, so the device decides when it has a whole one.
+        const bool was_empty = cdrom_.status_empty();
+        cdrom_.write_command(static_cast<u8>(value & 0xffu));
+        // A command that completed has put a Status Byte in the return FIFO.
+        // Announce it: the OS blocks on this interrupt rather than polling, so
+        // filling the FIFO silently leaves the machine idle forever.
+        if (was_empty && !cdrom_.status_empty()) {
+            raise(kIrqExpansionBus);
+        }
+        return;
+    }
 
     if (offset >= kClioDspBase && offset < kClioDspEnd) {
         dsp_window_[(offset - kClioDspBase) / 4] = value;

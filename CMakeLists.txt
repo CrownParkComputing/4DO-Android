@@ -36,6 +36,7 @@ add_library(retro3do_core STATIC
     src/core/settings.cpp
     src/core/sport.cpp
     src/core/vdlp.cpp
+    src/core/xbus.cpp
 )
 target_include_directories(retro3do_core PUBLIC src)
 

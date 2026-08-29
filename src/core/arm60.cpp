@@ -222,6 +222,7 @@ void Arm60::check_interrupts() {
     if ((irq_line_ || irq_latched_) && (cpsr_ & kFlagI) == 0) {
         // A latched edge is consumed; a held line is not.
         irq_latched_ = false;
+        ++irqs_taken_;
         enter_exception(kVectorIrq, Mode::Irq, regs_[15] + 4, false);
     }
 }

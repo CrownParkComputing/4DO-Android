@@ -257,3 +257,70 @@ TEST(a_reset_silences_everything) {
     CHECK_EQ(c.clio.read(kClioTimerEnable), 0u);
     CHECK_EQ(c.clio.scanline(), 0u);
 }
+
+TEST(a_new_source_still_interrupts_while_an_older_one_stays_pending) {
+    // The edge is per source, not per line.
+    //
+    // The boot ROM never acknowledges anything - it drives its animation by
+    // polling the line counter instead - so vertical blank goes pending early
+    // and simply stays pending for the rest of the run. A single edge flag for
+    // the whole interrupt line stays latched behind it, and every later source
+    // is silently swallowed.
+    //
+    // That is not a subtle failure. It is how the OS came to boot, ask the CD
+    // drive fifteen questions, and then idle forever: the expansion bus raised
+    // its completion interrupt, the bit sat plainly pending and enabled with
+    // interrupts unmasked at the CPU, and the CPU never took it.
+    Chip c;
+    c.cpu.set_cpsr(c.cpu.cpsr() & ~kFlagI);
+    c.clio.write(kClioIrq0Enable, kIrqVerticalBlank1 | kIrqExpansionBus);
+
+    // Vertical blank arrives and is never acknowledged.
+    c.clio.raise(kIrqVerticalBlank1);
+    c.cpu.step();
+    CHECK_EQ(c.cpu.pc(), kVectorIrq);
+
+    // Back to ordinary code, source still pending, still enabled.
+    c.cpu.set_cpsr((c.cpu.cpsr() & ~kModeMask & ~kFlagI) |
+                   static_cast<u32>(Mode::Supervisor));
+    c.cpu.set_reg(15, kRomBase);
+    c.cpu.step();
+    CHECK(c.cpu.pc() != kVectorIrq);
+
+    // Now a DIFFERENT source arrives. It must be delivered.
+    c.clio.raise(kIrqExpansionBus);
+    c.cpu.set_cpsr(c.cpu.cpsr() & ~kFlagI);
+    c.cpu.step();
+    CHECK_EQ(c.cpu.pc(), kVectorIrq);
+}
+
+TEST(a_multi_byte_cd_command_completes_once_not_once_per_byte) {
+    // The boot ROM writes seven bytes per command. Replying to each byte runs
+    // the status FIFO six replies ahead of the conversation, so every later
+    // exchange reads the previous command's answer.
+    Chip c;
+    CHECK(c.clio.cdrom().status_empty());
+
+    for (int i = 0; i < 6; ++i) {
+        c.clio.write(kClioXbusCommand, i == 0 ? 0x83u : 0x00u);
+        CHECK(c.clio.cdrom().status_empty());       // nothing yet
+        CHECK_EQ(c.clio.cdrom().commands_received(), 0u);
+    }
+    c.clio.write(kClioXbusCommand, 0x00u);          // the seventh byte
+    CHECK_EQ(c.clio.cdrom().commands_received(), 1u);
+    CHECK(!c.clio.cdrom().status_empty());
+    CHECK_EQ(c.clio.cdrom().last_command(), 0x83u);
+}
+
+TEST(a_completed_cd_command_reports_status_ready_and_raises_its_interrupt) {
+    // The poll bits are presented to software active HIGH, inverted from the
+    // active-low bus signals the patent describes. Implementing the bus
+    // polarity here instead hangs the ROM on its very first command.
+    Chip c;
+    c.clio.write(kClioIrq0Enable, kIrqExpansionBus);
+    for (int i = 0; i < 7; ++i) {
+        c.clio.write(kClioXbusCommand, i == 0 ? 0x83u : 0x00u);
+    }
+    CHECK_EQ(c.clio.read(kClioXbusResult) & kXbusStatusReady, kXbusStatusReady);
+    CHECK_EQ(c.clio.read(kClioIrq0Pending) & kIrqExpansionBus, kIrqExpansionBus);
+}

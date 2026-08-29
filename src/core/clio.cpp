@@ -1,5 +1,7 @@
 #include "clio.h"
 
+#include <algorithm>
+
 #include "arm60.h"
 
 namespace retro3do {
@@ -32,7 +34,13 @@ int timer_index(u32 offset, bool& is_reload) {
 }  // namespace
 
 Clio::Clio(Arm60& cpu) : cpu_(cpu) {
+    dsp_window_.assign((kClioDspEnd - kClioDspBase) / 4, 0);
     reset();
+}
+
+u32 Clio::dsp_word(u32 offset) const {
+    if (offset < kClioDspBase || offset >= kClioDspEnd) return 0;
+    return dsp_window_[(offset - kClioDspBase) / 4];
 }
 
 void Clio::reset() {
@@ -61,6 +69,9 @@ void Clio::reset() {
     // fixed set of causes and hangs if it recognises none, so zero here means
     // the machine never boots.
     cstat_bits_ = kResetPowerOn;
+
+    std::fill(dsp_window_.begin(), dsp_window_.end(), 0u);
+    dsp_writes_ = 0;
     watchdog_ = 0;
     seed_ = 0;
     timer_slack_ = 0;
@@ -156,6 +167,10 @@ void Clio::tick_timers(u32 cycles) {
 u32 Clio::read(u32 offset) {
     offset &= (kClioWindowSize - 1);
 
+    if (offset >= kClioDspBase && offset < kClioDspEnd) {
+        return dsp_window_[(offset - kClioDspBase) / 4];
+    }
+
     bool is_reload = false;
     const int timer = timer_index(offset, is_reload);
     if (timer >= 0) {
@@ -189,6 +204,12 @@ u32 Clio::read(u32 offset) {
 
 void Clio::write(u32 offset, u32 value) {
     offset &= (kClioWindowSize - 1);
+
+    if (offset >= kClioDspBase && offset < kClioDspEnd) {
+        dsp_window_[(offset - kClioDspBase) / 4] = value;
+        ++dsp_writes_;
+        return;
+    }
 
     bool is_reload = false;
     const int timer = timer_index(offset, is_reload);

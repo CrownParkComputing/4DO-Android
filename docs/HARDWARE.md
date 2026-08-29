@@ -463,6 +463,37 @@ VRAM. It then reaches a panic handler again — an `STMDB` into MADAM followed b
 a branch to itself — with `0xFFEEFFEE` in a register, which has the look of a
 memory-test pattern. That is the next thing to chase.
 
+### Where it stops now: the DSP is on the critical path
+
+Tracing the path into the panic settles what the ROM is waiting for. The
+handler is at DRAM `0x178` — `STMDB r8,{r0-r4}` into MADAM followed by a branch
+to itself — and it is reached by *falling through* from `BL 0x0A4C` at `0x0170`.
+The routine at `0x0A4C` is therefore expected not to return on success.
+
+What that routine does: two copy loops into the DSP region, writes to
+`0x034017E8`, `0x034017FC` and `0x03401800`, a 65536-iteration delay, then a
+seven-times loop of writes and delays, and then it returns. Its literal pool
+holds `0x9900C000`, `0x9901C000` and `0x83808000`, which have the shape of DSP
+instructions rather than data. In total the ROM puts **59 words into CLIO's DSP
+window** before giving up.
+
+So **the DSP is on the critical path to booting, not merely to sound.** That was
+not obvious and it reorders the remaining work: the DSP now ranks ahead of XBUS.
+
+Two things were ruled out along the way, which narrows it usefully:
+
+- **It is not waiting for an interrupt.** At the point of panic no CLIO
+  interrupt source is enabled, none is pending, and the CPU still has IRQs
+  masked.
+- **It has installed a data-abort handler** at `0x10` (`SUBS pc, lr, #8`) while
+  leaving the other vectors as NOPs, which suggests it probes memory and expects
+  aborts. This core never raises a data abort — unmapped reads return zero — so
+  that is a candidate for the next discrepancy even if it is not this one.
+
+The DSP window is now backed by plain storage rather than dropping writes. It is
+still not emulated, but an uploaded program is retained and can be read back,
+which is what makes it possible to study at all.
+
 A useful thing to recognise: the routine at DRAM `0x100` is a **nested delay
 loop**, not a hang, and its inner count is chosen by comparing PC against
 `0x03000000` — 45 iterations when running from ROM, 2192 from DRAM. It is

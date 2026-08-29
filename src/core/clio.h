@@ -17,6 +17,8 @@
 // docs/CLEANROOM.md.
 #pragma once
 
+#include <vector>
+
 #include "types.h"
 
 namespace retro3do {
@@ -101,6 +103,19 @@ enum : u32 {
     kClioTimerEnable  = 0x0200,   // TODO(clio): confirm
     kClioTimerDisable = 0x0204,   // TODO(clio): confirm
 
+    // The DSP lives inside CLIO's window rather than having its own chip
+    // select. The boot ROM uploads a program here, starts it, waits, and then
+    // gives up - so the DSP is on the critical path to booting, not merely to
+    // sound.
+    //
+    // Established by disassembling the ROM: at DRAM 0x0A64 and 0x0A80 it runs
+    // two copy loops into 0x03403000 and 0x03403400, and its literal pool holds
+    // 0x034017E8, 0x034017FC and 0x03401800 as control registers, alongside
+    // values (0x9900C000, 0x9901C000, 0x83808000) that look like DSP
+    // instructions.
+    kClioDspBase      = 0x1000,
+    kClioDspEnd       = 0x4000,
+
     kClioWindowSize   = 0x10000,
 };
 
@@ -163,6 +178,18 @@ private:
     u32 watchdog_ = 0;
     u32 seed_ = 0;
     u32 timer_slack_ = 0;
+
+    // The DSP is not emulated. Its window is backed by plain storage so that an
+    // uploaded program is retained and can be read back and inspected, rather
+    // than being silently dropped - which would make the upload itself
+    // impossible to study.
+    std::vector<u32> dsp_window_;
+    u64 dsp_writes_ = 0;
+
+public:
+    // What the machine has written into the DSP window, for diagnostics.
+    u64 dsp_writes() const { return dsp_writes_; }
+    u32 dsp_word(u32 offset) const;
 };
 
 }  // namespace retro3do

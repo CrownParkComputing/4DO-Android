@@ -77,9 +77,18 @@ bool App::init() {
     // On a phone or tablet there is no window to size — SDL gives us the
     // display. Asking for a resizable window is harmless there and correct on
     // desktop.
+    // Fullscreen on a handheld, a window on a desktop. Without this the system
+    // status bar sits on top of the app: not merely untidy, it covers the top
+    // row of controls and steals touches meant for them.
+    SDL_WindowFlags flags = SDL_WINDOW_HIGH_PIXEL_DENSITY;
+#if defined(__ANDROID__) || defined(__APPLE__)
+    flags |= SDL_WINDOW_FULLSCREEN;
+#else
+    flags |= SDL_WINDOW_RESIZABLE;
+#endif
+
     if (!SDL_CreateWindowAndRenderer("Retro-3DO", kDefaultWindowWidth,
-                                     kDefaultWindowHeight,
-                                     SDL_WINDOW_RESIZABLE | SDL_WINDOW_HIGH_PIXEL_DENSITY,
+                                     kDefaultWindowHeight, flags,
                                      &window_, &renderer_)) {
         last_error_ = std::string("Could not create a window: ") + SDL_GetError();
         return false;

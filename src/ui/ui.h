@@ -77,6 +77,12 @@ private:
     enum class Browsing { None, Bios, Disc };
     Browsing browsing_ = Browsing::None;
 
+    // Everything drawn is multiplied by this. ImGui's default font is 13 pixels
+    // tall, which on a 1080p handheld is unreadable, and fixed pixel button
+    // widths clip their own labels. Scale is derived from the window rather
+    // than from SDL's display scale, which reports 1.0 on many Android devices.
+    float scale_ = 1.0f;
+
     bool initialised_ = false;
     bool show_launcher_ = true;
     char bios_path_buffer_[512] = {};

@@ -420,6 +420,35 @@ path that worked yesterday may be meaningless today. On load the app tries the
 remembered BIOS and disc and, if they no longer resolve, forgets them silently —
 that is ordinary rather than exceptional and should not be reported as an error.
 
+## What device testing changed
+
+Five things were wrong that no amount of desktop testing would have shown, all
+found within a minute of the first install on a handheld:
+
+- **The system status bar sat on top of the app.** Not merely untidy: it covers
+  the top row of controls and takes touches meant for them. Fixed with a
+  fullscreen theme and `windowLayoutInDisplayCutoutMode=shortEdges`, without
+  which a notched device letterboxes the whole app into a black band that looks
+  exactly like a broken renderer.
+- **The interface was unreadably small.** ImGui's default font is 13 pixels;
+  on a 1080p handheld that is illegible at arm's length.
+  `SDL_GetWindowDisplayScale` reports 1.0 on many Android devices, so it cannot
+  be relied on — the scale is now derived from the window's own pixel size, with
+  the reported display scale used only as a floor.
+- **Button labels were clipped** ("Test pat"), because widths were in fixed
+  pixels while the font scaled.
+- **The status line ran off the right edge**, with no wrapping.
+- **An em dash rendered as `?`.** The default font has no glyph for it. UI
+  strings are ASCII only.
+
+The lesson worth keeping: every one of these is a *presentation* bug, invisible
+to a test suite that checks behaviour, and every one makes the app look broken.
+
+Note for anyone testing on a Retroid Pocket Flip 2: it runs a desktop-style
+freeform window manager, so the app appears in a floating window rather than
+filling the screen, and driving it with blind `adb input tap` is unreliable
+because other windows compete for the foreground.
+
 ## Still to be written
 
 The DSP, SPORT, and the XBUS interface through which the machine actually asks

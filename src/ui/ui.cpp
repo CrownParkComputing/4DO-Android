@@ -30,13 +30,26 @@ bool Ui::init(SDL_Window* window, SDL_Renderer* renderer) {
 
     ImGui::StyleColorsDark();
 
-    // Scale the whole UI with the display, so the launcher is usable on a phone
-    // without a separate touch layout.
-    const float scale = SDL_GetWindowDisplayScale(window);
-    if (scale > 0.0f) {
-        ImGui::GetStyle().ScaleAllSizes(scale);
-        io.FontGlobalScale = scale;
-    }
+    // Scale the whole UI to the screen.
+    //
+    // SDL_GetWindowDisplayScale reports 1.0 on many Android devices, so it
+    // cannot be relied on alone: a 1080p handheld would get ImGui's 13-pixel
+    // default font, which is genuinely unreadable at arm's length. The window's
+    // own size is the honest signal, with the reported display scale taken as a
+    // floor for desktops with a HiDPI screen and a small window.
+    int window_w = 0;
+    int window_h = 0;
+    SDL_GetWindowSizeInPixels(window, &window_w, &window_h);
+
+    const float from_size =
+        static_cast<float>(window_h > 0 ? window_h : 720) / 480.0f;
+    const float reported = SDL_GetWindowDisplayScale(window);
+    scale_ = from_size > reported ? from_size : reported;
+    if (scale_ < 1.0f) scale_ = 1.0f;
+    if (scale_ > 4.0f) scale_ = 4.0f;
+
+    ImGui::GetStyle().ScaleAllSizes(scale_);
+    io.FontGlobalScale = scale_;
 
     if (!ImGui_ImplSDL3_InitForSDLRenderer(window, renderer)) {
         return false;
@@ -111,16 +124,16 @@ void Ui::draw_launcher(Console& console, UiIntent& intent) {
     ImGui::Spacing();
 
     ImGui::TextUnformatted("System ROM");
-    ImGui::SetNextItemWidth(-120.0f);
+    ImGui::SetNextItemWidth(-(230.0f * scale_));
     ImGui::InputTextWithHint("##bios", "path to the 3DO BIOS image",
                              bios_path_buffer_, sizeof(bios_path_buffer_));
     ImGui::SameLine();
-    if (ImGui::Button("Browse##bios", ImVec2(110.0f, 0.0f))) {
+    if (ImGui::Button("Browse##bios", ImVec2(110.0f * scale_, 0.0f))) {
         browsing_ = Browsing::Bios;
         browser_.open("Choose a BIOS image", {".rom", ".bin"});
     }
     ImGui::SameLine();
-    if (ImGui::Button("Load", ImVec2(80.0f, 0.0f))) {
+    if (ImGui::Button("Load", ImVec2(80.0f * scale_, 0.0f))) {
         intent.bios_chosen = true;
         intent.bios_path = bios_path_buffer_;
     }
@@ -136,16 +149,16 @@ void Ui::draw_launcher(Console& console, UiIntent& intent) {
 
     ImGui::Spacing();
     ImGui::TextUnformatted("Disc");
-    ImGui::SetNextItemWidth(-120.0f);
+    ImGui::SetNextItemWidth(-(230.0f * scale_));
     ImGui::InputTextWithHint("##disc", "path to a .iso, .bin or .cue",
                              disc_path_buffer_, sizeof(disc_path_buffer_));
     ImGui::SameLine();
-    if (ImGui::Button("Browse##disc", ImVec2(110.0f, 0.0f))) {
+    if (ImGui::Button("Browse##disc", ImVec2(110.0f * scale_, 0.0f))) {
         browsing_ = Browsing::Disc;
         browser_.open("Choose a disc image", {".iso", ".bin", ".cue", ".img"});
     }
     ImGui::SameLine();
-    if (ImGui::Button("Insert", ImVec2(80.0f, 0.0f))) {
+    if (ImGui::Button("Insert", ImVec2(80.0f * scale_, 0.0f))) {
         intent.disc_chosen = true;
         intent.disc_path = disc_path_buffer_;
     }
@@ -184,16 +197,16 @@ void Ui::draw_launcher(Console& console, UiIntent& intent) {
     ImGui::Spacing();
 
     ImGui::BeginDisabled(!console.bios_loaded());
-    if (ImGui::Button("Start", ImVec2(140.0f, 0.0f))) {
+    if (ImGui::Button("Start", ImVec2(150.0f * scale_, 0.0f))) {
         show_launcher_ = false;
         intent.reset = true;
     }
     ImGui::EndDisabled();
 
     ImGui::SameLine();
-    if (ImGui::Button("Test pattern", ImVec2(140.0f, 0.0f))) {
-        // Draws without a BIOS. It exercises the whole display path — bus into
-        // VRAM, display list, VDLP, texture upload, letterboxing — so on a new
+    if (ImGui::Button("Test pattern", ImVec2(150.0f * scale_, 0.0f))) {
+        // Draws without a BIOS. It exercises the whole display path - bus into
+        // VRAM, display list, VDLP, texture upload, letterboxing - so on a new
         // device it separates "the video path is broken" from "the emulator is
         // not running", which otherwise look identical.
         intent.test_pattern = true;
@@ -201,16 +214,18 @@ void Ui::draw_launcher(Console& console, UiIntent& intent) {
     }
 
     ImGui::SameLine();
-    if (ImGui::Button("Quit", ImVec2(140.0f, 0.0f))) {
+    if (ImGui::Button("Quit", ImVec2(150.0f * scale_, 0.0f))) {
         intent.quit = true;
     }
 
     ImGui::Spacing();
     ImGui::Separator();
+    ImGui::PushTextWrapPos(0.0f);
     ImGui::TextDisabled(
-        "Under construction. The CPU, interrupts and display path work — the "
-        "test pattern proves them. MADAM, which draws the graphics, does not "
-        "exist yet, so a BIOS will run but show nothing.");
+        "Under construction. The CPU, interrupts, graphics and display path all "
+        "work - the test pattern proves them. What is missing is the link "
+        "between the disc and the CPU, so a real disc will not boot yet.");
+    ImGui::PopTextWrapPos();
 
     ImGui::End();
 

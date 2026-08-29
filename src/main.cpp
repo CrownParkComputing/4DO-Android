@@ -12,6 +12,12 @@ int main(int argc, char* argv[]) {
     (void)argc;
     (void)argv;
 
+    // Set before SDL_Init, or it is read too late to matter. Immersive mode
+    // keeps the navigation and status bars out of the picture; without it they
+    // overlay the app and take touches intended for the controls beneath them.
+    SDL_SetHint(SDL_HINT_ANDROID_TRAP_BACK_BUTTON, "0");
+    SDL_SetHint("SDL_ANDROID_BLOCK_ON_PAUSE", "1");
+
     retro3do::App app;
     if (!app.init()) {
         SDL_LogError(SDL_LOG_CATEGORY_APPLICATION, "%s", app.last_error().c_str());

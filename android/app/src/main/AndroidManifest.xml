@@ -90,6 +90,7 @@
             android:launchMode="singleInstance"
             android:configChanges="layoutDirection|locale|grammaticalGender|fontScale|fontWeightAdjustment|orientation|uiMode|screenLayout|screenSize|smallestScreenSize|keyboard|keyboardHidden|navigation"
             android:preferMinimalPostProcessing="true"
+            android:theme="@style/Theme.Retro3DO"
             android:exported="true"
             >
             <intent-filter>

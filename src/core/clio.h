@@ -245,6 +245,10 @@ private:
     // update_cpu_interrupt_line().
     u32 signalled_ = 0;
 
+    // How many IRQs the CPU had taken last time we looked. CLIO clears the
+    // sources it delivered once the CPU accepts them - see tick().
+    u64 last_irqs_taken_ = 0;
+
     u32 irq0_pending_ = 0;
     u32 irq0_enabled_ = 0;
     u32 irq1_pending_ = 0;

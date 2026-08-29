@@ -74,6 +74,7 @@ void Clio::reset() {
     field_odd_ = false;
     irq_asserted_ = false;
     signalled_ = 0;
+    last_irqs_taken_ = cpu_.irqs_taken();
 
     mode_ = 0;
     csys_bits_ = 0;
@@ -93,6 +94,7 @@ void Clio::reset() {
 
     irq_asserted_ = false;
     signalled_ = 0;
+    last_irqs_taken_ = cpu_.irqs_taken();
     cpu_.set_irq(false);
 }
 
@@ -145,6 +147,24 @@ void Clio::update_cpu_interrupt_line() {
 // Timing
 // ---------------------------------------------------------------------------
 void Clio::tick(u32 cycles) {
+    // CLIO acknowledges the sources it delivered, once the CPU has accepted
+    // them. Software is not what clears them: across a whole boot the ROM
+    // writes no CLIO clear port at all, and reads no pending register either -
+    // its handler saves registers, calls a dispatcher and returns.
+    //
+    // Without this the machine deadlocks in a way that looks nothing like an
+    // interrupt bug. The first vertical blank goes pending, nothing ever clears
+    // it, and every later source is stuck behind it forever - so the OS boots,
+    // brings up the CD, reaches its idle loop, and then sits there touching no
+    // hardware whatsoever, waiting for a timer tick that cannot arrive.
+    const u64 taken = cpu_.irqs_taken();
+    if (taken != last_irqs_taken_) {
+        last_irqs_taken_ = taken;
+        irq0_pending_ &= ~signalled_;
+        signalled_ = 0;
+        update_cpu_interrupt_line();
+    }
+
     tick_timers(cycles);
 
     const u32 per_line = cycles_per_scanline(scanlines_per_field_);
@@ -179,6 +199,17 @@ void Clio::tick_timers(u32 cycles) {
     bool fired = false;
     for (u32 i = 0; i < kClioTimerCount; ++i) {
         if ((timer_enabled_ & (1u << i)) == 0) {
+            continue;
+        }
+        // A timer that has reached zero with no reload to restart it is spent,
+        // not periodic. It must fire once and then stay quiet.
+        //
+        // Firing it every tick instead is catastrophic and does not look like a
+        // timer bug at all: the boot ROM enables a timer it never gives a period
+        // to, so the machine takes over five hundred timer interrupts PER FRAME
+        // and spends all of its time entering and leaving the handler, with none
+        // left to run the code that would animate the logo.
+        if (timer_counter_[i] == 0 && timer_reload_[i] == 0) {
             continue;
         }
         // TODO(clio): the real decrement rate is derived from a prescaler this

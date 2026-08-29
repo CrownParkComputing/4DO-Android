@@ -2,8 +2,6 @@ plugins {
      id 'com.android.application'
 }
 
-def buildWithCMake = project.hasProperty('BUILD_WITH_CMAKE');
-
 android {
     namespace = "com.crownparkcomputing.retro3do"
     compileSdk 36
@@ -15,11 +13,6 @@ android {
         versionCode 1
         versionName "1.0"
         externalNativeBuild {
-            ndkBuild {
-                arguments "APP_PLATFORM=android-24"
-                // abiFilters 'armeabi-v7a', 'arm64-v8a', 'x86', 'x86_64'
-                abiFilters 'arm64-v8a'
-            }
             cmake {
                 arguments "-DANDROID_PLATFORM=android-24", "-DANDROID_STL=c++_static"
                 // abiFilters 'armeabi-v7a', 'arm64-v8a', 'x86', 'x86_64'
@@ -40,15 +33,13 @@ android {
         sourceSets.main {
             jniLibs.srcDir 'libs'
         }
+        // CMake only. The whole emulator - SDL, ImGui, libchdr and the core -
+        // is described once in the root CMakeLists, and jni/CMakeLists.txt is
+        // a thin entry point into it. There is no second, Android-specific
+        // description of the build to keep in step.
         externalNativeBuild {
-            if (buildWithCMake) {
-                cmake {
-                    path 'jni/CMakeLists.txt'
-                }
-            } else {
-                ndkBuild {
-                    path 'jni/Android.mk'
-                }
+            cmake {
+                path 'jni/CMakeLists.txt'
             }
         }
 

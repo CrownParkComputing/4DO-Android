@@ -208,6 +208,7 @@ private:
     bool media_changed_ = false;
     bool motor_on_ = false;
     bool last_ok_ = false;
+    bool streaming_ = false;
 
     Disc* disc_ = nullptr;
 

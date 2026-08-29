@@ -72,8 +72,13 @@ public:
     // Emulate one video frame. Returns the number of CPU cycles spent.
     u32 run_frame();
 
+    // How many expansion-bus DMA transfers have been served. A bring-up
+    // diagnostic: "is the disc actually being read" is otherwise invisible.
+    u64 expansion_dma_count() const { return expansion_dma_count_; }
+
 private:
     void service_expansion_dma();
+    u64 expansion_dma_count_ = 0;
 
 public:
 

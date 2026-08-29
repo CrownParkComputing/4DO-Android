@@ -199,6 +199,7 @@ void Console::service_expansion_dma() {
     }
 
     madam_.clear_xbus_dma();
+    ++expansion_dma_count_;
     // The DMA wrote to memory that may hold code, so anything decoded from it
     // is now stale.
     cpu_.invalidate_decode_cache(madam_.xbus_dma_address(), bytes);

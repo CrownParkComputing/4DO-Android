@@ -161,6 +161,27 @@ void Clio::update_cpu_interrupt_line() {
 // ---------------------------------------------------------------------------
 void Clio::tick(u32 cycles) {
     cdrom_.tick(cycles);
+
+    // Raise the expansion-bus interrupt on exactly the condition the hardware
+    // uses. The boot ROM's own device scan computes
+    //
+    //     poll & (poll << 4)   tested against 0x70
+    //
+    // which ANDs each ready bit against its matching enable - status valid
+    // against status-IRQ-enable, read valid against read-IRQ-enable, write
+    // against write. A device interrupts when any condition is both asserted
+    // AND enabled, and not otherwise.
+    //
+    // Raising only on status meant the drive could say "another sector is
+    // ready" and never be heard, so the host armed one DMA and waited forever
+    // for a second that it was never told about.
+    {
+        const u32 poll = xbus_poll_for_device();
+        if ((poll & (poll << 4) & 0x70u) != 0) {
+            raise(kIrqExpansionBus);
+        }
+    }
+
     if (cdrom_.take_media_changed()) {
         media_changed_ = true;
     }

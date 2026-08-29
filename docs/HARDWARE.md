@@ -1082,6 +1082,53 @@ takes a different path, because it never looks.
 **It is not an interrupt problem.** The machine takes about 126 FIQs a frame,
 and the real service routine reads the pending register thousands of times.
 
+## The CD driver's state machine is healthy
+
+Worth recording, because it rules out a whole class of explanation. The driver
+keeps a state byte at `+255` of its device structure. It is written from
+forty-five places and read from exactly one, at `0x23F0C`:
+
+```
+    ldrb r0, [r4, #255]
+    teq  r0, #8
+    teqne r0, #0
+    moveq r0, #18          ; idle -> claim it
+    strbeq r0, [r4, #255]
+    moveq r0, #1           ; and report there is work to do
+```
+
+So state 8 or 0 means idle, and the poller claims the drive by moving it to 18.
+State 8 is set at `0x24D9C`, and the execution map confirms that address is
+reached - as are the read at `0x23F0C` and the comparison after it.
+
+That is the once-a-second poll working exactly as designed: the drive goes idle,
+the operator notices, claims it, asks its version, and releases it. Nothing here
+is stuck. The driver is not the problem, and neither is the drive.
+
+## Where the disc gets to
+
+With a disc in the tray at boot the machine now runs a complete mount and reads
+the volume label:
+
+| Frame | What happens |
+|---|---|
+| 44 | version probe |
+| 91 | 80, 82, 02, 09 x4, 85, 8B, 8C, 8D |
+| 92 | READ MSF 00:02:00 - LBA 0 |
+| 146+ | one version poll every sixty frames, indefinitely |
+
+The label arrives in DRAM at `0x000FA480` and is byte-exact against the disc -
+2011 of 2048 bytes match, and the 37 that differ are the first few, overwritten
+afterwards with what is plainly a free-list pointer. The OS read the sector,
+used it, and recycled the buffer.
+
+What does not happen is a second read. The label's root-directory pointers sit
+in memory at `+0x64` (`0x0001de80` on this disc) and nothing ever asks for them.
+
+One asymmetry, which is a real bug regardless: with an EMPTY tray at boot the
+mount stops early at `0x82`, and inserting a disc afterwards never retriggers
+it. Disc-at-boot mounts; hot-insert does not.
+
 ### The honest boundary
 
 The logo is drawn but does not yet animate. The machine reaches the OS idle loop

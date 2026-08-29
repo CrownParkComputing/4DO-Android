@@ -207,7 +207,8 @@ private:
     bool disc_present_ = false;
     bool media_changed_ = false;
     bool motor_on_ = false;
-    bool last_ok_ = false;
+    bool ready_ = false;
+    u8   last_error_ = 0;
     bool streaming_ = false;
 
     // A drive delivers sectors at its rotational rate - 75 a second at single

@@ -42,6 +42,19 @@ Clio::Clio(Arm60& cpu) : cpu_(cpu) {
 
 // The Poll Register, as the patent defines it. Both "valid" bits are ACTIVE
 // LOW: high means the corresponding FIFO has nothing to offer.
+// The drive interrupts when a condition is both asserted AND enabled: status
+// available with status interrupts on, or data available with data interrupts
+// on. Checked when software touches the bus, which is when the hardware checks
+// it - raising it continuously instead floods the handler.
+void Clio::raise_xbus_interrupt_if_pending() {
+    const u32 poll = xbus_poll_for_device();
+    const bool status_pending = (poll & kXbusStatusReady) && (poll & kXbusStatusIrqEnable);
+    const bool data_pending   = (poll & kXbusChunkReady)  && (poll & kXbusReadIrqEnable);
+    if (status_pending || data_pending) {
+        raise(kIrqExpansionBus);
+    }
+}
+
 u32 Clio::xbus_poll_for_device() const {
     // Control nibble as software left it, state nibble from the drive.
     u32 poll = xbus_device_poll_ & 0x0fu;
@@ -162,26 +175,6 @@ void Clio::update_cpu_interrupt_line() {
 void Clio::tick(u32 cycles) {
     cdrom_.tick(cycles);
 
-    // Raise the expansion-bus interrupt on exactly the condition the hardware
-    // uses. The boot ROM's own device scan computes
-    //
-    //     poll & (poll << 4)   tested against 0x70
-    //
-    // which ANDs each ready bit against its matching enable - status valid
-    // against status-IRQ-enable, read valid against read-IRQ-enable, write
-    // against write. A device interrupts when any condition is both asserted
-    // AND enabled, and not otherwise.
-    //
-    // Raising only on status meant the drive could say "another sector is
-    // ready" and never be heard, so the host armed one DMA and waited forever
-    // for a second that it was never told about.
-    {
-        const u32 poll = xbus_poll_for_device();
-        if ((poll & (poll << 4) & 0x70u) != 0) {
-            raise(kIrqExpansionBus);
-        }
-    }
-
     if (cdrom_.take_media_changed()) {
         media_changed_ = true;
     }
@@ -281,19 +274,24 @@ u32 Clio::read(u32 offset) {
     if (offset >= kClioXbusSelect && offset < kClioXbusData + kClioXbusWindow) {
         switch (offset & ~(kClioXbusWindow - 1)) {
             case kClioXbusSelect:
-                return xbus_sel_;
+                return xbus_sel_low_ | xbus_sel_high_;
             case kClioXbusPoll: {
-                // Device zero is the built-in drive and answers with its own
-                // register; anything else reads the bus-level one.
-                if (xbus_sel_ != 0) {
-                    return xbus_poll_;
+                u32 poll;
+                if (xbus_sel_low_ == kXbusSelBusIndex) {
+                    poll = xbus_poll_;              // the bus itself
+                } else if (xbus_sel_low_ == 0) {
+                    poll = xbus_poll_for_device();  // the built-in drive
+                    media_changed_ = false;         // media-access is read-clear
+                } else {
+                    poll = kXbusPollUnfitted;       // nothing in that slot
                 }
-                const u32 poll = xbus_poll_for_device();
-                media_changed_ = false;   // media-access is read-clear
+                if ((xbus_sel_high_ & kXbusSelMaskPoll) != 0) {
+                    poll &= 0x0fu;
+                }
                 return poll;
             }
             case kClioXbusCommand: {            // RD_STAT
-                if (xbus_sel_ != 0) {
+                if (xbus_sel_low_ != 0) {
                     return 0;
                 }
                 const u8 byte = cdrom_.read_status();
@@ -303,7 +301,7 @@ u32 Clio::read(u32 offset) {
                 return byte;
             }
             case kClioXbusData:                 // RD_DATA
-                return xbus_sel_ == 0 ? cdrom_.read_data() : 0;
+                return xbus_sel_low_ == 0 ? cdrom_.read_data() : 0;
             default:
                 break;
         }
@@ -411,32 +409,29 @@ void Clio::write(u32 offset, u32 value) {
                 // SELECTION names the device by VALUE. 0x8F is a probe rather
                 // than a device: answering it wrongly leaves CLIO reporting
                 // "too many devices on the bus" and the enumeration fails.
-                xbus_sel_ = value & 0xffu;
-                if (xbus_sel_ == kXbusSelectProbe) {
-                    xbus_poll_ &= 0x0fu;
-                } else {
-                    xbus_poll_ = (xbus_poll_ & 0x0fu) | 0x90u;
-                }
+                xbus_sel_low_  = value & 0x0fu;
+                xbus_sel_high_ = value & 0xf0u;
                 return;
 
             case kClioXbusPoll:
                 // Only the control nibble is writable.
-                if (xbus_sel_ == 0) {
+                if (xbus_sel_low_ == kXbusSelBusIndex) {
+                    xbus_poll_ = (xbus_poll_ & 0xf0u) | (value & 0x0fu);
+                }
+                if (xbus_sel_low_ == 0) {
                     xbus_device_poll_ = (value & 0x0fu) | (xbus_device_poll_ & 0xf0u);
-                } else {
-                    xbus_poll_ = value & 0xffu;
+                    raise_xbus_interrupt_if_pending();
                 }
                 return;
 
             case kClioXbusCommand: {
-                if (xbus_sel_ != 0) {
+                if (xbus_sel_low_ != 0) {
                     return;
                 }
                 const bool was_empty = cdrom_.status_empty();
                 cdrom_.write_command(static_cast<u8>(value & 0xffu));
-                if (was_empty && !cdrom_.status_empty()) {
-                    raise(kIrqExpansionBus);
-                }
+                (void)was_empty;
+                raise_xbus_interrupt_if_pending();
                 return;
             }
             default:

@@ -105,9 +105,14 @@ void CdRomDevice::build_reply(u8 command) {
             break;
 
         case kCmdReadError:
+            // Ten bytes: the opcode, the last error code eight times over, and
+            // the DRIVE STATUS - not a disc-present flag. MAME guesses here and
+            // says so ("perhaps just the status byte?"); the driver that boots
+            // this disc returns the status byte, and the BIOS branches on it.
+            // Returning 1 instead sends the whole boot down a different path.
             pending_reply_.push_back(kCmdReadError);
-            for (int i = 0; i < 8; ++i) pending_reply_.push_back(0x00);
-            pending_reply_.push_back(disc_present_ ? 1 : 0);
+            for (int i = 0; i < 8; ++i) pending_reply_.push_back(last_error_);
+            pending_reply_.push_back(drive_status());
             break;
 
         case kCmdSetMode:
@@ -313,7 +318,10 @@ u8 CdRomDevice::drive_status() const {
     // host does not expect is not harmless.
     u8 status = kStatusDoor;
     if (disc_present_) status |= kStatusDiscIn;
-    if (motor_on_)     status |= kStatusSpinUp | kStatusReady;
+    if (motor_on_)     status |= kStatusSpinUp;
+    // Ready is set by a command completing, not by the motor. The drive reports
+    // it explicitly once it has answered something.
+    if (ready_)        status |= kStatusReady;
     return status;
 }
 
@@ -325,7 +333,8 @@ void CdRomDevice::reset() {
     media_changed_ = false;
     interrupt_request_ = false;
     motor_on_ = false;
-    last_ok_ = false;
+    ready_ = false;
+    last_error_ = 0;
     streaming_ = false;
     pending_reply_.clear();
     transfer_lba_ = 0;
@@ -366,6 +375,7 @@ void CdRomDevice::write_command(u8 byte) {
         fprintf(stderr, "\n");
     }
 
+    ready_ = true;
     build_reply(last_command_);
 
     completion_pending_ = true;

@@ -247,6 +247,13 @@ enum : u32 {
     // Written to SELECTION as a device-count probe. Answering it wrongly makes
     // CLIO report "too many devices on the bus".
     kXbusSelectProbe     = 0x008f,
+    kXbusSelBusIndex     = 0x000f,   // addresses the bus, not a device
+    kXbusSelMaskPoll     = 0x0080,   // read the poll register's low nibble only
+
+    // What an address with nothing fitted answers. Not zero: an empty slot
+    // reads as status-and-data-available with no enables set, which the boot
+    // ROM's scan correctly reads as "nothing to do here".
+    kXbusPollUnfitted    = 0x0030,
 
     kXbusReady        = 0x0080,
 
@@ -365,7 +372,11 @@ private:
     // when a device other than the built-in drive is selected; the drive keeps
     // its own control nibble in `xbus_device_poll_`.
     u32 control_ = 0;
-    u32 xbus_sel_ = 0;
+    // SELECTION splits: the low nibble is the device index, the high nibble is
+    // flags. Bit 7 masks a poll read down to its low nibble, and index 0x0F
+    // addresses the bus itself rather than a device.
+    u32 xbus_sel_low_ = 0;
+    u32 xbus_sel_high_ = 0;
     u32 xbus_poll_ = 0;
     u32 xbus_device_poll_ = 0;
     bool media_changed_ = false;
@@ -422,6 +433,7 @@ public:
 
 private:
     u32 xbus_poll_for_device() const;
+    void raise_xbus_interrupt_if_pending();
 
 public:
     // Set when software pulls the expansion-bus DMA trigger; cleared once the

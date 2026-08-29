@@ -57,6 +57,27 @@ enum : u32 {
     // registers to MADAM in an infinite loop.
     kMadamMemConfig  = 0x0004,
     kMadamClipXY     = 0x0008,   // TODO(madam): confirm
+    // DMA channels. Each is eight bytes: an address then a length.
+    //
+    // Read off the driver that programs them, at DRAM 0x1A7FC:
+    //
+    //   LDR r3, [r0], #4
+    //   STR r3, [r1, #0x18]     ; r1 = MADAM + 0x200  -> channel 3 address
+    //   LDR r0, [r0]
+    //   STR r0, [r1, #0x1C]     ;                     -> channel 3 length
+    //   ...
+    //   STR r2, [r1, #0x38]     ;                     -> channel 7 address
+    //   STR r0, [r1, #0x3C]!    ;                     -> channel 7 length
+    //
+    // 0x218 and 0x238 are therefore channels 3 and 7 of an array based at
+    // 0x200 with an eight-byte stride. The expansion bus uses these two: a
+    // device's reply is DMA'd into memory rather than read back through a
+    // port, which is why no amount of adjusting the status port moved the
+    // machine.
+    kMadamDmaBase    = 0x0200,
+    kMadamDmaStride  = 8,
+    kMadamDmaChannels = 32,
+
     kMadamCelStart   = 0x0100,   // writing here starts the engine on a list
 
     // The address of the video display list, which is what the VDLP walks to
@@ -164,6 +185,13 @@ public:
     // the software sets it, which is why a freshly reset machine is black.
     u32 vdl_address() const { return vdl_address_; }
 
+    // A DMA channel's programmed address and length. Stored and readable, but
+    // no transfer is performed: what a device would put there depends on the
+    // expansion-bus command set, which is not established yet. Keeping them
+    // means the setup is visible instead of vanishing.
+    u32 dma_address(u32 channel) const;
+    u32 dma_length(u32 channel) const;
+
     // Read one CCB. Public because it is worth testing on its own: a
     // misread CCB produces garbage that is very hard to attribute afterwards.
     Ccb read_ccb(u32 address) const;
@@ -199,6 +227,8 @@ private:
     u32 revision_ = 0;
     u32 mem_config_ = kMadamMemConfigStock;
     u32 vdl_address_ = 0;
+    u32 dma_address_[kMadamDmaChannels] = {};
+    u32 dma_length_[kMadamDmaChannels] = {};
     u32 clip_width_ = 320;
     u32 clip_height_ = 240;
 

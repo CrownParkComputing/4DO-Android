@@ -84,6 +84,19 @@ u32 footprint_steps(s32 dx, s32 dy) {
     return steps;
 }
 
+
+// Is this offset inside the DMA channel array, and if so which channel and
+// which half of the pair?
+bool dma_slot(u32 offset, u32* channel, bool* is_length) {
+    if (offset < kMadamDmaBase) return false;
+    const u32 relative = offset - kMadamDmaBase;
+    const u32 span = kMadamDmaChannels * kMadamDmaStride;
+    if (relative >= span) return false;
+    *channel = relative / kMadamDmaStride;
+    *is_length = (relative % kMadamDmaStride) >= 4;
+    return true;
+}
+
 }  // namespace
 
 CelFormat cel_format_from_pre0(u32 pre0) {
@@ -106,6 +119,10 @@ void Madam::reset() {
     revision_ = 0;
     mem_config_ = kMadamMemConfigStock;
     vdl_address_ = 0;
+    for (u32 i = 0; i < kMadamDmaChannels; ++i) {
+        dma_address_[i] = 0;
+        dma_length_[i] = 0;
+    }
     clip_width_ = 320;
     clip_height_ = 240;
     target_address_ = kVramBase;
@@ -123,6 +140,12 @@ void Madam::set_clip(u32 width, u32 height) {
 // ---------------------------------------------------------------------------
 u32 Madam::read(u32 offset) {
     offset &= (kMadamWindowSize - 1);
+    u32 channel = 0;
+    bool is_length = false;
+    if (dma_slot(offset, &channel, &is_length)) {
+        return is_length ? dma_length_[channel] : dma_address_[channel];
+    }
+
     switch (offset) {
         case kMadamRevision:  return revision_;
         case kMadamMemConfig:  return mem_config_;
@@ -153,6 +176,17 @@ void Madam::note_write(u32 offset, u32 value) {
 void Madam::write(u32 offset, u32 value) {
     offset &= (kMadamWindowSize - 1);
     note_write(offset, value);
+    u32 channel = 0;
+    bool is_length = false;
+    if (dma_slot(offset, &channel, &is_length)) {
+        if (is_length) {
+            dma_length_[channel] = value;
+        } else {
+            dma_address_[channel] = value;
+        }
+        return;
+    }
+
     switch (offset) {
         case kMadamRevision:
             revision_ = value;
@@ -179,6 +213,15 @@ void Madam::write(u32 offset, u32 value) {
 // ---------------------------------------------------------------------------
 // Reading a CCB
 // ---------------------------------------------------------------------------
+u32 Madam::dma_address(u32 channel) const {
+    return channel < kMadamDmaChannels ? dma_address_[channel] : 0;
+}
+
+u32 Madam::dma_length(u32 channel) const {
+    return channel < kMadamDmaChannels ? dma_length_[channel] : 0;
+}
+
+
 Ccb Madam::read_ccb(u32 address) const {
     Ccb ccb;
 

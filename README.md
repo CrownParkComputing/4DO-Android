@@ -98,7 +98,7 @@ platform header, it belongs in `src/platform/` instead.
 - [ ] DSP — audio
 - [x] Disc images: ISO, BIN, CUE, with sector layout detected not assumed
 - [x] SPORT — page copy and fill; the ROM does not pass its self test without it
-- [ ] XBUS: connect the disc to the CPU so a real disc boots
+- [ ] XBUS + MADAM DMA: needed for the animated startup and for loading a disc
 - [x] Emulation on its own thread, with one pacing policy and a triple-buffered frame mailbox
 - [x] Audio output path: lock-free ring, SDL sink
 - [x] Controller: keyboard and gamepad through SDL

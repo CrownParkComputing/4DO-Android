@@ -713,10 +713,37 @@ Five different status replies were tried — complete, error, ready-with-error,
 several combinations — and none moved the machine. That is consistent with the
 reply being data in memory rather than bits in a status port.
 
-So the next piece is **XBUS together with MADAM's DMA**, and that is genuinely
-beyond what one ROM's spin loops can specify. Inventing replies here would
-produce a driver that initialises for the wrong reason and mislead everything
-built on top of it.
+### MADAM's DMA channels
+
+The layout is now known, read off the driver that programs them at DRAM
+`0x1A7FC`:
+
+    LDR r3, [r0], #4
+    STR r3, [r1, #0x18]     ; r1 = MADAM + 0x200  -> channel 3 address
+    LDR r0, [r0]
+    STR r0, [r1, #0x1C]     ;                     -> channel 3 length
+    ...
+    STR r2, [r1, #0x38]     ;                     -> channel 7 address
+    STR r0, [r1, #0x3C]!    ;                     -> channel 7 length
+
+So the channels are an array based at **MADAM `0x0200` with an eight-byte
+stride**: an address then a length. `0x218` and `0x238` are channels 3 and 7,
+which is what the expansion bus uses. The registers are implemented and
+readable; **no transfer is performed**, because what a device would place in
+that buffer depends on the command set.
+
+### The honest boundary
+
+Getting from the logo to the animated startup needs the **expansion-bus command
+set**: what a `0x8F` command means, and the shape of the reply a CD-ROM drive
+DMAs back. Everything around it is now in place and characterised — the ready
+bit, the command port, the completion bit, the DMA channels, and the knowledge
+that the reply is data in memory rather than bits in a port.
+
+What is left cannot be inferred from one ROM's spin loops, and fabricating a
+reply until the driver initialises would be actively harmful: it would produce a
+driver that works for the wrong reason, and every later conclusion would rest on
+it. That needs documentation, not more guessing.
 
 ## Still to be written
 

@@ -540,3 +540,52 @@ TEST(a_rotated_magnified_cel_has_no_holes_along_its_diagonal) {
         CHECK_EQ(read_target(bus, 40 + i, 40 + i), rgb555(31, 31, 31));
     }
 }
+
+// ---------------------------------------------------------------------------
+// DMA channel registers
+// ---------------------------------------------------------------------------
+
+TEST(dma_channels_are_address_and_length_pairs_eight_bytes_apart) {
+    // The layout comes from the ROM's own driver, which writes channel 3 at
+    // MADAM+0x218/0x21C and channel 7 at +0x238/0x23C from a base of 0x200.
+    Bus bus;
+    Madam madam(bus);
+    bus.attach_madam(&madam);
+
+    bus.write32(kMadamBase + 0x218, 0x00020C00u);
+    bus.write32(kMadamBase + 0x21C, 0x00000040u);
+    bus.write32(kMadamBase + 0x238, 0x00030000u);
+    bus.write32(kMadamBase + 0x23C, 0x00000010u);
+
+    CHECK_EQ(madam.dma_address(3), 0x00020C00u);
+    CHECK_EQ(madam.dma_length(3), 0x00000040u);
+    CHECK_EQ(madam.dma_address(7), 0x00030000u);
+    CHECK_EQ(madam.dma_length(7), 0x00000010u);
+
+    // And they read back through the bus.
+    CHECK_EQ(bus.read32(kMadamBase + 0x218), 0x00020C00u);
+    CHECK_EQ(bus.read32(kMadamBase + 0x23C), 0x00000010u);
+}
+
+TEST(dma_channels_do_not_disturb_each_other) {
+    Bus bus;
+    Madam madam(bus);
+    bus.attach_madam(&madam);
+
+    bus.write32(kMadamBase + 0x200, 0x11111111u);   // channel 0 address
+    bus.write32(kMadamBase + 0x208, 0x22222222u);   // channel 1 address
+
+    CHECK_EQ(madam.dma_address(0), 0x11111111u);
+    CHECK_EQ(madam.dma_address(1), 0x22222222u);
+    CHECK_EQ(madam.dma_length(0), 0u);
+}
+
+TEST(a_reset_clears_the_dma_channels) {
+    Bus bus;
+    Madam madam(bus);
+    bus.attach_madam(&madam);
+
+    bus.write32(kMadamBase + 0x218, 0xDEADBEEFu);
+    madam.reset();
+    CHECK_EQ(madam.dma_address(3), 0u);
+}

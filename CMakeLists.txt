@@ -30,7 +30,9 @@ add_library(retro3do_core STATIC
     src/core/frame_mailbox.cpp
     src/core/madam.cpp
     src/core/pad.cpp
+    src/core/pad_layout.cpp
     src/core/path.cpp
+    src/core/settings.cpp
     src/core/vdlp.cpp
 )
 target_include_directories(retro3do_core PUBLIC src)
@@ -104,6 +106,7 @@ set(RETRO3DO_APP_SOURCES
     src/platform/emulator_thread.cpp
     src/ui/ui.cpp
     src/ui/file_browser.cpp
+    src/ui/touch_pad.cpp
     src/platform/storage.cpp
     src/platform/android_storage.cpp
 )
@@ -156,7 +159,9 @@ if(RETRO3DO_BUILD_TESTS)
         tests/test_disc.cpp
         tests/test_frame_mailbox.cpp
         tests/test_madam.cpp
+        tests/test_pad_layout.cpp
         tests/test_path.cpp
+        tests/test_settings.cpp
         tests/test_vdlp.cpp
     )
     target_link_libraries(retro3do_tests PRIVATE retro3do_core)

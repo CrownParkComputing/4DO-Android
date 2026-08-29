@@ -7,7 +7,10 @@
 #include "core/console.h"
 #include "core/frame_mailbox.h"
 #include "core/pad.h"
+#include "core/settings.h"
 #include "platform/android_storage.h"
+#include "platform/storage.h"
+#include "ui/touch_pad.h"
 #include "platform/emulator_thread.h"
 #include "ui/ui.h"
 
@@ -51,6 +54,9 @@ App::App() = default;
 
 App::~App() {
     // Stop emulating before anything it touches goes away.
+    if (settings_ && touch_ && console_) {
+        save_settings();
+    }
     if (emulator_) emulator_->stop();
     emulator_.reset();
     ui_.reset();
@@ -87,6 +93,8 @@ bool App::init() {
 
     console_ = std::make_unique<Console>();
     mailbox_ = std::make_unique<FrameMailbox>();
+    settings_ = std::make_unique<Settings>();
+    touch_ = std::make_unique<TouchPad>();
     emulator_ = std::make_unique<EmulatorThread>(*console_, *mailbox_);
 
     ui_ = std::make_unique<Ui>();
@@ -110,6 +118,17 @@ bool App::init() {
 
     // Emulation runs on its own thread from here on. It is started paused, so
     // nothing runs until there is something to run.
+    {
+        // Lay the pad out for the screen we actually have before settings are
+        // applied, so a first run gets correct geometry rather than the
+        // constructor's placeholder.
+        int window_w = 0;
+        int window_h = 0;
+        SDL_GetRenderOutputSize(renderer_, &window_w, &window_h);
+        touch_->reset_layout(window_w, window_h);
+    }
+    load_settings();
+
     emulator_->set_paused(true);
     emulator_->start();
 
@@ -142,6 +161,18 @@ void App::handle_events() {
     while (SDL_PollEvent(&event)) {
         ui_->process_event(event);
 
+        // Touch controls get first refusal, but only when the UI is not using
+        // the pointer: otherwise a tap on a menu would also press a button
+        // hiding underneath it.
+        if (!ui_->wants_mouse()) {
+            int window_w = 0;
+            int window_h = 0;
+            SDL_GetRenderOutputSize(renderer_, &window_w, &window_h);
+            if (touch_->handle_event(event, window_w, window_h, console_->pads())) {
+                continue;
+            }
+        }
+
         switch (event.type) {
             case SDL_EVENT_QUIT:
                 running_ = false;
@@ -168,6 +199,7 @@ void App::handle_events() {
                     SDL_GetGamepadID(gamepad_) == event.gdevice.which) {
                     SDL_CloseGamepad(gamepad_);
                     gamepad_ = nullptr;
+                    touch_->set_physical_gamepad_present(false);
                 }
                 break;
 
@@ -243,6 +275,72 @@ void App::present() {
     SDL_RenderTexture(renderer_, frame_texture_, nullptr, &destination);
 }
 
+
+// ---------------------------------------------------------------------------
+// Opening files
+// ---------------------------------------------------------------------------
+//
+// A path and a document URI take different routes but mean the same thing to
+// everyone upstream, so the choice is made once, here.
+bool App::open_bios(const std::string& path, const std::string& name) {
+    if (path.empty()) return false;
+    if (AndroidStorage::available()) {
+        return console_->load_bios_fd(AndroidStorage::open_document(path),
+                                      name.empty() ? path : name);
+    }
+    return console_->load_bios(path);
+}
+
+bool App::open_disc(const std::string& path, const std::string& name) {
+    if (path.empty()) return false;
+    if (AndroidStorage::available()) {
+        return console_->load_disc_fd(AndroidStorage::open_document(path),
+                                      name.empty() ? path : name);
+    }
+    return console_->load_disc(path);
+}
+
+// ---------------------------------------------------------------------------
+// Settings
+// ---------------------------------------------------------------------------
+void App::load_settings() {
+    settings_->load(Storage::join(Storage::writable_directory(), "settings.cfg"));
+
+    console_->set_region(settings_->get_int(settings_key::kRegion, 0) == 1
+                             ? Region::Pal
+                             : Region::Ntsc);
+    touch_->load_layout(*settings_);
+
+    // Remembered files are re-opened, but a failure is not reported as an
+    // error: a SAF grant can be revoked and an iOS container is reassigned on
+    // every install, so yesterday's path being gone is ordinary rather than
+    // exceptional. It simply is not loaded, and the launcher shows why.
+    const std::string bios = settings_->get(settings_key::kBiosPath);
+    if (!bios.empty()) {
+        if (open_bios(bios, settings_->get(settings_key::kBiosName))) {
+            SDL_Log("Reopened BIOS from settings");
+        } else {
+            SDL_Log("Remembered BIOS is no longer reachable; forgetting it");
+            settings_->remove(settings_key::kBiosPath);
+            settings_->remove(settings_key::kBiosName);
+        }
+    }
+
+    const std::string disc = settings_->get(settings_key::kDiscPath);
+    if (!disc.empty()) {
+        if (!open_disc(disc, settings_->get(settings_key::kDiscName))) {
+            settings_->remove(settings_key::kDiscPath);
+            settings_->remove(settings_key::kDiscName);
+        }
+    }
+}
+
+void App::save_settings() {
+    settings_->set_int(settings_key::kRegion,
+                       console_->region() == Region::Pal ? 1 : 0);
+    touch_->save_layout(*settings_);
+    settings_->save();
+}
 
 // ---------------------------------------------------------------------------
 // Audio
@@ -328,6 +426,7 @@ void App::open_gamepad(u32 which) {
     gamepad_ = SDL_OpenGamepad(which);
     if (gamepad_ != nullptr) {
         SDL_Log("Gamepad connected: %s", SDL_GetGamepadName(gamepad_));
+        touch_->set_physical_gamepad_present(true);
     }
 }
 
@@ -357,28 +456,27 @@ void App::tick() {
     const EmulatorStats emu = emulator_->stats();
     const UiIntent intent =
         ui_->build(*console_, emulating_, smoothed_fps, emu.emulated_fps,
-                   emu.frame_ms, console_->audio().underruns());
+                   emu.frame_ms, console_->audio().underruns(), touch_->visible(),
+                   touch_->editing());
 
     if (intent.bios_chosen && !intent.bios_path.empty()) {
         // A document URI is not a path and cannot be opened by name, so it goes
         // through the system for a descriptor instead. Everything downstream is
         // the same either way.
-        const bool ok =
-            AndroidStorage::available()
-                ? console_->load_bios_fd(
-                      AndroidStorage::open_document(intent.bios_path),
-                      intent.bios_name.empty() ? intent.bios_path : intent.bios_name)
-                : console_->load_bios(intent.bios_path);
-        SDL_Log("%s", ok ? "BIOS loaded" : console_->last_error().c_str());
+        if (open_bios(intent.bios_path, intent.bios_name)) {
+            settings_->set(settings_key::kBiosPath, intent.bios_path);
+            settings_->set(settings_key::kBiosName, intent.bios_name);
+            settings_->save();
+            SDL_Log("BIOS loaded");
+        } else {
+            SDL_Log("%s", console_->last_error().c_str());
+        }
     }
     if (intent.disc_chosen && !intent.disc_path.empty()) {
-        const bool ok =
-            AndroidStorage::available()
-                ? console_->load_disc_fd(
-                      AndroidStorage::open_document(intent.disc_path),
-                      intent.disc_name.empty() ? intent.disc_path : intent.disc_name)
-                : console_->load_disc(intent.disc_path);
-        if (ok) {
+        if (open_disc(intent.disc_path, intent.disc_name)) {
+            settings_->set(settings_key::kDiscPath, intent.disc_path);
+            settings_->set(settings_key::kDiscName, intent.disc_name);
+            settings_->save();
             SDL_Log("Disc inserted (%u sectors)", console_->disc().sector_count());
         } else {
             SDL_Log("%s", console_->last_error().c_str());
@@ -409,6 +507,22 @@ void App::tick() {
         emulating_ = !emulating_;
         emulator_->set_paused(!emulating_);
     }
+    if (intent.toggle_touch_controls) {
+        touch_->set_visible(!touch_->visible());
+        if (!touch_->visible()) touch_->set_editing(false);
+        save_settings();
+    }
+    if (intent.toggle_layout_edit) {
+        touch_->set_editing(!touch_->editing());
+        if (!touch_->editing()) save_settings();
+    }
+    if (intent.reset_touch_layout) {
+        int window_w = 0;
+        int window_h = 0;
+        SDL_GetRenderOutputSize(renderer_, &window_w, &window_h);
+        touch_->reset_layout(window_w, window_h);
+        save_settings();
+    }
     if (intent.quit) {
         running_ = false;
     }
@@ -416,6 +530,18 @@ void App::tick() {
     SDL_SetRenderDrawColor(renderer_, 8, 8, 10, 255);
     SDL_RenderClear(renderer_);
     present();
+
+    // Over the picture, under the menus: the controls belong to the game, not
+    // to the launcher.
+    {
+        int window_w = 0;
+        int window_h = 0;
+        SDL_GetRenderOutputSize(renderer_, &window_w, &window_h);
+        if (emulating_ || touch_->editing()) {
+            touch_->draw(renderer_, window_w, window_h);
+        }
+    }
+
     ui_->render(renderer_);
     SDL_RenderPresent(renderer_);
 }

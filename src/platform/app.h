@@ -22,6 +22,8 @@ namespace retro3do {
 
 class Console;
 class Ui;
+class Settings;
+class TouchPad;
 class FrameMailbox;
 class EmulatorThread;
 
@@ -53,6 +55,10 @@ private:
     void feed_audio();
     void apply_keyboard(int scancode, bool down);
     void open_gamepad(u32 which);
+    void load_settings();
+    void save_settings();
+    bool open_bios(const std::string& path, const std::string& name);
+    bool open_disc(const std::string& path, const std::string& name);
     void present();
     void ensure_frame_texture(int width, int height);
 
@@ -65,6 +71,8 @@ private:
     std::unique_ptr<Console> console_;
     std::unique_ptr<Ui> ui_;
     std::unique_ptr<FrameMailbox> mailbox_;
+    std::unique_ptr<Settings> settings_;
+    std::unique_ptr<TouchPad> touch_;
     std::unique_ptr<EmulatorThread> emulator_;
 
     SDL_AudioStream* audio_stream_ = nullptr;

@@ -73,7 +73,8 @@ bool Ui::wants_keyboard() const {
 }
 
 UiIntent Ui::build(Console& console, bool emulating, double display_fps,
-                   double emulated_fps, double frame_ms, u64 underruns) {
+                   double emulated_fps, double frame_ms, u64 underruns,
+                   bool touch_visible, bool touch_editing) {
     UiIntent intent;
     if (!initialised_) {
         return intent;
@@ -87,7 +88,7 @@ UiIntent Ui::build(Console& console, bool emulating, double display_fps,
         draw_launcher(console, intent);
     } else {
         draw_overlay(console, display_fps, emulated_fps, frame_ms, underruns,
-                     intent);
+                     touch_visible, touch_editing, intent);
     }
 
     ImGui::Render();
@@ -237,7 +238,7 @@ void Ui::draw_launcher(Console& console, UiIntent& intent) {
 
 void Ui::draw_overlay(Console& console, double display_fps,
                       double emulated_fps, double frame_ms, u64 underruns,
-                      UiIntent& intent) {
+                      bool touch_visible, bool touch_editing, UiIntent& intent) {
     const ImGuiViewport* viewport = ImGui::GetMainViewport();
     ImGui::SetNextWindowPos(
         ImVec2(viewport->WorkPos.x + 12.0f, viewport->WorkPos.y + 12.0f));
@@ -274,6 +275,27 @@ void Ui::draw_overlay(Console& console, double display_fps,
     ImGui::SameLine();
     if (ImGui::Button("Reset")) {
         intent.reset = true;
+    }
+
+    ImGui::Separator();
+    if (ImGui::Button(touch_visible ? "Hide pad" : "Show pad")) {
+        intent.toggle_touch_controls = true;
+    }
+    if (touch_visible) {
+        ImGui::SameLine();
+        // Layout mode makes dragging move the controls instead of pressing
+        // them, which is the only way to fix a layout that does not suit a
+        // particular pair of hands or a particular phone.
+        if (ImGui::Button(touch_editing ? "Done" : "Move pad")) {
+            intent.toggle_layout_edit = true;
+        }
+        if (touch_editing) {
+            ImGui::SameLine();
+            if (ImGui::Button("Reset pad")) {
+                intent.reset_touch_layout = true;
+            }
+            ImGui::TextDisabled("Drag the controls where you want them.");
+        }
     }
 
     ImGui::End();

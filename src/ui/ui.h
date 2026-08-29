@@ -31,6 +31,9 @@ struct UiIntent {
     std::string disc_path;
     std::string disc_name;
     bool eject = false;
+    bool toggle_touch_controls = false;
+    bool toggle_layout_edit = false;
+    bool reset_touch_layout = false;
 };
 
 class Ui {
@@ -56,7 +59,8 @@ public:
     // shown, because a machine running at half speed behind a perfectly smooth
     // window is precisely the failure the previous core made invisible.
     UiIntent build(Console& console, bool emulating, double display_fps,
-                   double emulated_fps, double frame_ms, u64 underruns);
+                   double emulated_fps, double frame_ms, u64 underruns,
+                   bool touch_visible, bool touch_editing);
 
     // Draw the built UI over whatever the app has already presented.
     void render(SDL_Renderer* renderer);
@@ -65,7 +69,7 @@ private:
     void draw_launcher(Console& console, UiIntent& intent);
     void draw_overlay(Console& console, double display_fps,
                       double emulated_fps, double frame_ms, u64 underruns,
-                      UiIntent& intent);
+                      bool touch_visible, bool touch_editing, UiIntent& intent);
 
     FileBrowser browser_;
     // Which field the browser is filling in. Without this, a picked file has

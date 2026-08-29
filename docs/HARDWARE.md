@@ -368,6 +368,58 @@ descriptor gives no way to reach. That is refused with a message saying to open
 the image instead, which beats opening the cue as though it were an image and
 then reporting a corrupt disc.
 
+## On-screen controls (`src/core/pad_layout.cpp`, `src/ui/touch_pad.cpp`)
+
+A phone has no buttons. Without these the emulator is unplayable on the platform
+it is mainly for, however well it runs.
+
+Positions are fractions of the play area rather than pixels, because a phone, a
+foldable and a tablet have wildly different screens and a pixel layout that suits
+one is off the edge of another. The layout arithmetic lives in `core` so it can
+be tested without a window — a separation that earned itself immediately, since
+both of the following were invisible in the code and obvious the moment the pad
+was rendered:
+
+- **x is a fraction of width and y a fraction of height, so equal fractional
+  offsets are not equal distances.** Laying a d-pad out with matching offsets
+  stretches it into a wide diamond on any widescreen phone. Offsets are now
+  given in units of the smaller dimension and converted per axis, which is why
+  the layout needs the aspect ratio and cannot be a static table.
+- **A cluster centre must sit at least (spread + radius) from the edge**, or its
+  outermost control hangs off the screen — unpressable, and in layout mode
+  undraggable, so there is no way to recover.
+
+Tests assert both across five screen shapes including portrait, plus that no two
+controls overlap (a touch resolves to exactly one, so an overlap makes one of
+them unreachable).
+
+Touches are tracked **per finger**. A player will hold a direction and press a
+button at the same time, and taking only the most recent touch would make that
+impossible. A mouse is treated as one more finger with an id no real touch uses,
+which makes the controls testable on a desktop.
+
+Layout mode makes dragging move controls instead of pressing them, clamped to
+the screen. A stored position outside 0..1 is rejected on load rather than
+applied, so a layout file from another build cannot strand a control somewhere
+unreachable.
+
+## Settings (`src/core/settings.cpp`)
+
+A flat key/value file. Nothing here warrants a schema, and a text file can be
+read and repaired by hand on a device with no debugger attached.
+
+Only the **first** `=` separates key from value: a SAF content URI routinely
+contains one, so splitting on the last would truncate every Android path. A
+value that is not entirely a number falls back to the caller's default rather
+than becoming zero, so a corrupted line does not quietly look like a valid
+setting.
+
+**Remembered paths are stored but never trusted.** A SAF grant can be revoked
+from system settings and an iOS container is reassigned on every install, so a
+path that worked yesterday may be meaningless today. On load the app tries the
+remembered BIOS and disc and, if they no longer resolve, forgets them silently —
+that is ordinary rather than exceptional and should not be reported as an error.
+
 ## Still to be written
 
 The DSP, SPORT, and the XBUS interface through which the machine actually asks

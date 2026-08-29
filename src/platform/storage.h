@@ -38,6 +38,9 @@ public:
     // The parent of a directory, or an empty string if there is none.
     static std::string parent_of(const std::string& path);
 
+    // The last component of a path, which is what a user recognises a file by.
+    static std::string base_name(const std::string& path);
+
     static bool is_directory(const std::string& path);
     static bool exists(const std::string& path);
 };

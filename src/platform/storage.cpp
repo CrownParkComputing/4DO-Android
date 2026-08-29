@@ -82,6 +82,11 @@ std::string Storage::join(const std::string& base, const std::string& leaf) {
     return path::join(base, leaf);
 }
 
+std::string Storage::base_name(const std::string& path) {
+    const size_t slash = path.find_last_of("/\\");
+    return slash == std::string::npos ? path : path.substr(slash + 1);
+}
+
 std::string Storage::parent_of(const std::string& path) {
     return path::parent(path);
 }

@@ -324,6 +324,11 @@ bool App::open_disc(const std::string& path, const std::string& name) {
 // ---------------------------------------------------------------------------
 // Settings
 // ---------------------------------------------------------------------------
+void App::set_launch_files(std::string bios, std::string disc) {
+    launch_bios_ = std::move(bios);
+    launch_disc_ = std::move(disc);
+}
+
 void App::load_settings() {
     settings_->load(Storage::join(Storage::writable_directory(), "settings.cfg"));
 
@@ -336,10 +341,14 @@ void App::load_settings() {
     // error: a SAF grant can be revoked and an iOS container is reassigned on
     // every install, so yesterday's path being gone is ordinary rather than
     // exceptional. It simply is not loaded, and the launcher shows why.
-    const std::string bios = settings_->get(settings_key::kBiosPath);
+    const std::string bios = launch_bios_.empty()
+                                 ? settings_->get(settings_key::kBiosPath)
+                                 : launch_bios_;
     ui_->set_remembered_bios(settings_->get(settings_key::kBiosName), bios);
     if (!bios.empty()) {
-        if (open_bios(bios, settings_->get(settings_key::kBiosName))) {
+        if (open_bios(bios, launch_bios_.empty()
+                                ? settings_->get(settings_key::kBiosName)
+                                : Storage::base_name(launch_bios_))) {
             SDL_Log("Reopened BIOS from settings");
             // Start straight away. Having to press Start on every launch when
             // the machine already has everything it needs is a chore, and it
@@ -352,10 +361,14 @@ void App::load_settings() {
         }
     }
 
-    const std::string disc = settings_->get(settings_key::kDiscPath);
+    const std::string disc = launch_disc_.empty()
+                                 ? settings_->get(settings_key::kDiscPath)
+                                 : launch_disc_;
     ui_->set_remembered_disc(settings_->get(settings_key::kDiscName), disc);
     if (!disc.empty()) {
-        if (!open_disc(disc, settings_->get(settings_key::kDiscName))) {
+        if (!open_disc(disc, launch_disc_.empty()
+                                 ? settings_->get(settings_key::kDiscName)
+                                 : Storage::base_name(launch_disc_))) {
             settings_->remove(settings_key::kDiscPath);
             settings_->remove(settings_key::kDiscName);
         }

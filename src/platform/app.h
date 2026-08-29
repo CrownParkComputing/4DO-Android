@@ -37,6 +37,12 @@ public:
 
     // Bring up SDL, the window and the renderer. Returns false and sets
     // last_error() if anything the app cannot run without is missing.
+    // Files named on the command line, which override anything remembered from
+    // a previous run. Desktop-only in practice - Android and iOS have no
+    // argv worth reading - but it is what makes the emulator scriptable, and
+    // scriptable is what makes it testable outside a GUI.
+    void set_launch_files(std::string bios, std::string disc);
+
     bool init();
 
     // Run until the user quits. Returns the process exit code.
@@ -78,6 +84,8 @@ private:
     SDL_AudioStream* audio_stream_ = nullptr;
     SDL_Gamepad* gamepad_ = nullptr;
 
+    std::string launch_bios_;
+    std::string launch_disc_;
     bool start_on_launch_ = false;
     bool running_ = false;
     bool emulating_ = false;

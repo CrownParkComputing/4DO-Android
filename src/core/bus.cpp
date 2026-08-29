@@ -5,6 +5,7 @@
 
 #include "clio.h"
 #include "madam.h"
+#include "sport.h"
 
 namespace retro3do {
 namespace {
@@ -83,7 +84,7 @@ u32 Bus::read32(u32 address) {
     }
     if (addr >= kSportBase && addr < kSportBase + kSportSize) {
         ++sport_accesses_;
-        return 0;
+        return sport_ != nullptr ? sport_->read(addr - kSportBase) : 0;
     }
     if (madam_ != nullptr && addr >= kMadamBase && addr < kMadamBase + kMadamSize) {
         return madam_->read(addr - kMadamBase);
@@ -163,6 +164,7 @@ void Bus::write32(u32 address, u32 value) {
     }
     if (addr >= kSportBase && addr < kSportBase + kSportSize) {
         ++sport_accesses_;
+        if (sport_ != nullptr) sport_->write(addr - kSportBase, value);
         return;
     }
     if (madam_ != nullptr && addr >= kMadamBase && addr < kMadamBase + kMadamSize) {

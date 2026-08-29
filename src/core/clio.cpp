@@ -60,6 +60,7 @@ void Clio::reset() {
     scanline_ = 0;
     pixel_in_line_ = 0;
     field_complete_ = false;
+    field_odd_ = false;
 
     mode_ = 0;
     csys_bits_ = 0;
@@ -130,6 +131,9 @@ void Clio::tick(u32 cycles) {
         if (scanline_ >= scanlines_per_field_) {
             scanline_ = 0;
             field_complete_ = true;
+            // Interlaced: the two fields alternate, and the ROM waits on this
+            // flag to synchronise with a particular one.
+            field_odd_ = !field_odd_;
         }
     }
 }
@@ -184,7 +188,9 @@ u32 Clio::read(u32 offset) {
         case kClioVint1:       return vint1_line_;
         case kClioCstatBits:   return cstat_bits_;
         case kClioWatchdog:    return watchdog_;
-        case kClioVCount:      return scanline_ & kClioLineMask;
+        case kClioVCount:
+            return (scanline_ & kClioLineMask) |
+                   (field_odd_ ? kClioFieldFlag : 0u);
         case kClioHCount:      return pixel_in_line_;
         case kClioSeed:        return seed_;
 

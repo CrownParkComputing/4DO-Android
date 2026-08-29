@@ -19,15 +19,16 @@ namespace retro3do {
 
 class Madam;
 class Clio;
+class Sport;
 
 // ---------------------------------------------------------------------------
 // Memory map
 // ---------------------------------------------------------------------------
 enum : u32 {
     kDramBase = 0x00000000,
-    kDramSize = 2u * 1024 * 1024,   // stock 3DO; expandable on some units
+    kDramSize = 1u * 1024 * 1024,   // EXPERIMENT
 
-    kVramBase = 0x00200000,
+    kVramBase = 0x00100000,
     kVramSize = 1u * 1024 * 1024,
 
     kRomBase  = 0x03000000,         // BIOS. Also the reset vector.
@@ -93,6 +94,7 @@ public:
 
     void attach_madam(Madam* madam) { madam_ = madam; }
     void attach_clio(Clio* clio) { clio_ = clio; }
+    void attach_sport(Sport* sport) { sport_ = sport; }
 
     // Load a BIOS image. Returns false if the image is missing or too large.
     bool load_bios(const u8* data, size_t size);
@@ -136,6 +138,7 @@ private:
 
     Madam* madam_ = nullptr;
     Clio*  clio_  = nullptr;
+    Sport* sport_ = nullptr;
 
     WriteWatch write_watch_;
     u64 sport_accesses_ = 0;

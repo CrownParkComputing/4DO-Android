@@ -54,8 +54,8 @@ mistaken for a fall-through. Every handler that writes PC says so explicitly.
 
 | Region | Base | Size | Confidence |
 |---|---|---|---|
-| DRAM | `0x00000000` | 2 MB | Confident |
-| VRAM | `0x00200000` | 1 MB | Confident |
+| DRAM | `0x00000000` | 1 MB | See below |
+| VRAM | `0x00100000` | 1 MB | See below |
 | ROM (BIOS, reset vector) | `0x03000000` | 1 MB | Confident |
 | NVRAM | `0x03140000` | 32 KB | **TODO(map)** — confirm base and stride |
 | MADAM | `0x03300000` | — | **Confirmed** by the boot ROM |
@@ -463,7 +463,20 @@ VRAM. It then reaches a panic handler again — an `STMDB` into MADAM followed b
 a branch to itself — with `0xFFEEFFEE` in a register, which has the look of a
 memory-test pattern. That is the next thing to chase.
 
-### Where it stops now: SPORT
+### The memory map, corrected by the ROM
+
+VRAM was at `0x00200000` with 2 MB of DRAM below it, which is the commonly
+cited layout. The boot ROM disagrees. Its memory test fills and verifies at
+`r0 + literal` with **`r0 = 0x00100000`**, while naming SPORT pages from the
+bare literal with no base added — and the two only reconcile if VRAM begins at
+`0x00100000`. Moving it there, with DRAM as 1 MB and MADAM's memory
+configuration reporting `0x21`, is what makes the ROM's own self-test pass.
+
+This is recorded as evidence rather than as settled fact: it is what this ROM
+requires, and it conflicts with the usual description of a 2 MB machine. If a
+later finding explains `r0` differently, this is the thing to revisit.
+
+### SPORT
 
 An earlier reading of this concluded the DSP was the blocker. That was wrong,
 and the way it was wrong is worth keeping. The panic handler at DRAM `0x178` is
@@ -491,9 +504,32 @@ Nothing was mapped at `0x03200000`, so the SPORT writes went nowhere and the
 readback could not match. The region is now mapped and its accesses counted —
 silently dropping them is exactly what made this hard to find.
 
-SPORT itself is still not implemented: the page size, and which operation a
-given address selects, are not yet established. That is the next piece of
-hardware to work out, and it is ahead of both the DSP and XBUS.
+SPORT is now implemented, and the ROM's own test is what documents it. There
+are three windows inside the region:
+
+| Offset | Meaning |
+|---|---|
+| `+0x0000 + page` | Copy. A **read** latches the source page; a **write** copies the latched page here, under the mask written. |
+| `+0x2000` | The fill value. A single register, not paged. |
+| `+0x4000 + page` | Fill. A **write** fills this page with the fill value, under the mask written. |
+
+A page index is a VRAM offset shifted right by nine, so `page << 9` is the
+byte offset — and those offsets are **relative to VRAM, not absolute**, which
+was the hardest part to see. A page is **2048 bytes**, fixed by the test reading
+back and comparing exactly 512 words.
+
+The mask matters: a destination bit is replaced only where the mask is set,
+which is what lets SPORT write one bitplane without disturbing the others.
+
+**CLIO's line register carries a field flag in bit 11**, above the eleven-bit
+line number. The ROM waits on it directly — `TST r2, #0x800`, spin, then mask
+with `0x7FF` and wait for a particular line — so masking it off makes that wait
+never finish.
+
+With SPORT, the map correction and the field flag in place, the ROM **passes its
+power-on self test**: three billion instructions with no panic, reaching much
+deeper code (`0x1CCC0` rather than `0x10AC`) and writing 35 KB of VRAM rather
+than 2 KB. It still does not set a display list, so there is no picture yet.
 
 A useful thing to recognise: the routine at DRAM `0x100` is a **nested delay
 loop**, not a hang, and its inner count is chosen by comparing PC against

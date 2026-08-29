@@ -66,7 +66,19 @@ enum : u32 {
     // frame, not pixel positions.
     kClioVCount       = 0x0034,
     kClioHCount       = 0x0038,   // TODO(clio): position within the line
+
+    // The line number occupies the low eleven bits. Bit 11 above it is the
+    // FIELD flag - the ROM waits on it directly:
+    //
+    //   LDR r2, [r0, #0x34]
+    //   TST r2, #0x800
+    //   BEQ  -4              ; spin until the flag is set
+    //   AND r2, r2, #0x7FF
+    //   CMP r2, #4           ; then wait for line 4 of that field
+    //
+    // Masking it off, as an earlier version did, makes that wait never finish.
     kClioLineMask     = 0x07ff,
+    kClioFieldFlag    = 0x0800,
     kClioSeed         = 0x003c,
 
     // Interrupt bank 0. Reads give pending; writes set or clear.
@@ -170,6 +182,7 @@ private:
     u32 scanlines_per_field_ = 263;
 
     bool field_complete_ = false;
+    bool field_odd_ = false;
 
     u32 revision_ = 0;
     u32 mode_ = 0;

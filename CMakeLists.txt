@@ -34,6 +34,7 @@ add_library(retro3do_core STATIC
     src/core/pad_layout.cpp
     src/core/path.cpp
     src/core/settings.cpp
+    src/core/sport.cpp
     src/core/vdlp.cpp
 )
 target_include_directories(retro3do_core PUBLIC src)
@@ -164,6 +165,7 @@ if(RETRO3DO_BUILD_TESTS)
         tests/test_pad_layout.cpp
         tests/test_path.cpp
         tests/test_settings.cpp
+        tests/test_sport.cpp
         tests/test_vdlp.cpp
     )
     target_link_libraries(retro3do_tests PRIVATE retro3do_core)

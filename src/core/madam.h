@@ -65,7 +65,7 @@ enum : u32 {
 
 // The stock configuration: 2 MB DRAM, 1 MB VRAM, derived from the ROM's own
 // decode above.
-constexpr u32 kMadamMemConfigStock = 0x29;
+constexpr u32 kMadamMemConfigStock = 0x21;
 
 // Flags in the CCB's first word. Only the ones acted on are named.
 enum : u32 {

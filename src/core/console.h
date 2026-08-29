@@ -18,6 +18,7 @@
 #include "clio.h"
 #include "madam.h"
 #include "pad.h"
+#include "sport.h"
 #include "vdlp.h"
 #include "types.h"
 
@@ -78,6 +79,7 @@ public:
     Clio& clio() { return clio_; }
     Vdlp& vdlp() { return vdlp_; }
     Madam& madam() { return madam_; }
+    Sport& sport() { return sport_; }
     PadState& pads() { return pads_; }
     AudioRing& audio() { return audio_; }
 
@@ -91,6 +93,7 @@ private:
     Clio  clio_;
     Vdlp  vdlp_;
     Madam madam_;
+    Sport sport_;
     Disc  disc_;
     PadState  pads_;
     AudioRing audio_;

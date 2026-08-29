@@ -316,3 +316,14 @@
 585	595	1787979976546059347	retro3do/libretro3do_core.a	804f3d994c413726
 6	705	1787979976643060172	retro3do/CMakeFiles/retro3do.dir/src/platform/app.cpp.o	7f37a80e9bf9fbb8
 706	751	1787979976697060631	/home/jon/StudioProjects/Retro-3DO/android/app/build/intermediates/cxx/Debug/2w1l2e5o/obj/arm64-v8a/libmain.so	d14a1e9889fa0d55
+0	7	0	/home/jon/StudioProjects/Retro-3DO/android/app/.cxx/Debug/2w1l2e5o/arm64-v8a/CMakeFiles/cmake.verify_globs	c42e1161cd59a99c
+7	447	1787980202978959849	retro3do/CMakeFiles/retro3do_core.dir/src/core/vdlp.cpp.o	24508dfdf0da0a6e
+6	483	1787980203013960140	retro3do/CMakeFiles/retro3do_core.dir/src/core/bus.cpp.o	8b4db56e3ebab724
+7	493	1787980203023960223	retro3do/CMakeFiles/retro3do_core.dir/src/core/madam.cpp.o	22c55ba8860d3d1c
+6	535	1787980203066960580	retro3do/CMakeFiles/retro3do_core.dir/src/core/console.cpp.o	553f1e5e41410f2e
+6	679	1787980203209961766	retro3do/CMakeFiles/retro3do_core.dir/src/core/arm60.cpp.o	63289e1483b37a19
+679	689	1787980203227961915	retro3do/libretro3do_core.a	804f3d994c413726
+7	698	1787980203228961923	retro3do/CMakeFiles/retro3do.dir/src/ui/ui.cpp.o	5f811b76b1b0b83
+7	743	1787980203271962280	retro3do/CMakeFiles/retro3do.dir/src/platform/app.cpp.o	7f37a80e9bf9fbb8
+7	747	1787980203278962338	retro3do/CMakeFiles/retro3do.dir/src/platform/emulator_thread.cpp.o	497589261ec9d6b0
+747	792	1787980203326962736	/home/jon/StudioProjects/Retro-3DO/android/app/build/intermediates/cxx/Debug/2w1l2e5o/obj/arm64-v8a/libmain.so	d14a1e9889fa0d55

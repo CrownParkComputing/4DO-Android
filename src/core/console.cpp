@@ -25,9 +25,10 @@ u32 cycles_per_scanline(Region region) {
 
 }  // namespace
 
-Console::Console() : cpu_(bus_), clio_(cpu_), vdlp_(bus_), madam_(bus_) {
+Console::Console() : cpu_(bus_), clio_(cpu_), vdlp_(bus_), madam_(bus_), sport_(bus_) {
     bus_.attach_clio(&clio_);
     bus_.attach_madam(&madam_);
+    bus_.attach_sport(&sport_);
     set_region(Region::Ntsc);
     reset();
 }
@@ -154,6 +155,7 @@ void Console::reset() {
     clio_.reset();
     vdlp_.reset();
     madam_.reset();
+    sport_.reset();
     pads_.reset();
     audio_.reset();
     frame_count_ = 0;

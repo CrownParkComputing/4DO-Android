@@ -29,6 +29,7 @@ import android.view.SurfaceHolder;
 import android.view.SurfaceView;
 import android.view.View;
 import android.view.ViewGroup;
+import android.view.Window;
 import android.view.WindowManager;
 import android.widget.ArrayAdapter;
 import android.widget.Button;
@@ -48,6 +49,9 @@ import android.window.OnBackInvokedDispatcher;
 
 import androidx.annotation.NonNull;
 import androidx.appcompat.app.AppCompatActivity;
+import androidx.core.view.WindowCompat;
+import androidx.core.view.WindowInsetsCompat;
+import androidx.core.view.WindowInsetsControllerCompat;
 import androidx.appcompat.widget.SwitchCompat;
 
 import java.io.BufferedReader;
@@ -308,10 +312,33 @@ public final class MainActivity extends AppCompatActivity {
         registerBackHandler();
     }
 
+    /**
+     * Targeting API 36 forces edge-to-edge: windowFullscreen, statusBarColor and
+     * navigationBarColor in the theme are all ignored, so the bars come back and sit
+     * over the video unless they are hidden through the inset controller instead.
+     * shortEdges keeps the picture full-bleed on notched devices in landscape.
+     */
+    private void applyFullscreenWindowMode() {
+        Window window = getWindow();
+        WindowCompat.setDecorFitsSystemWindows(window, false);
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {
+            window.getAttributes().layoutInDisplayCutoutMode =
+                    WindowManager.LayoutParams.LAYOUT_IN_DISPLAY_CUTOUT_MODE_SHORT_EDGES;
+        }
+        WindowInsetsControllerCompat controller =
+                WindowCompat.getInsetsController(window, window.getDecorView());
+        controller.setSystemBarsBehavior(
+                WindowInsetsControllerCompat.BEHAVIOR_SHOW_TRANSIENT_BARS_BY_SWIPE);
+        controller.hide(WindowInsetsCompat.Type.systemBars());
+    }
+
     @Override
     public void onWindowFocusChanged(boolean hasFocus) {
         super.onWindowFocusChanged(hasFocus);
         if (hasFocus) {
+            // A transient bar swipe, or returning from the picker, leaves the bars
+            // showing; re-hide them the way the sticky-immersive flags used to.
+            applyFullscreenWindowMode();
             resizeScreenSurface();
         }
     }
@@ -461,6 +488,7 @@ public final class MainActivity extends AppCompatActivity {
     private void configureWindowAndLayout() {
         DeviceOrientationManager.setOptimalEmulatorOrientation(this);
         getWindow().addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON);
+        applyFullscreenWindowMode();
         try {
             appVersion = getPackageManager().getPackageInfo(getPackageName(), 0).versionName;
         } catch (Exception e) {

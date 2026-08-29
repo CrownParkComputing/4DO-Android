@@ -6,14 +6,14 @@ def releaseKeystoreFile = releaseKeystorePath ? file(releaseKeystorePath) : loca
 
 android {
     namespace "com.fourdo.android"
-    compileSdk 35
+    compileSdk 36
 
     defaultConfig {
         applicationId "com.fourdo.android"
         minSdk 24
-        targetSdk 35
-        versionCode 12
-        versionName "2.0.10"
+        targetSdk 36
+        versionCode 13
+        versionName "2.0.11"
 
         buildConfigField "String", "IGDB_CLIENT_ID", "\"r1xsns8dbmeb0xxualwaotref8o9ti\""
         buildConfigField "String", "IGDB_CLIENT_SECRET", "\"d30omhdyjuebh9h8c6jvg5cntz75n7\""
@@ -70,7 +70,8 @@ android {
 }
 
 dependencies {
-    implementation 'androidx.appcompat:appcompat:1.6.1'
+    implementation 'androidx.appcompat:appcompat:1.7.0'
+    implementation 'androidx.core:core:1.13.1'
     implementation 'androidx.documentfile:documentfile:1.0.1'
     implementation 'com.google.android.material:material:1.11.0'
     // 7zip extraction support

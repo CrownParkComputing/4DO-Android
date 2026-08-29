@@ -9,6 +9,10 @@ import android.os.AsyncTask;
 import android.os.Bundle;
 import android.provider.DocumentsContract;
 import android.view.View;
+
+import androidx.core.graphics.Insets;
+import androidx.core.view.ViewCompat;
+import androidx.core.view.WindowInsetsCompat;
 import android.widget.Button;
 import android.widget.LinearLayout;
 import android.widget.TextView;
@@ -71,6 +75,7 @@ public class SetupWizardActivity extends AppCompatActivity {
     protected void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
         setContentView(R.layout.activity_setup_wizard);
+        applySystemBarInsets();
 
         // Use landscape orientation
         DeviceOrientationManager.setLandscapeOrientation(this);
@@ -591,6 +596,21 @@ public class SetupWizardActivity extends AppCompatActivity {
     public static boolean isSetupCompleted(Context context) {
         SharedPreferences prefs = context.getSharedPreferences(MainActivity.PREFS_NAME, Context.MODE_PRIVATE);
         return prefs.getBoolean("setup_completed", false);
+    }
+
+    /**
+     * Targeting API 36 forces edge-to-edge, and AppTheme's windowFullscreen no longer
+     * keeps the system bars out of the way. Without this the wizard's title sits under
+     * the status bar and its Next/Back buttons under the navigation bar.
+     */
+    private void applySystemBarInsets() {
+        View content = findViewById(android.R.id.content);
+        ViewCompat.setOnApplyWindowInsetsListener(content, (view, windowInsets) -> {
+            Insets bars = windowInsets.getInsets(
+                    WindowInsetsCompat.Type.systemBars() | WindowInsetsCompat.Type.displayCutout());
+            view.setPadding(bars.left, bars.top, bars.right, bars.bottom);
+            return windowInsets;
+        });
     }
 
     public static void start(Context context) {

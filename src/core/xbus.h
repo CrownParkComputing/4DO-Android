@@ -41,6 +41,32 @@ enum : u32 {
     kPollNoChunk        = 1u << 5,  // ChunkValid-: HIGH when no complete chunk
 };
 
+// The drive's command set. It is a Panasonic CR-560B on a pre-IDE MKE
+// interface, which is what MAME's 3do machine fits and what the FZ-1 and FZ-10
+// actually contain. Commands and reply shapes follow MAME's cr560b device
+// (BSD-3-Clause, Angelo Salese) - see docs/THIRD_PARTY.md.
+//
+// Two independent lines of evidence agree on the shape, which is worth
+// recording because each was reached separately: sweeping the reply against the
+// real boot ROM showed the first byte must ECHO the command, and MAME's own
+// notes say "all commands but cmd_reset and cmd_read_subq acknowledge command
+// byte issued in first output return byte". Likewise the twelve byte length of
+// the version reply was measured from the ROM before it was read here.
+enum : u8 {
+    kCmdSeek          = 0x01,
+    kCmdMotorOn       = 0x02,
+    kCmdMotorOff      = 0x03,
+    kCmdReadStatus    = 0x05,
+    kCmdSetMode       = 0x09,
+    kCmdPlayMsf       = 0x0e,
+    kCmdPlayTrack     = 0x0f,
+    kCmdRead          = 0x10,
+    kCmdDataPathCheck = 0x80,
+    kCmdReadError     = 0x82,
+    kCmdVersion       = 0x83,
+    kCmdReadCapacity  = 0x85,
+};
+
 // Drive status byte, from The 3DO Company's own SDK header <cdrom.h>. The bus
 // patent only defines ERROR; the remaining bits belong to the device, and this
 // is the device's own published definition of them. Note that ERROR falls at
@@ -48,10 +74,12 @@ enum : u32 {
 enum : u32 {
     kStatusReady        = 0x01,
     kStatusDoubleSpeed  = 0x02,
+    kStatusPlaying      = 0x04,
+    kStatusSuccess      = 0x08,
     kStatusError        = 0x10,
-    kStatusSpinUp       = 0x20,
-    kStatusDiscIn       = 0x40,
-    kStatusDoor         = 0x80,
+    kStatusSpinUp       = 0x20,   // motor
+    kStatusDiscIn       = 0x40,   // media present
+    kStatusDoor         = 0x80,   // door closed
 };
 
 // The bus supports sixteen devices, addressed 0..15. A device takes its address
@@ -103,6 +131,11 @@ public:
     void tick(u32 cycles) override;
     void reset() override;
     u8 drive_status() const;
+
+private:
+    void build_reply(u8 command);
+
+public:
     const char* name() const override { return "CD-ROM"; }
 
     // Whether a disc is in the drive. With none, commands still complete; they
@@ -144,13 +177,15 @@ public:
     // finishes writing a command it reads RD_STAT exactly ten times, from a
     // single instruction, without consulting the poll register between reads -
     // so the reply length is fixed and the driver already knows it.
-    // How many bytes the drive returns. Measured rather than guessed: over-
-    // supply the FIFO and the driver stops at exactly the count it expects.
-    static constexpr size_t kReplyBytes = 12;
+    // The version reply is twelve bytes. Measured from the boot ROM before it
+    // was confirmed against MAME: over-supply the FIFO and the driver stops at
+    // exactly the count it expects.
+    static constexpr size_t kVersionReplyBytes = 12;
 
 private:
     std::deque<u8> status_;
     std::deque<u8> pending_;   // bytes of the command still being assembled
+    std::vector<u8> pending_reply_;  // reply waiting for the drive to answer
 
     // A command has been acknowledged but has not yet reported completion.
     // Work in flight, and how long until the drive reports it. The exact figure
@@ -162,6 +197,7 @@ private:
     bool interrupt_request_  = false;
     bool disc_present_ = false;
     bool media_changed_ = false;
+    bool motor_on_ = false;
     u64 commands_ = 0;
     u8 last_command_ = 0;
     std::vector<u8> last_command_bytes_;

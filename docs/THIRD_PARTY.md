@@ -36,6 +36,24 @@ value written rather than by the address written to.
 > ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE
 > POSSIBILITY OF SUCH DAMAGE.
 
+## MAME's CR-560B device — BSD-3-Clause
+
+The CD-ROM drive model in `src/core/xbus.cpp` follows MAME's `cr560b` device
+(`src/devices/machine/cr560b.cpp`), copyright Angelo Salese, BSD-3-Clause. The
+drive is a Panasonic CR-560B on a pre-IDE MKE interface - the drive the FZ-1 and
+FZ-10 actually contain - and that device is where its command set is written
+down. Nothing else consulted here documents it: not the patents, not The 3DO
+Company's SDK, not the community register map.
+
+Taken from it: the command opcodes, that every command echoes its opcode in the
+first reply byte, the shape of the version and data-path-check replies, and the
+drive status bits.
+
+Worth recording that two of those were established here independently first, by
+sweeping the reply against the real boot ROM, and MAME then confirmed them: the
+opcode echo, and the twelve-byte length of the version reply. The same notice as
+above applies - see the MAME entry.
+
 ## libchdr — BSD-3-Clause
 
 `third_party/libchdr`, vendored whole, is used to read CHD images. CHD is how

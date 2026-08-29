@@ -361,6 +361,9 @@ TEST(a_multi_byte_cd_command_completes_once_not_once_per_byte) {
     }
     c.clio.write(kClioXbusCommand, 0x00u);          // the seventh byte
     CHECK_EQ(c.clio.cdrom().commands_received(), 1u);
+    // The drive answers after a delay, not instantly.
+    CHECK(c.clio.cdrom().status_empty());
+    c.clio.tick(100000);
     CHECK(!c.clio.cdrom().status_empty());
     CHECK_EQ(c.clio.cdrom().last_command(), 0x83u);
 }
@@ -374,6 +377,7 @@ TEST(a_completed_cd_command_reports_status_ready_and_raises_its_interrupt) {
     for (int i = 0; i < 7; ++i) {
         c.clio.write(kClioXbusCommand, i == 0 ? 0x83u : 0x00u);
     }
+    c.clio.tick(100000);
     CHECK_EQ(c.clio.read(kClioXbusPoll) & kXbusStatusReady, kXbusStatusReady);
     CHECK_EQ(c.clio.read(kClioIrq0Pending) & kIrqExpansionBus, kIrqExpansionBus);
 }
@@ -384,13 +388,42 @@ TEST(inserting_a_disc_is_visible_to_the_drive) {
     // running on it.
     Chip c;
     CHECK(!c.clio.cdrom().disc_present());
-
     c.clio.cdrom().set_disc_present(true);
+
     for (int i = 0; i < 7; ++i) {
-        c.clio.write(kClioXbusCommand, i == 0 ? 0x83u : 0x00u);
+        c.clio.write(kClioXbusCommand, i == 0 ? kCmdVersion : 0x00u);
     }
-    // First byte back echoes the command; the drive state follows it.
-    CHECK_EQ(c.clio.read(kClioXbusCommand), 0x83u);
+    // The drive does not answer instantly, and that delay is load bearing: the
+    // driver reads the bytes it expects and then requires the FIFO to be empty.
+    CHECK(c.clio.cdrom().status_empty());
+    c.clio.tick(100000);
+    CHECK(!c.clio.cdrom().status_empty());
+
+    // A version reply opens by echoing the command and ends with drive status.
+    CHECK_EQ(c.clio.read(kClioXbusCommand), kCmdVersion);
+    u32 last = 0;
+    for (int i = 1; i < 12; ++i) last = c.clio.read(kClioXbusCommand);
+    CHECK_EQ(last & kStatusDiscIn, kStatusDiscIn);
+    CHECK(c.clio.cdrom().status_empty());
+}
+
+TEST(the_version_reply_identifies_the_drive) {
+    // The boot ROM asks for this while enumerating the bus. Answering with
+    // zeroes reads as "no drive fitted": the machine boots to its logo and
+    // idles, never asking about a disc.
+    Chip c;
+    for (int i = 0; i < 7; ++i) {
+        c.clio.write(kClioXbusCommand, i == 0 ? kCmdVersion : 0x00u);
+    }
+    c.clio.tick(100000);
+
+    u8 reply[12];
+    for (int i = 0; i < 12; ++i) reply[i] = (u8)c.clio.read(kClioXbusCommand);
+
+    CHECK_EQ(reply[0], kCmdVersion);   // echo
+    CHECK_EQ(reply[2], 0x10u);         // manufacturer id
+    CHECK_EQ(reply[4], 0x01u);         // manufacturer number
+    CHECK(c.clio.cdrom().status_empty());
 }
 
 TEST(selection_names_a_device_by_value_not_by_address) {
@@ -402,6 +435,7 @@ TEST(selection_names_a_device_by_value_not_by_address) {
     for (int i = 0; i < 7; ++i) {
         c.clio.write(kClioXbusCommand, i == 0 ? 0x83u : 0x00u);
     }
+    c.clio.tick(100000);
     CHECK_EQ(c.clio.read(kClioXbusPoll) & kXbusStatusReady, kXbusStatusReady);
 
     // Select a device that is not fitted. CLIO flags it rather than passing
@@ -436,6 +470,7 @@ TEST(only_the_control_nibble_of_the_poll_register_is_writable) {
     for (int i = 0; i < 7; ++i) {
         c.clio.write(kClioXbusCommand, i == 0 ? 0x83u : 0x00u);
     }
+    c.clio.tick(100000);
     c.clio.write(kClioXbusPoll, kXbusStatusIrqEnable);
     const u32 poll = c.clio.read(kClioXbusPoll);
     CHECK_EQ(poll & kXbusStatusIrqEnable, kXbusStatusIrqEnable);

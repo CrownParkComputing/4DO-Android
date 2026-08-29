@@ -13,15 +13,82 @@ void CdRomDevice::tick(u32 cycles) {
     }
     completion_delay_ = 0;
     completion_pending_ = false;
-    status_.push_back(drive_status());
+
+    // The reply becomes readable now, not when the command was written. The
+    // drive does not answer instantly, and the delay is load bearing: the
+    // driver reads the bytes it expects and then checks the FIFO is EMPTY,
+    // treating anything still waiting as an error. Publishing the reply and a
+    // separate completion byte therefore fails every command.
+    status_.assign(pending_reply_.begin(), pending_reply_.end());
+    pending_reply_.clear();
     interrupt_request_ = true;
 }
 
-u8 CdRomDevice::drive_status() const {
-    u8 status = kStatusReady;
-    if (disc_present_) {
-        status |= kStatusDiscIn | kStatusSpinUp;
+// Build the reply for one command.
+//
+// Every command answers with its own opcode first - that is how the driver
+// matches a reply to the request it made - and ends with the drive status.
+// Reply lengths differ per command and the driver knows them, so returning the
+// wrong number of bytes is not a soft failure: it reads zeroes off the end of an
+// empty FIFO, takes them for part of the answer, and gives up.
+void CdRomDevice::build_reply(u8 command) {
+    pending_reply_.clear();
+    switch (command) {
+        case kCmdVersion:
+            // Drive identification. This is what the boot ROM asks for while
+            // enumerating the bus, and answering it with zeroes is indoor
+            // weather for "no drive fitted" - the machine then boots to its
+            // logo and idles forever, never asking about a disc.
+            pending_reply_.push_back(kCmdVersion);
+            pending_reply_.push_back(0x00);   // manufacturer id
+            pending_reply_.push_back(0x10);   //   "
+            pending_reply_.push_back(0x00);   // manufacturer number
+            pending_reply_.push_back(0x01);   //   "
+            pending_reply_.push_back(0x00);
+            pending_reply_.push_back(0x00);
+            pending_reply_.push_back(0x00);   // revision
+            pending_reply_.push_back(0x00);   //   "
+            pending_reply_.push_back(0x00);   // flags
+            pending_reply_.push_back(0x00);   //   "
+            pending_reply_.push_back(drive_status());
+            break;
+
+        case kCmdDataPathCheck:
+            // A loopback the driver uses to prove the bus works.
+            pending_reply_.push_back(kCmdDataPathCheck);
+            pending_reply_.push_back(0xaa);
+            pending_reply_.push_back(0x55);
+            pending_reply_.push_back(drive_status());
+            break;
+
+        case kCmdMotorOn:
+            motor_on_ = true;
+            pending_reply_.push_back(kCmdMotorOn);
+            pending_reply_.push_back(drive_status());
+            break;
+
+        case kCmdMotorOff:
+            motor_on_ = false;
+            pending_reply_.push_back(kCmdMotorOff);
+            pending_reply_.push_back(drive_status());
+            break;
+
+        default:
+            // Acknowledge anything else: echo, then status. A drive that
+            // answers nothing looks broken rather than idle.
+            pending_reply_.push_back(command);
+            pending_reply_.push_back(drive_status());
+            break;
     }
+}
+
+u8 CdRomDevice::drive_status() const {
+    // Only what is actually true. A drive out of reset has not been told to
+    // spin up, so reporting the motor running - and "ready" with it - describes
+    // a drive in a state the machine never asked for.
+    u8 status = 0;
+    if (disc_present_) status |= kStatusDiscIn;
+    if (motor_on_)     status |= kStatusSpinUp | kStatusReady;
     return status;
 }
 
@@ -32,6 +99,8 @@ void CdRomDevice::reset() {
     completion_delay_ = 0;
     media_changed_ = false;
     interrupt_request_ = false;
+    motor_on_ = false;
+    pending_reply_.clear();
 
     commands_ = 0;
     last_command_ = 0;
@@ -65,33 +134,8 @@ void CdRomDevice::write_command(u8 byte) {
         fprintf(stderr, "\n");
     }
 
-    // Every command returns at least one Status Byte when it completes, and
-    // that byte describes the DRIVE, not the command - the layout is the SDK's
-    // own. An earlier version echoed the command byte back, which is a
-    // The acknowledgement opens by ECHOING the command byte. That is how the
-    // driver matches a reply to the request it belongs to, and it is not a
-    // guess: sweeping every possible value of this byte against the real ROM
-    // changes the machine's behaviour for exactly one of the 256, and that one
-    // is the opcode it had just sent.
-    status_.push_back(last_command_);
+    build_reply(last_command_);
 
-    // The driver reads a fixed-length reply. Returning fewer bytes than it
-    // reads does not fail cleanly: it reads zeroes off the end of an empty
-    // FIFO, takes them for part of the answer, and abandons the conversation
-    // after a single command.
-    while (status_.size() < kReplyBytes) {
-        status_.push_back(0x00);
-    }
-
-
-    // A command completes in TWO phases. What has just been queued is only the
-    // acknowledgement; the drive reports completion separately, afterwards.
-    //
-    // This is visible in the driver and not really inferable without it: having
-    // drained the acknowledgement it goes straight into a loop selecting the
-    // device and testing the poll register for status-ready, and waits there
-    // indefinitely. Queue only the acknowledgement and the machine hangs in
-    // that loop having been told, as far as it can tell, nothing at all.
     completion_pending_ = true;
     completion_delay_ = kCompletionDelay;
 }

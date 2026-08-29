@@ -1003,6 +1003,39 @@ tests bit by bit.
 
 So the machine is not hung: it is a live event loop that has run out of events.
 
+### The operator polls once a second, forever
+
+The wake at frame 146 is not a one-off. It repeats every **60 frames exactly** -
+once per second - for as long as the machine runs. Each time it walks a linked
+list of devices, calls a check on each, ORs the results, and goes back to sleep.
+
+That is the machine idling in its attract state, waiting for a disc that it
+never asks the drive about.
+
+### What is ruled out, by experiment
+
+The execution map makes it possible to test these properly, because it detects
+any change of code path at all rather than only a change in some counter. All of
+the following produce a **byte-identical** execution map:
+
+- inserting a disc versus leaving the tray empty;
+- every value 0x00-0xFF in every one of the twelve reply bytes;
+- every value 0x00-0xFF of the completion status byte;
+- the drive answering at any bus address from 0 to 14.
+
+Putting the drive at address 15, where the BIOS never probes, is the only thing
+that changes anything - and even then, only 113 addresses run that otherwise
+would not, and the machine still reaches the same terminal state. Nothing runs
+in the no-device case that does not also run in the device case.
+
+The conclusion is not subtle: **the boot does not depend on the CD at all.** The
+0x83 exchange happens, is answered, and is ignored. The drive's interrupt-enable
+nibble is never set by the driver, which means the driver never arms the device
+- so whatever the operator polls once a second, our drive is not in it.
+
+The work on the expansion bus is still correct and will be needed. It was simply
+never what held the boot.
+
 ### Two things this rules out
 
 **It is not blocked on the CD.** Removing the CD-ROM device from the bus

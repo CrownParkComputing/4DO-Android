@@ -82,6 +82,7 @@ void CdRomDevice::write_command(u8 byte) {
         status_.push_back(0x00);
     }
 
+
     // A command completes in TWO phases. What has just been queued is only the
     // acknowledgement; the drive reports completion separately, afterwards.
     //

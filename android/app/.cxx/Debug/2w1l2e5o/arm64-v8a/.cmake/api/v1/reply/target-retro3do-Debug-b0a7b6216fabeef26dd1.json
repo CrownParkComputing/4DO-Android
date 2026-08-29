@@ -26,19 +26,19 @@
 			{
 				"command" : 0,
 				"file" : 0,
-				"line" : 110,
+				"line" : 113,
 				"parent" : 0
 			},
 			{
 				"command" : 1,
 				"file" : 0,
-				"line" : 117,
+				"line" : 120,
 				"parent" : 0
 			},
 			{
 				"command" : 2,
 				"file" : 0,
-				"line" : 118,
+				"line" : 121,
 				"parent" : 0
 			}
 		]
@@ -98,7 +98,9 @@
 				0,
 				1,
 				2,
-				3
+				3,
+				4,
+				5
 			],
 			"sysroot" : 
 			{
@@ -110,15 +112,15 @@
 	[
 		{
 			"backtrace" : 2,
+			"id" : "retro3do_core::@4146b486723d3652d7ff"
+		},
+		{
+			"backtrace" : 2,
 			"id" : "SDL3-shared::@bbf573702d147a204f21"
 		},
 		{
 			"backtrace" : 2,
 			"id" : "imgui::@4146b486723d3652d7ff"
-		},
-		{
-			"backtrace" : 2,
-			"id" : "retro3do_core::@4146b486723d3652d7ff"
 		}
 	],
 	"id" : "retro3do::@4146b486723d3652d7ff",
@@ -176,7 +178,9 @@
 				0,
 				1,
 				2,
-				3
+				3,
+				4,
+				5
 			]
 		}
 	],
@@ -204,6 +208,18 @@
 			"backtrace" : 1,
 			"compileGroupIndex" : 0,
 			"path" : "/home/jon/StudioProjects/Retro-3DO/src/ui/ui.cpp",
+			"sourceGroupIndex" : 0
+		},
+		{
+			"backtrace" : 1,
+			"compileGroupIndex" : 0,
+			"path" : "/home/jon/StudioProjects/Retro-3DO/src/ui/file_browser.cpp",
+			"sourceGroupIndex" : 0
+		},
+		{
+			"backtrace" : 1,
+			"compileGroupIndex" : 0,
+			"path" : "/home/jon/StudioProjects/Retro-3DO/src/platform/storage.cpp",
 			"sourceGroupIndex" : 0
 		}
 	],

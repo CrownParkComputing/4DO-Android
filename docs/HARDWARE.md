@@ -306,6 +306,34 @@ speed behind a perfectly smooth window is precisely the failure the previous
 core made invisible. Audio underruns are shown too, because they are the first
 symptom of falling behind and appear before anything is visible on screen.
 
+## Files and storage (`src/platform/storage.cpp`, `src/ui/file_browser.cpp`)
+
+Not hardware, but it decides whether the app is usable at all on the platforms
+this project exists for. A desktop user can type a path into a text field; a
+phone user cannot, and has no idea what the filesystem looks like anyway. So the
+launcher browses.
+
+`Storage::writable_directory()` is where the app may always write, via SDL, which
+puts it in the right place per platform: the private data directory on Android,
+Application Support on iOS and macOS, AppData on Windows, XDG data on Linux.
+
+`Storage::browse_roots()` offers sensible starting points, app storage first —
+on iOS that is the directory the Files app exposes, and the only place a user
+can put a disc image without a computer.
+
+Pure path arithmetic lives in `src/core/path.cpp` rather than here, so it can be
+tested without a platform layer. `parent()` earns its own tests: navigation
+rests on it entirely, and if it is wrong a phone user cannot go up a level and
+is stuck with no keyboard to type their way out. The cases that matter are a
+trailing separator (`/a/b/` must give `/a`, not `/a/b`, or the first press of
+Up appears to do nothing) and a top-level entry (`/foo` must give `/`, not an
+empty string, or navigation dead-ends a level early).
+
+**Open question for Android**: reading shared storage needs a permission this
+app does not currently request. App storage works without one. Requesting
+all-files access is a Play policy decision with real consequences — the previous
+app removed it in 2.0.9 — so it has deliberately not been added here.
+
 ## Still to be written
 
 The DSP, SPORT, and the XBUS interface through which the machine actually asks

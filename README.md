@@ -103,6 +103,7 @@ platform header, it belongs in `src/platform/` instead.
 - [x] Audio output path: lock-free ring, SDL sink
 - [x] Controller: keyboard and gamepad through SDL
 - [ ] DSP — the machine is silent until this exists
+- [x] File browser, so the app is usable without a keyboard
 - [ ] Save states, on-screen pad for touch
 
 ## Licence

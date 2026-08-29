@@ -8,6 +8,7 @@
 #include <string>
 
 #include "core/types.h"
+#include "ui/file_browser.h"
 
 struct SDL_Window;
 struct SDL_Renderer;
@@ -63,6 +64,12 @@ private:
     void draw_overlay(Console& console, double display_fps,
                       double emulated_fps, double frame_ms, u64 underruns,
                       UiIntent& intent);
+
+    FileBrowser browser_;
+    // Which field the browser is filling in. Without this, a picked file has
+    // nowhere to go.
+    enum class Browsing { None, Bios, Disc };
+    Browsing browsing_ = Browsing::None;
 
     bool initialised_ = false;
     bool show_launcher_ = true;

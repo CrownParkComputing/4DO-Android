@@ -1,11 +1,13 @@
 #include "ui.h"
 
 #include <SDL3/SDL.h>
+#include <cstdio>
 #include <cstring>
 
 #include "backends/imgui_impl_sdl3.h"
 #include "backends/imgui_impl_sdlrenderer3.h"
 #include "core/console.h"
+#include "platform/storage.h"
 #include "imgui.h"
 
 namespace retro3do {
@@ -112,7 +114,12 @@ void Ui::draw_launcher(Console& console, UiIntent& intent) {
     ImGui::InputTextWithHint("##bios", "path to the 3DO BIOS image",
                              bios_path_buffer_, sizeof(bios_path_buffer_));
     ImGui::SameLine();
-    if (ImGui::Button("Load", ImVec2(110.0f, 0.0f))) {
+    if (ImGui::Button("Browse##bios", ImVec2(110.0f, 0.0f))) {
+        browsing_ = Browsing::Bios;
+        browser_.open("Choose a BIOS image", {".rom", ".bin"});
+    }
+    ImGui::SameLine();
+    if (ImGui::Button("Load", ImVec2(80.0f, 0.0f))) {
         intent.bios_chosen = true;
         intent.bios_path = bios_path_buffer_;
     }
@@ -132,7 +139,12 @@ void Ui::draw_launcher(Console& console, UiIntent& intent) {
     ImGui::InputTextWithHint("##disc", "path to a .iso, .bin or .cue",
                              disc_path_buffer_, sizeof(disc_path_buffer_));
     ImGui::SameLine();
-    if (ImGui::Button("Insert", ImVec2(110.0f, 0.0f))) {
+    if (ImGui::Button("Browse##disc", ImVec2(110.0f, 0.0f))) {
+        browsing_ = Browsing::Disc;
+        browser_.open("Choose a disc image", {".iso", ".bin", ".cue", ".img"});
+    }
+    ImGui::SameLine();
+    if (ImGui::Button("Insert", ImVec2(80.0f, 0.0f))) {
         intent.disc_chosen = true;
         intent.disc_path = disc_path_buffer_;
     }
@@ -200,6 +212,24 @@ void Ui::draw_launcher(Console& console, UiIntent& intent) {
         "exist yet, so a BIOS will run but show nothing.");
 
     ImGui::End();
+
+    // Drawn after the launcher so it floats above it, and routed to whichever
+    // field asked for it.
+    std::string picked;
+    if (browser_.draw(&picked)) {
+        if (browsing_ == Browsing::Bios) {
+            std::snprintf(bios_path_buffer_, sizeof(bios_path_buffer_), "%s",
+                          picked.c_str());
+            intent.bios_chosen = true;
+            intent.bios_path = picked;
+        } else if (browsing_ == Browsing::Disc) {
+            std::snprintf(disc_path_buffer_, sizeof(disc_path_buffer_), "%s",
+                          picked.c_str());
+            intent.disc_chosen = true;
+            intent.disc_path = picked;
+        }
+        browsing_ = Browsing::None;
+    }
 }
 
 void Ui::draw_overlay(Console& console, double display_fps,

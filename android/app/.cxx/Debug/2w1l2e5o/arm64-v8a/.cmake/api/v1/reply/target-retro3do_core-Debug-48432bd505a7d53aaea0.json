@@ -33,19 +33,19 @@
 			{
 				"command" : 1,
 				"file" : 0,
-				"line" : 41,
+				"line" : 42,
 				"parent" : 0
 			},
 			{
 				"command" : 1,
 				"file" : 0,
-				"line" : 45,
+				"line" : 46,
 				"parent" : 0
 			},
 			{
 				"command" : 2,
 				"file" : 0,
-				"line" : 35,
+				"line" : 36,
 				"parent" : 0
 			}
 		]
@@ -109,7 +109,8 @@
 				6,
 				7,
 				8,
-				9
+				9,
+				10
 			],
 			"sysroot" : 
 			{
@@ -140,7 +141,8 @@
 				6,
 				7,
 				8,
-				9
+				9,
+				10
 			]
 		}
 	],
@@ -198,6 +200,12 @@
 			"backtrace" : 1,
 			"compileGroupIndex" : 0,
 			"path" : "/home/jon/StudioProjects/Retro-3DO/src/core/pad.cpp",
+			"sourceGroupIndex" : 0
+		},
+		{
+			"backtrace" : 1,
+			"compileGroupIndex" : 0,
+			"path" : "/home/jon/StudioProjects/Retro-3DO/src/core/path.cpp",
 			"sourceGroupIndex" : 0
 		},
 		{

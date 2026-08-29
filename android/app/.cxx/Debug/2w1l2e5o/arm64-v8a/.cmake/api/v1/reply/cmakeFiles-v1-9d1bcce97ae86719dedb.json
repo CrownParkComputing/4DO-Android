@@ -200,26 +200,6 @@
 		{
 			"isCMake" : true,
 			"isExternal" : true,
-			"path" : "/home/jon/Android/Sdk/cmake/3.22.1/share/cmake-3.22/Modules/CheckIncludeFile.c.in"
-		},
-		{
-			"isCMake" : true,
-			"isExternal" : true,
-			"path" : "/home/jon/Android/Sdk/cmake/3.22.1/share/cmake-3.22/Modules/CheckFunctionExists.c"
-		},
-		{
-			"isCMake" : true,
-			"isExternal" : true,
-			"path" : "/home/jon/Android/Sdk/cmake/3.22.1/share/cmake-3.22/Modules/CheckFunctionExists.c"
-		},
-		{
-			"isCMake" : true,
-			"isExternal" : true,
-			"path" : "/home/jon/Android/Sdk/cmake/3.22.1/share/cmake-3.22/Modules/CheckForPthreads.c"
-		},
-		{
-			"isCMake" : true,
-			"isExternal" : true,
 			"path" : "/home/jon/Android/Sdk/cmake/3.22.1/share/cmake-3.22/Modules/FindPackageHandleStandardArgs.cmake"
 		},
 		{

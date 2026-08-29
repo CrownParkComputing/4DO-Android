@@ -32,6 +32,7 @@ void CdRomDevice::reset() {
     completion_delay_ = 0;
     media_changed_ = false;
     interrupt_request_ = false;
+
     commands_ = 0;
     last_command_ = 0;
 }

@@ -1036,6 +1036,42 @@ nibble is never set by the driver, which means the driver never arms the device
 The work on the expansion bus is still correct and will be needed. It was simply
 never what held the boot.
 
+### How the enumeration decides a device is there
+
+Traced by logging every SELECTION and poll write in order. The boot ROM walks
+addresses 0 to 14, and for each one reads the poll register and tests
+
+```
+    r1 = poll & (poll << 4)
+    tst r1, #0x70
+```
+
+which ANDs each **status** bit against its matching **enable** bit - status
+valid against status-IRQ-enable, read valid against read-IRQ-enable, and so on.
+A device only registers if a condition is both asserted and enabled. With the
+drive's control nibble at zero, nothing can ever be detected, and the control
+nibble is zero because the driver never arms the device.
+
+The enumeration then writes `0x91` back to every address that answered `0x90` -
+enabling the status interrupt on it - and writes nothing at all to the drive,
+which answers `0x00`.
+
+Two experiments pinned the mechanism:
+
+- Making an unfitted address answer `0x00` instead of `0x90` does not make the
+  drive look more present. It makes the enumeration **never terminate**: over a
+  million selections of address 1 and no further progress. The `0x90` is what
+  ends the walk.
+- Giving the drive a power-on status byte so that it too answers with status
+  valid **does** change the execution map - the first change any experiment here
+  has produced - but the machine still reaches the same terminal state, and it
+  breaks the tests that pin an idle drive's FIFO as empty. It was reverted: a
+  changed code path is not the same as a correct one.
+
+So the shape of the answer is known - a present device has to look like one to
+this walk - without the exact value being established yet. That is the next
+thing to find.
+
 ### Two things this rules out
 
 **It is not blocked on the CD.** Removing the CD-ROM device from the bus

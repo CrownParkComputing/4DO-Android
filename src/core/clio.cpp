@@ -48,8 +48,6 @@ u32 Clio::xbus_poll_for_device() const {
     if (!cdrom_.status_empty()) poll |= kXbusStatusReady;
     if (cdrom_.has_chunk())     poll |= kXbusChunkReady;
     if (media_changed_)         poll |= kXbusMediaAccess;
-    // Write-valid: the drive can always accept another command byte.
-    poll |= kXbusWriteValid;
     return poll;
 }
 

@@ -36,6 +36,36 @@ value written rather than by the address written to.
 > ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE
 > POSSIBILITY OF SUCH DAMAGE.
 
+## libchdr — BSD-3-Clause
+
+`third_party/libchdr`, vendored whole, is used to read CHD images. CHD is how
+nearly every 3DO dump in the wild is stored, so this is the ordinary path into
+the emulator rather than an optional extra. It is self-contained: it brings its
+own LZMA, miniz and zstd, so there is nothing to find on the host and nothing
+extra to cross compile for Android or iOS.
+
+> Copyright Romain Tisserand
+> All rights reserved.
+>
+> Redistribution and use in source and binary forms, with or without
+> modification, are permitted provided that the following conditions are met:
+>
+> 1. Redistributions of source code must retain the above copyright notice,
+>    this list of conditions and the following disclaimer.
+> 2. Redistributions in binary form must reproduce the above copyright notice,
+>    this list of conditions and the following disclaimer in the documentation
+>    and/or other materials provided with the distribution.
+> 3. Neither the name of the copyright holder nor the names of its contributors
+>    may be used to endorse or promote products derived from this software
+>    without specific prior written permission.
+>
+> THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS"
+> AND ANY EXPRESS OR IMPLIED WARRANTIES ARE DISCLAIMED. See
+> `third_party/libchdr/LICENSE.txt` for the full text.
+
+Its bundled dependencies carry their own permissive terms: the LZMA SDK is
+public domain, miniz is MIT, and zstd is BSD/GPLv2 dual licensed (BSD taken).
+
 ## What is deliberately NOT used
 
 FreeDO, 4DO, Opera and `opera-libretro`, whose licence forbids commercial use

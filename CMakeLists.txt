@@ -20,6 +20,25 @@ option(RETRO3DO_USE_SYSTEM_SDL "Link the system SDL3 instead of the vendored one
 # targets. If something in here ever needs a platform header, that is the signal
 # that it belongs in src/platform instead.
 # ---------------------------------------------------------------------------
+# ---------------------------------------------------------------------------
+# libchdr — reading CHD, which is how nearly every 3DO dump in the wild is
+# stored. BSD-3-Clause, and self-contained: it brings its own LZMA, miniz and
+# zstd, so there is nothing to find on the host and nothing extra to cross
+# compile for Android or iOS. See docs/THIRD_PARTY.md.
+# ---------------------------------------------------------------------------
+set(BUILD_SHARED_LIBS OFF CACHE BOOL "" FORCE)
+set(INSTALL_STATIC_LIBS OFF CACHE BOOL "" FORCE)
+set(CHDR_WANT_TESTS OFF CACHE BOOL "" FORCE)
+set(WITH_SYSTEM_ZLIB OFF CACHE BOOL "" FORCE)
+set(WITH_SYSTEM_ZSTD OFF CACHE BOOL "" FORCE)
+# Hand back cooked user data rather than sync+header+ECC. Pinned explicitly
+# rather than left to the library's default, because the two differ by a
+# 16-byte offset into every sector - which does not fail, it just reads
+# plausible-looking rubbish.
+set(CHDR_WANT_RAW_DATA_SECTOR OFF CACHE BOOL "" FORCE)
+set(CHDR_WANT_SUBCODE OFF CACHE BOOL "" FORCE)
+add_subdirectory(third_party/libchdr EXCLUDE_FROM_ALL)
+
 add_library(retro3do_core STATIC
     src/core/arm60.cpp
     src/core/audio_ring.cpp
@@ -39,6 +58,7 @@ add_library(retro3do_core STATIC
     src/core/xbus.cpp
 )
 target_include_directories(retro3do_core PUBLIC src)
+target_link_libraries(retro3do_core PRIVATE chdr-static)
 
 # The core is a software emulator: it is the one thing that must be optimised in
 # every configuration, or a debug build is too slow to run a game at all. The

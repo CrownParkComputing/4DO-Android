@@ -1,5 +1,10 @@
 #include "disc.h"
 
+extern "C" {
+#include <libchdr/chd.h>
+#include <libchdr/cdrom.h>
+}
+
 #include <algorithm>
 #include <cctype>
 #include <cstring>
@@ -86,7 +91,35 @@ Disc::~Disc() {
     close();
 }
 
+// A CHD reader: the library handle, the geometry needed to turn a logical block
+// into a position inside a hunk, and one hunk of cache.
+//
+// Caching matters more than it looks. A hunk here is 19,584 bytes - eight CD
+// frames - and decompressing one costs an LZMA or FLAC decode. Reading a file
+// sector by sector without a cache decodes the same hunk eight times over.
+struct Disc::ChdReader {
+    chd_file* file = nullptr;
+    u32 hunk_bytes = 0;
+    u32 unit_bytes = 0;
+    u32 frames_per_hunk = 0;
+
+    // Where the first data track's frames begin inside the CHD. Tracks are
+    // stored consecutively, each padded up to a multiple of four frames, so
+    // this is not always zero.
+    u32 data_track_frame = 0;
+
+    std::vector<u8> hunk;
+    u32 cached_hunk = 0xffffffffu;
+};
+
 void Disc::close() {
+    if (chd_reader_ != nullptr) {
+        if (chd_reader_->file != nullptr) {
+            chd_close(chd_reader_->file);
+        }
+        delete chd_reader_;
+        chd_reader_ = nullptr;
+    }
     if (file_ != nullptr) {
         std::fclose(file_);
         file_ = nullptr;
@@ -114,8 +147,10 @@ bool Disc::open(const std::string& path) {
         return false;
     }
 
-    if (reject_if_chd(path)) {
-        return false;
+    // A CHD takes a completely different path: compressed hunks rather than a
+    // flat run of sectors.
+    if (is_chd_file()) {
+        return open_chd(path);
     }
 
     SectorLayout detected = SectorLayout::Cooked2048;
@@ -177,8 +212,8 @@ bool Disc::open_fd(int fd, const std::string& display_name) {
     }
     path_ = display_name;
 
-    if (reject_if_chd(display_name)) {
-        return false;
+    if (is_chd_file()) {
+        return open_chd(display_name);
     }
 
     SectorLayout detected = SectorLayout::Cooked2048;
@@ -216,21 +251,123 @@ bool Disc::open_image(const std::string& path, SectorLayout layout) {
     return true;
 }
 
-// Recognise a CHD before anything else looks at the file. Returns true if this
-// is a CHD, in which case the disc is NOT opened: it is identified, described,
-// and refused with a reason.
-bool Disc::reject_if_chd(const std::string& display_name) {
+// Recognise a CHD before anything else looks at the file. The raw-image path
+// must never see one: it would take compressed bytes for disc contents and look
+// like a corrupt disc rather than an unreadable file.
+bool Disc::is_chd_file() {
     chd_ = probe_chd(file_);
-    if (!chd_.is_chd) {
+    return chd_.is_chd;
+}
+
+// Open a CHD and work out where the data track lives inside it.
+bool Disc::open_chd(const std::string& display_name) {
+    // libchdr takes ownership of the handle on success, and closes it itself.
+    std::FILE* handle = file_;
+    file_ = nullptr;
+
+    auto* reader = new ChdReader();
+    chd_error err = chd_open_file(handle, CHD_OPEN_READ, nullptr, &reader->file);
+    if (err != CHDERR_NONE) {
+        delete reader;
+        if (handle != nullptr) {
+            std::fclose(handle);
+        }
+        last_error_ = display_name + ": " + chd_error_string(err);
         return false;
     }
 
-    last_error_ = display_name + " is a " + chd_.describe() +
-                  ". CHD images are recognised but cannot be read yet.";
-    if (file_ != nullptr) {
-        std::fclose(file_);
-        file_ = nullptr;
+    const chd_header* header = chd_get_header(reader->file);
+    reader->hunk_bytes = header->hunkbytes;
+    reader->unit_bytes = header->unitbytes;
+    if (reader->unit_bytes == 0 || reader->hunk_bytes == 0 ||
+        reader->hunk_bytes % reader->unit_bytes != 0) {
+        chd_close(reader->file);
+        delete reader;
+        last_error_ = display_name + ": unexpected CHD geometry";
+        return false;
     }
+    reader->frames_per_hunk = reader->hunk_bytes / reader->unit_bytes;
+    reader->hunk.resize(reader->hunk_bytes);
+
+    // Walk the track metadata. Tracks sit consecutively in the CHD, each padded
+    // up to a multiple of four frames, so a track's start has to be accumulated
+    // rather than derived from its number.
+    u32 chd_frame = 0;
+    u32 lba = 0;
+    bool found_data = false;
+    for (u32 index = 0; index < 99; ++index) {
+        char meta[512] = {};
+        u32 length = 0;
+        int number = 0, frames = 0, pregap = 0, postgap = 0;
+        char type[64] = {}, subtype[64] = {}, pgtype[64] = {}, pgsub[64] = {};
+
+        if (chd_get_metadata(reader->file, CDROM_TRACK_METADATA2_TAG, index,
+                             meta, sizeof meta, &length, nullptr,
+                             nullptr) == CHDERR_NONE) {
+            if (sscanf(meta, CDROM_TRACK_METADATA2_FORMAT, &number, type,
+                       subtype, &frames, &pregap, pgtype, pgsub,
+                       &postgap) != 8) {
+                break;
+            }
+        } else if (chd_get_metadata(reader->file, CDROM_TRACK_METADATA_TAG,
+                                    index, meta, sizeof meta, &length, nullptr,
+                                    nullptr) == CHDERR_NONE) {
+            if (sscanf(meta, CDROM_TRACK_METADATA_FORMAT, &number, type,
+                       subtype, &frames) != 4) {
+                break;
+            }
+        } else {
+            break;
+        }
+
+        Track track;
+        track.number = static_cast<u32>(number);
+        track.is_audio = (std::string(type) == "AUDIO");
+        track.start_lba = lba;
+        track.length_sectors = static_cast<u32>(frames);
+        tracks_.push_back(track);
+
+        if (!found_data && !track.is_audio) {
+            reader->data_track_frame = chd_frame;
+            sector_count_ = static_cast<u32>(frames);
+            found_data = true;
+        }
+
+        lba += static_cast<u32>(frames);
+        chd_frame += static_cast<u32>(frames);
+        // Pad to the track boundary the format requires.
+        if (chd_frame % CD_TRACK_PADDING != 0) {
+            chd_frame += CD_TRACK_PADDING - (chd_frame % CD_TRACK_PADDING);
+        }
+    }
+
+    if (!found_data) {
+        chd_close(reader->file);
+        delete reader;
+        last_error_ = display_name + ": no data track";
+        return false;
+    }
+
+    // libchdr is built to hand back cooked user data, so a frame begins at the
+    // payload with no sync or header in front of it.
+    layout_ = SectorLayout::Cooked2048;
+    chd_reader_ = reader;
+    last_error_.clear();
+    return true;
+}
+
+bool Disc::read_chd_frame(u32 chd_frame, u8* out) {
+    ChdReader* r = chd_reader_;
+    const u32 hunk = chd_frame / r->frames_per_hunk;
+    const u32 within = (chd_frame % r->frames_per_hunk) * r->unit_bytes;
+
+    if (hunk != r->cached_hunk) {
+        if (chd_read(r->file, hunk, r->hunk.data()) != CHDERR_NONE) {
+            return false;
+        }
+        r->cached_hunk = hunk;
+    }
+    std::memcpy(out, r->hunk.data() + within, CD_MAX_SECTOR_DATA);
     return true;
 }
 
@@ -380,7 +517,20 @@ bool Disc::open_cue(const std::string& path) {
 // Reading
 // ---------------------------------------------------------------------------
 bool Disc::read_sector(u32 lba, u8* out) {
-    if (file_ == nullptr || out == nullptr || lba >= sector_count_) {
+    if (out == nullptr || lba >= sector_count_) {
+        return false;
+    }
+
+    if (chd_reader_ != nullptr) {
+        u8 frame[CD_MAX_SECTOR_DATA];
+        if (!read_chd_frame(chd_reader_->data_track_frame + lba, frame)) {
+            return false;
+        }
+        std::memcpy(out, frame, kSectorUserBytes);
+        return true;
+    }
+
+    if (file_ == nullptr) {
         return false;
     }
 
@@ -394,7 +544,21 @@ bool Disc::read_sector(u32 lba, u8* out) {
 }
 
 bool Disc::read_raw_sector(u32 lba, u8* out, u32* out_size) {
-    if (file_ == nullptr || out == nullptr || lba >= sector_count_) {
+    if (out == nullptr || lba >= sector_count_) {
+        return false;
+    }
+
+    if (chd_reader_ != nullptr) {
+        if (!read_chd_frame(chd_reader_->data_track_frame + lba, out)) {
+            return false;
+        }
+        if (out_size != nullptr) {
+            *out_size = CD_MAX_SECTOR_DATA;
+        }
+        return true;
+    }
+
+    if (file_ == nullptr) {
         return false;
     }
 

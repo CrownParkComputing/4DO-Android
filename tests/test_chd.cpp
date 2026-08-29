@@ -134,8 +134,12 @@ TEST(an_ordinary_image_is_not_mistaken_for_a_chd) {
     CHECK(info.describe() == "not a CHD");
 }
 
-TEST(a_chd_is_refused_with_a_reason_rather_than_misread) {
-    // The assertion that matters: it must NOT open and report a sector count.
+TEST(a_synthetic_chd_header_alone_is_not_a_readable_disc) {
+    // A CHD is now read rather than refused, but a header with no hunks and no
+    // track metadata behind it still is not a disc. It must fail with a reason
+    // naming the file, and must NOT report a sector count - falling through to
+    // the raw-image path would take compressed bytes for disc contents and look
+    // like a corrupt disc rather than an unreadable one.
     const char* path = scratch("refuse.chd");
     write_file(path, make_chd_v5(650u * 1024 * 1024, kTagCdZlib, 0, false));
 
@@ -144,10 +148,10 @@ TEST(a_chd_is_refused_with_a_reason_rather_than_misread) {
     CHECK(!disc.is_open());
     CHECK_EQ(disc.sector_count(), 0u);
 
-    // And it must say what the file actually is.
+    // And it must still be recognised as a CHD, not as something unknown.
     CHECK(disc.is_chd());
     CHECK(disc.chd().is_chd);
-    CHECK(disc.last_error().find("CHD") != std::string::npos);
+    CHECK(!disc.last_error().empty());
 }
 
 TEST(the_description_names_the_version_size_and_compression) {

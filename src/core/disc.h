@@ -76,17 +76,15 @@ public:
 
     void close();
 
-    bool is_open() const { return file_ != nullptr; }
+    bool is_open() const { return file_ != nullptr || chd_reader_ != nullptr; }
     const std::string& path() const { return path_; }
     const std::string& last_error() const { return last_error_; }
 
     SectorLayout layout() const { return layout_; }
 
-    // Set when the file was recognised as a CHD. A CHD is identified but not
-    // yet readable: the data is compressed, and decompressing it needs a codec
-    // per compression type. Reporting it precisely beats letting it fall
-    // through to the raw-image path, which would take compressed bytes for
-    // disc contents and look like a corrupt disc.
+    // Set when the file was recognised as a CHD. CHD is how nearly every 3DO
+    // dump in the wild is stored, so this is the ordinary path rather than an
+    // exotic one.
     const ChdInfo& chd() const { return chd_; }
     bool is_chd() const { return chd_.is_chd; }
     u32 sector_count() const { return sector_count_; }
@@ -102,10 +100,18 @@ public:
     bool read_raw_sector(u32 lba, u8* out, u32* out_size);
 
 private:
+    bool open_chd(const std::string& display_name);
+    bool read_chd_frame(u32 chd_frame, u8* out);
+
     bool open_cue(const std::string& path);
     bool open_image(const std::string& path, SectorLayout layout);
     bool detect_layout(SectorLayout* out);
-    bool reject_if_chd(const std::string& display_name);
+    bool is_chd_file();
+
+    // Opaque so this header does not drag libchdr into everything that reads a
+    // disc.
+    struct ChdReader;
+    ChdReader* chd_reader_ = nullptr;
 
     std::FILE* file_ = nullptr;
     std::string path_;

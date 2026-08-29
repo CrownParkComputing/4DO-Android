@@ -107,8 +107,13 @@ enum : u32 {
     kMadamWindowSize = 0x10000,
 };
 
-// The stock configuration: 2 MB DRAM, 1 MB VRAM, derived from the ROM's own
-// decode above.
+// The stock configuration for a consumer machine.
+//
+// 0x21 was inferred here from the ROM's own decode; the community 3DOessence
+// register map states the value outright as 0x29, and describes the field: the
+// low two bits are VRAM size, the next two DRAM1, the next two DRAM2. The
+// difference is one bit of DRAM sizing, and it decides where the OS puts its
+// buffers - which is not cosmetic, because the boot reads the disc into them.
 constexpr u32 kMadamMemConfigStock = 0x21;
 
 // Flags in the CCB's first word. Only the ones acted on are named.

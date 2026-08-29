@@ -25,8 +25,25 @@ class Sport;
 // Memory map
 // ---------------------------------------------------------------------------
 enum : u32 {
+    // KNOWN WRONG, and deliberately so for now.
+    //
+    // The real map, per the community 3DOessence register map, is two megabytes
+    // of DRAM in one contiguous run - DRAM1 at 0x00000000, DRAM2 at 0x00100000 -
+    // with a megabyte of VRAM above it at 0x00200000. That is not in doubt.
+    //
+    // Setting it correctly stops the machine booting: it hangs at 0x00000110,
+    // in the early start-up code, before it issues a single CD command. Four
+    // different MADAM memory-configuration values were tried against it and all
+    // four hang the same way, so the configuration byte is not the missing
+    // piece.
+    //
+    // So something else here depends on the wrong map, and this halved layout
+    // has been masking it. That bug is worth more than this comment: with the
+    // map wrong, anything the machine places high in DRAM lands in video memory
+    // instead, which is exactly where the reference implementation puts the
+    // buffer it reads the disc into.
     kDramBase = 0x00000000,
-    kDramSize = 1u * 1024 * 1024,   // EXPERIMENT
+    kDramSize = 1u * 1024 * 1024,
 
     kVramBase = 0x00100000,
     kVramSize = 1u * 1024 * 1024,

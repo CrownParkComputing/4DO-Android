@@ -28,12 +28,28 @@ void CdRomDevice::write_command(u8 byte) {
     pending_.clear();
     ++commands_;
 
-    // Every command returns at least one Status Byte when it completes. The
-    // first byte echoes the command, which is how the driver matches a reply to
-    // what it asked. ERROR stays clear: the drive is present and working even
-    // with no disc in it, and reporting a broken drive is not the same as
-    // reporting an empty one.
-    status_.push_back(last_command_);
+    // Every command returns at least one Status Byte when it completes, and
+    // that byte describes the DRIVE, not the command - the layout is the SDK's
+    // own. An earlier version echoed the command byte back, which is a
+    // plausible-looking reply that means nothing to the driver.
+    //
+    // ERROR stays clear: the drive is present and working even with no disc in
+    // it. Reporting a broken drive is not the same as reporting an empty one,
+    // and the difference decides whether the BIOS offers to load a disc or
+    // gives up.
+    u8 status = kStatusReady;
+    if (disc_present_) {
+        status |= kStatusDiscIn | kStatusSpinUp;
+    }
+    status_.push_back(status);
+
+    // The driver reads a fixed-length reply. Returning fewer bytes than it
+    // reads does not fail cleanly: it reads zeroes off the end of an empty
+    // FIFO, takes them for part of the answer, and abandons the conversation
+    // after a single command.
+    while (status_.size() < kReplyBytes) {
+        status_.push_back(0x00);
+    }
 }
 
 u8 CdRomDevice::read_status() {
@@ -41,7 +57,7 @@ u8 CdRomDevice::read_status() {
         return 0;
     }
     const u8 byte = status_.front();
-    status_.pop_front();
+    if (status_.size() > 1) status_.pop_front();
     return byte;
 }
 

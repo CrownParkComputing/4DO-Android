@@ -36,25 +36,40 @@ enum : u32 {
     kResetExternal = 1u << 6,  // TODO(clio): confirm
 };
 
+// Interrupt sources in bank 0, from the community 3DOessence register map -
+// independently derived documentation with clear provenance, and the first
+// source here that states the assignments outright rather than leaving them to
+// be inferred from one ROM's spin loops.
+//
+// Two earlier guesses were wrong in ways worth recording. The CD-ROM interrupt
+// is EXINT at bit 2, which had been guessed first at bit 3 and then at bit 9;
+// and bit 2 had been assumed to be "the timer", which is what made the wrong
+// answer look self-consistent. The timers actually occupy bits 3..10, one per
+// ODD timer, counting downwards from timer 15 at bit 3.
 enum : u32 {
-    kIrqVerticalBlank0 = 1u << 0,
-    kIrqVerticalBlank1 = 1u << 1,
-    kIrqTimer          = 1u << 2,   // TODO(clio): confirm the timer's bit
-    // The expansion bus completion interrupt. WO 94/16382: every command
-    // returns at least one Status Byte when it completes, and the Status Return
-    // interrupt is how the system learns that has happened.
-    //
-    // Bit 9, not the bit 3 guessed here originally. Settled by asking the ROM
-    // rather than guessing: after the OS boots it enables 0x60000206 and then
-    // idles. Bits 1 and 2 (vertical blank and the timer) do fire. Bits 9, 29
-    // and 30 are enabled and never fire, so the source the idle OS is blocked
-    // on is one of those three - and bit 3 is not even enabled, which rules the
-    // original guess out outright.
-    kIrqExpansionBus   = 1u << 9,
+    kIrqVerticalBlank0   = 1u << 0,
+    kIrqVerticalBlank1   = 1u << 1,
 
-    // Bank 1 does not reach the CPU on its own; it sets a summary bit in bank 0.
-    kIrqSecondaryBank  = 1u << 31,  // TODO(clio): confirm the chain bit
+    // EXINT: interrupts from XBUS devices, the CD-ROM among them.
+    kIrqExpansionBus     = 1u << 2,
+
+    // Bits 3..10 are the timers. Only an odd-numbered timer can interrupt,
+    // because timers chain in pairs and the high half of a pair is what
+    // signals. Timer 15 is bit 3 and they descend from there.
+    kIrqAudioTimer       = 1u << 11,
+
+    // Bits 12..28 are audio DMA channels.
+    kIrqXbusDmaComplete  = 1u << 29,
+
+    // Bit 31 says the extended flags at kClioIrq1Pending are worth reading.
+    kIrqSecondaryBank    = 1u << 31,
 };
+
+// The interrupt bit belonging to an odd-numbered timer. Even timers cannot
+// interrupt at all and return zero.
+constexpr u32 timer_interrupt_bit(unsigned timer) {
+    return (timer % 2 == 1 && timer < 16) ? (1u << (3 + (15 - timer) / 2)) : 0u;
+}
 
 // Register offsets from the base of the CLIO window. Everything the chip
 // decodes goes in this one place.
@@ -124,11 +139,25 @@ enum : u32 {
     kClioTimerCount   = 16,
     kClioTimerStride  = 8,
 
-    // Which timers are running. Paired set/clear ports, like the interrupt
-    // registers — writing a one to the set port starts that timer, writing a
-    // one to the clear port stops it.
-    kClioTimerEnable  = 0x0200,   // TODO(clio): confirm
-    kClioTimerDisable = 0x0204,   // TODO(clio): confirm
+    // Timer configuration. NOT one bit per timer: each timer has a FOUR bit
+    // configuration field, so the ports below cover eight timers each. The boot
+    // ROM writes 0x00001000 to the first of them, which under a one-bit-per-
+    // timer reading looks like "enable timer 12" - a timer it never programs,
+    // whose counter is therefore zero, which then underflows on every tick. The
+    // correct reading is timer 3, whose period the ROM does set.
+    //
+    // Writing ones to a Set port sets those configuration bits; writing ones to
+    // the matching Clear port clears them.
+    kClioTimerConfigSet0    = 0x0200,   // timers 0..7
+    kClioTimerConfigClear0  = 0x0204,
+    kClioTimerConfigSet8    = 0x0208,   // timers 8..15
+    kClioTimerConfigClear8  = 0x020c,
+    kClioTimerConfigBits    = 4,
+
+    // The four configuration bits of a timer.
+    kTimerDecrement = 0x1,   // counts at all
+    kTimerReload    = 0x2,   // reloads on underflow rather than stopping
+    kTimerCascade   = 0x4,   // only counts when the timer below it wraps
 
     // The expansion bus, through which the CD-ROM is reached. Its status
     // register carries a ready bit; the boot ROM polls it in a tight loop once
@@ -166,13 +195,31 @@ enum : u32 {
     // LOW, but the ROM waits for bit 4 to be SET after issuing a command, so
     // CLIO presents them to software already inverted. Implementing the bus
     // polarity here instead would hang on every command.
+    // The expansion bus. Four transaction windows, each 0x40 bytes wide, and
+    // that width is the point: sixteen devices at four bytes each, so the low
+    // address bits carry the DEVICE NUMBER. That is the SELECTION mechanism -
+    // the bus patent describes selection at length but never says how the host
+    // expresses it, and it turns out to be the address itself.
+    //
+    //   0x0400..0x04FF  XBUS DMA control
+    //   0x0500..0x053F  SELECTION on write, reserved on read
+    //   0x0540..0x057F  WR_POL on write, RD_POL on read
+    //   0x0580..0x05BF  WR_COM on write, RD_STAT on read
+    //   0x05C0..0x05FF  WR_DATA on write, RD_DATA on read
     kClioXbusStatus   = 0x0400,
-    kClioXbusStrobe   = 0x0500,
-    kClioXbusResult   = 0x0540,
+    kClioXbusSelect   = 0x0500,
+    kClioXbusPoll     = 0x0540,
     kClioXbusCommand  = 0x0580,
+    kClioXbusData     = 0x05c0,
+    kClioXbusWindow   = 0x0040,   // one window: sixteen devices, four bytes each
 
-    kXbusStatusReady  = 0x0010,   // status FIFO has something (active high)
-    kXbusChunkReady   = 0x0020,   // data FIFO has a chunk (active high)
+    // Poll register bits. The patent defines the underlying bus signals as
+    // ACTIVE LOW; CLIO presents them to software inverted, so a set bit means
+    // the FIFO has something. The boot ROM settles it - it issues a command and
+    // waits for bit 4 to be SET, and implementing the bus polarity here instead
+    // hangs the machine on its very first command.
+    kXbusStatusReady  = 0x0010,
+    kXbusChunkReady   = 0x0020,
 
     kXbusReady        = 0x0080,
 
@@ -236,6 +283,7 @@ private:
     void note_read(u32 offset);
     void update_cpu_interrupt_line();
     void tick_timers(u32 cycles);
+    u32  timer_config_at(u32 timer) const;
 
     Arm60& cpu_;
 
@@ -256,7 +304,9 @@ private:
 
     u32 timer_counter_[kClioTimerCount] = {};
     u32 timer_reload_[kClioTimerCount]  = {};
-    u32 timer_enabled_ = 0;
+
+    // Four configuration bits per timer, packed low timer first.
+    u64 timer_config_ = 0;
 
     u32 vint0_line_ = 0;
     u32 vint1_line_ = 0;
@@ -303,7 +353,9 @@ public:
     void set_xbus_result_register(XbusResultRegister which) { xbus_result_ = which; }
 
 private:
-    u32 xbus_poll_register() const;
+    XbusDevice* xbus_device(u32 index);
+    u32 xbus_poll_register(const XbusDevice* device) const;
+
 
     CdRomDevice cdrom_;
     XbusResultRegister xbus_result_ = XbusResultRegister::Poll;

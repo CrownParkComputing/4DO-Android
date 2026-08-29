@@ -15,6 +15,17 @@ using namespace retro3do;
 
 namespace {
 
+// Timer 3 is the one the boot ROM actually uses, and being odd it is one of the
+// timers that can interrupt. Its bit is 9.
+constexpr u32 kTimer3Irq = timer_interrupt_bit(3);
+constexpr u32 kTimer3Counter = kClioTimerBase + 3 * kClioTimerStride;
+constexpr u32 kTimer3Reload  = kTimer3Counter + 4;
+
+// Four configuration bits per timer, low timer first.
+constexpr u32 timer_config(unsigned timer, u32 bits) {
+    return bits << (timer * kClioTimerConfigBits);
+}
+
 struct Chip {
     Bus bus;
     Arm60 cpu{bus};
@@ -42,23 +53,23 @@ TEST(a_pending_interrupt_does_nothing_until_it_is_enabled) {
 
 TEST(acknowledging_writes_the_bits_to_the_clear_port) {
     Chip c;
-    c.clio.write(kClioIrq0Enable, kIrqVerticalBlank0 | kIrqTimer);
-    c.clio.raise(kIrqVerticalBlank0 | kIrqTimer);
-    CHECK_EQ(c.clio.read(kClioIrq0Pending), kIrqVerticalBlank0 | kIrqTimer);
+    c.clio.write(kClioIrq0Enable, kIrqVerticalBlank0 | kTimer3Irq);
+    c.clio.raise(kIrqVerticalBlank0 | kTimer3Irq);
+    CHECK_EQ(c.clio.read(kClioIrq0Pending), kIrqVerticalBlank0 | kTimer3Irq);
 
     // Acknowledge only one of the two. The other must survive — this is the
     // whole point of a separate clear port rather than a writeback.
     c.clio.write(kClioIrq0Clear, kIrqVerticalBlank0);
-    CHECK_EQ(c.clio.read(kClioIrq0Pending), kIrqTimer);
+    CHECK_EQ(c.clio.read(kClioIrq0Pending), kTimer3Irq);
 }
 
 TEST(the_disable_port_clears_enables_without_touching_pending) {
     Chip c;
-    c.clio.write(kClioIrq0Enable, kIrqVerticalBlank0 | kIrqTimer);
+    c.clio.write(kClioIrq0Enable, kIrqVerticalBlank0 | kTimer3Irq);
     c.clio.raise(kIrqVerticalBlank0);
 
     c.clio.write(kClioIrq0Disable, kIrqVerticalBlank0);
-    CHECK_EQ(c.clio.read(kClioIrq0Enable), kIrqTimer);
+    CHECK_EQ(c.clio.read(kClioIrq0Enable), kTimer3Irq);
     // Still pending: disabling a source masks it, it does not acknowledge it.
     CHECK_EQ(c.clio.read(kClioIrq0Pending), kIrqVerticalBlank0);
 }
@@ -128,7 +139,7 @@ TEST(a_second_edge_interrupts_again) {
     // take exactly one interrupt ever.
     Chip c;
     c.cpu.set_cpsr(c.cpu.cpsr() & ~kFlagI);
-    c.clio.write(kClioIrq0Enable, kIrqVerticalBlank0 | kIrqTimer);
+    c.clio.write(kClioIrq0Enable, kIrqVerticalBlank0 | kTimer3Irq);
     c.clio.raise(kIrqVerticalBlank0);
     c.cpu.step();
     CHECK_EQ(c.cpu.pc(), kVectorIrq);
@@ -146,11 +157,11 @@ TEST(a_second_edge_interrupts_again) {
 
 TEST(clio_registers_are_reachable_through_the_bus) {
     Chip c;
-    c.bus.write32(kClioBase + kClioIrq0Enable, kIrqTimer);
-    CHECK_EQ(c.bus.read32(kClioBase + kClioIrq0Enable), kIrqTimer);
+    c.bus.write32(kClioBase + kClioIrq0Enable, kTimer3Irq);
+    CHECK_EQ(c.bus.read32(kClioBase + kClioIrq0Enable), kTimer3Irq);
 
-    c.clio.raise(kIrqTimer);
-    CHECK_EQ(c.bus.read32(kClioBase + kClioIrq0Pending), kIrqTimer);
+    c.clio.raise(kTimer3Irq);
+    CHECK_EQ(c.bus.read32(kClioBase + kClioIrq0Pending), kTimer3Irq);
 }
 
 // ---------------------------------------------------------------------------
@@ -206,55 +217,108 @@ TEST(the_region_sets_the_field_length) {
 // ---------------------------------------------------------------------------
 // Timers
 // ---------------------------------------------------------------------------
+// Sixteen 16-bit decrementing units. Each has a FOUR bit configuration field -
+// not one bit - so the config ports cover eight timers each. Only odd-numbered
+// timers can interrupt, because timers chain in pairs and the high half of a
+// pair is what signals.
 
 TEST(a_timer_reloads_and_raises_an_interrupt_when_it_expires) {
     Chip c;
-    c.clio.write(kClioTimerBase, 100);       // timer 0 counter
-    c.clio.write(kClioTimerBase + 4, 500);   // timer 0 reload
-    c.clio.write(kClioIrq0Enable, kIrqTimer);
-    c.clio.write(kClioTimerEnable, 1u << 0);
+    c.clio.write(kTimer3Counter, 100);
+    c.clio.write(kTimer3Reload, 500);
+    c.clio.write(kClioIrq0Enable, kTimer3Irq);
+    c.clio.write(kClioTimerConfigSet0,
+                 timer_config(3, kTimerDecrement | kTimerReload));
 
     c.clio.tick(50);
-    CHECK_EQ(c.clio.read(kClioTimerBase), 50u);
-    CHECK_EQ(c.clio.read(kClioIrq0Pending) & kIrqTimer, 0u);
+    CHECK_EQ(c.clio.read(kTimer3Counter), 50u);
+    CHECK_EQ(c.clio.read(kClioIrq0Pending) & kTimer3Irq, 0u);
 
     c.clio.tick(60);  // past zero
-    CHECK_EQ(c.clio.read(kClioIrq0Pending) & kIrqTimer, kIrqTimer);
-    CHECK_EQ(c.clio.read(kClioTimerBase), 500u);
+    CHECK_EQ(c.clio.read(kClioIrq0Pending) & kTimer3Irq, kTimer3Irq);
+    CHECK_EQ(c.clio.read(kTimer3Counter), 500u);
 }
 
-TEST(a_disabled_timer_does_not_count) {
+TEST(a_timer_with_no_reload_bit_fires_once_and_then_stops) {
+    // The boot ROM configures timer 3 to decrement without reloading. Treating
+    // a spent timer as periodic costs hundreds of interrupts a frame and
+    // starves the machine of the time it needs to do anything else.
     Chip c;
-    c.clio.write(kClioTimerBase, 100);
-    c.clio.write(kClioTimerEnable, 1u << 0);
-    c.clio.write(kClioTimerDisable, 1u << 0);
+    c.clio.write(kTimer3Counter, 10);
+    c.clio.write(kClioIrq0Enable, kTimer3Irq);
+    c.clio.write(kClioTimerConfigSet0, timer_config(3, kTimerDecrement));
+
+    c.clio.tick(20);
+    CHECK_EQ(c.clio.read(kClioIrq0Pending) & kTimer3Irq, kTimer3Irq);
+
+    c.clio.write(kClioIrq0Clear, kTimer3Irq);
+    c.clio.tick(1000);
+    CHECK_EQ(c.clio.read(kClioIrq0Pending) & kTimer3Irq, 0u);
+}
+
+TEST(an_unconfigured_timer_does_not_count) {
+    Chip c;
+    c.clio.write(kTimer3Counter, 100);
+    c.clio.write(kClioTimerConfigSet0, timer_config(3, kTimerDecrement));
+    c.clio.write(kClioTimerConfigClear0, timer_config(3, kTimerDecrement));
 
     c.clio.tick(500);
-    CHECK_EQ(c.clio.read(kClioTimerBase), 100u);
+    CHECK_EQ(c.clio.read(kTimer3Counter), 100u);
 }
 
 TEST(timers_are_independent) {
     Chip c;
     c.clio.write(kClioTimerBase, 100);                        // timer 0
-    c.clio.write(kClioTimerBase + kClioTimerStride, 900);     // timer 1
-    c.clio.write(kClioTimerEnable, (1u << 0) | (1u << 1));
+    c.clio.write(kTimer3Counter, 900);                        // timer 3
+    c.clio.write(kClioTimerConfigSet0,
+                 timer_config(0, kTimerDecrement) |
+                 timer_config(3, kTimerDecrement));
 
     c.clio.tick(50);
     CHECK_EQ(c.clio.read(kClioTimerBase), 50u);
-    CHECK_EQ(c.clio.read(kClioTimerBase + kClioTimerStride), 850u);
+    CHECK_EQ(c.clio.read(kTimer3Counter), 850u);
+}
+
+TEST(an_even_timer_cannot_interrupt) {
+    // Only the high half of a chained pair signals, so even timers have no
+    // interrupt bit at all.
+    CHECK_EQ(timer_interrupt_bit(0), 0u);
+    CHECK_EQ(timer_interrupt_bit(2), 0u);
+    CHECK_EQ(timer_interrupt_bit(15), 1u << 3);
+    CHECK_EQ(timer_interrupt_bit(3), 1u << 9);
+    CHECK_EQ(timer_interrupt_bit(1), 1u << 10);
+}
+
+TEST(a_cascaded_timer_only_moves_when_the_one_below_it_wraps) {
+    // This is how two 16-bit units become one wider counter.
+    Chip c;
+    c.clio.write(kClioTimerBase + 2 * kClioTimerStride, 5);       // timer 2
+    c.clio.write(kClioTimerBase + 2 * kClioTimerStride + 4, 5);
+    c.clio.write(kTimer3Counter, 4);                              // timer 3
+    c.clio.write(kClioTimerConfigSet0,
+                 timer_config(2, kTimerDecrement | kTimerReload) |
+                 timer_config(3, kTimerDecrement | kTimerCascade));
+
+    // Timer 2 has not wrapped yet, so timer 3 must not have moved.
+    c.clio.tick(3);
+    CHECK_EQ(c.clio.read(kTimer3Counter), 4u);
+
+    // Now push timer 2 past zero; timer 3 takes exactly one step.
+    c.clio.tick(3);
+    CHECK_EQ(c.clio.read(kTimer3Counter), 3u);
 }
 
 TEST(a_reset_silences_everything) {
     Chip c;
     c.clio.write(kClioIrq0Enable, kIrqVerticalBlank0);
     c.clio.raise(kIrqVerticalBlank0);
-    c.clio.write(kClioTimerEnable, 1u << 0);
+    c.clio.write(kClioTimerConfigSet0, timer_config(3, kTimerDecrement));
 
     c.clio.reset();
 
     CHECK_EQ(c.clio.read(kClioIrq0Pending), 0u);
     CHECK_EQ(c.clio.read(kClioIrq0Enable), 0u);
-    CHECK_EQ(c.clio.read(kClioTimerEnable), 0u);
+    CHECK_EQ(c.clio.read(kClioTimerConfigSet0), 0u);
     CHECK_EQ(c.clio.scanline(), 0u);
 }
 
@@ -321,6 +385,40 @@ TEST(a_completed_cd_command_reports_status_ready_and_raises_its_interrupt) {
     for (int i = 0; i < 7; ++i) {
         c.clio.write(kClioXbusCommand, i == 0 ? 0x83u : 0x00u);
     }
-    CHECK_EQ(c.clio.read(kClioXbusResult) & kXbusStatusReady, kXbusStatusReady);
+    CHECK_EQ(c.clio.read(kClioXbusPoll) & kXbusStatusReady, kXbusStatusReady);
     CHECK_EQ(c.clio.read(kClioIrq0Pending) & kIrqExpansionBus, kIrqExpansionBus);
+}
+
+TEST(inserting_a_disc_is_visible_to_the_drive) {
+    // Opening the image and telling the machine a disc is in the tray are two
+    // different things, and only the second one is visible to the software
+    // running on it.
+    Chip c;
+    CHECK(!c.clio.cdrom().disc_present());
+
+    c.clio.cdrom().set_disc_present(true);
+    for (int i = 0; i < 7; ++i) {
+        c.clio.write(kClioXbusCommand, i == 0 ? 0x83u : 0x00u);
+    }
+    CHECK_EQ(c.clio.read(kClioXbusCommand) & kStatusDiscIn, kStatusDiscIn);
+}
+
+TEST(only_device_zero_answers_on_the_expansion_bus) {
+    // The low address bits carry the device number. Every address other than
+    // the built-in drive is empty, and an empty address must stay silent - a
+    // device that answers a probe it should have ignored makes the machine
+    // believe the bus is full of hardware.
+    Chip c;
+    for (int i = 0; i < 7; ++i) {
+        c.clio.write(kClioXbusCommand, i == 0 ? 0x83u : 0x00u);
+    }
+    CHECK_EQ(c.clio.read(kClioXbusPoll) & kXbusStatusReady, kXbusStatusReady);
+
+    // Device 3 is not fitted: nothing ready, and commands are ignored.
+    CHECK_EQ(c.clio.read(kClioXbusPoll + 3 * 4) & kXbusStatusReady, 0u);
+    const u64 before = c.clio.cdrom().commands_received();
+    for (int i = 0; i < 7; ++i) {
+        c.clio.write(kClioXbusCommand + 3 * 4, 0x83u);
+    }
+    CHECK_EQ(c.clio.cdrom().commands_received(), before);
 }

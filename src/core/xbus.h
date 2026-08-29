@@ -40,10 +40,17 @@ enum : u32 {
     kPollNoChunk        = 1u << 5,  // ChunkValid-: HIGH when no complete chunk
 };
 
-// Status Byte bits. Only ERROR is defined by the bus; the rest belong to the
-// device.
+// Drive status byte, from The 3DO Company's own SDK header <cdrom.h>. The bus
+// patent only defines ERROR; the remaining bits belong to the device, and this
+// is the device's own published definition of them. Note that ERROR falls at
+// 0x10 in both, which is a useful consistency check on the whole reading.
 enum : u32 {
-    kStatusError = 1u << 4,
+    kStatusReady        = 0x01,
+    kStatusDoubleSpeed  = 0x02,
+    kStatusError        = 0x10,
+    kStatusSpinUp       = 0x20,
+    kStatusDiscIn       = 0x40,
+    kStatusDoor         = 0x80,
 };
 
 // The bus supports sixteen devices, addressed 0..15. A device takes its address
@@ -94,6 +101,12 @@ public:
 
     // How many bytes make one command. See write_command().
     static constexpr size_t kCommandBytes = 7;
+
+    // How many bytes the drive returns. Observed directly: after the boot ROM
+    // finishes writing a command it reads RD_STAT exactly ten times, from a
+    // single instruction, without consulting the poll register between reads -
+    // so the reply length is fixed and the driver already knows it.
+    static constexpr size_t kReplyBytes = 10;
 
 private:
     std::deque<u8> status_;

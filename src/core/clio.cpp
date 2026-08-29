@@ -40,14 +40,24 @@ Clio::Clio(Arm60& cpu) : cpu_(cpu) {
 
 // The Poll Register, as the patent defines it. Both "valid" bits are ACTIVE
 // LOW: high means the corresponding FIFO has nothing to offer.
-u32 Clio::xbus_poll_register() const {
-    // Presented active high: a set bit means the FIFO has something. See the
-    // note on polarity beside the register definitions.
+XbusDevice* Clio::xbus_device(u32 index) {
+    // Only device 0 is fitted: the CD-ROM drive, which is built into the machine
+    // rather than plugged in. Every other address on the bus is empty, and an
+    // empty address must stay silent - a device that answers a probe it should
+    // have ignored makes the machine believe the bus is full of hardware.
+    return index == 0 ? &cdrom_ : nullptr;
+}
+
+u32 Clio::xbus_poll_register(const XbusDevice* device) const {
+    if (device == nullptr) {
+        return 0;   // nothing there: no status, no data
+    }
     u32 poll = 0;
-    if (!cdrom_.status_empty()) poll |= kXbusStatusReady;
-    if (cdrom_.has_chunk())     poll |= kXbusChunkReady;
+    if (!device->status_empty()) poll |= kXbusStatusReady;
+    if (device->has_chunk())     poll |= kXbusChunkReady;
     return poll;
 }
+
 
 u32 Clio::dsp_word(u32 offset) const {
     if (offset < kClioDspBase || offset >= kClioDspEnd) return 0;
@@ -64,7 +74,7 @@ void Clio::reset() {
         timer_counter_[i] = 0;
         timer_reload_[i] = 0;
     }
-    timer_enabled_ = 0;
+    timer_config_ = 0;
 
     vint0_line_ = 0;
     vint1_line_ = 0;
@@ -192,41 +202,57 @@ void Clio::tick(u32 cycles) {
 }
 
 void Clio::tick_timers(u32 cycles) {
-    if (timer_enabled_ == 0) {
+    if (timer_config_ == 0) {
         return;
     }
 
-    bool fired = false;
+    u32 raised = 0;
+    bool carry = false;   // did the previous (lower) timer underflow this tick?
+
     for (u32 i = 0; i < kClioTimerCount; ++i) {
-        if ((timer_enabled_ & (1u << i)) == 0) {
+        const u32 config = timer_config_at(i);
+        const bool cascade = (config & kTimerCascade) != 0;
+        const bool underflowed_below = carry;
+        carry = false;
+
+        if ((config & kTimerDecrement) == 0) {
             continue;
         }
-        // A timer that has reached zero with no reload to restart it is spent,
-        // not periodic. It must fire once and then stay quiet.
-        //
-        // Firing it every tick instead is catastrophic and does not look like a
-        // timer bug at all: the boot ROM enables a timer it never gives a period
-        // to, so the machine takes over five hundred timer interrupts PER FRAME
-        // and spends all of its time entering and leaving the handler, with none
-        // left to run the code that would animate the logo.
-        if (timer_counter_[i] == 0 && timer_reload_[i] == 0) {
+
+        // A cascaded timer is the high half of a wider one: it only moves when
+        // the timer below it wraps, which is what lets pairs form 32-bit
+        // counters.
+        u32 steps = cascade ? (underflowed_below ? 1u : 0u) : cycles;
+        if (steps == 0) {
             continue;
         }
-        // TODO(clio): the real decrement rate is derived from a prescaler this
-        // does not model yet, so timers currently run at the CPU clock. That is
-        // the right shape but the wrong speed, and anything depending on an
-        // absolute timer period will be wrong until the prescaler is known.
-        if (timer_counter_[i] > cycles) {
-            timer_counter_[i] -= cycles;
+
+        if (timer_counter_[i] > steps) {
+            timer_counter_[i] -= steps;
             continue;
         }
-        timer_counter_[i] = timer_reload_[i];
-        fired = true;
+
+        // Underflowed. Reload if configured to, otherwise the timer is spent
+        // and stops - firing a spent timer on every subsequent tick costs
+        // hundreds of interrupts a frame and starves everything else.
+        if ((config & kTimerReload) != 0) {
+            timer_counter_[i] = timer_reload_[i];
+        } else {
+            timer_counter_[i] = 0;
+            timer_config_ &= ~(u64{kTimerDecrement} << (i * kClioTimerConfigBits));
+        }
+        carry = true;
+        raised |= timer_interrupt_bit(i);
     }
 
-    if (fired) {
-        raise(kIrqTimer);
+    if (raised != 0) {
+        raise(raised);
     }
+}
+
+u32 Clio::timer_config_at(u32 timer) const {
+    return static_cast<u32>(
+        (timer_config_ >> (timer * kClioTimerConfigBits)) & 0xfu);
 }
 
 // ---------------------------------------------------------------------------
@@ -235,6 +261,26 @@ void Clio::tick_timers(u32 cycles) {
 u32 Clio::read(u32 offset) {
     offset &= (kClioWindowSize - 1);
     note_read(offset);
+
+    // Expansion bus windows. The low address bits name the device.
+    if (offset >= kClioXbusSelect && offset < kClioXbusData + kClioXbusWindow) {
+        const u32 base   = offset & ~(kClioXbusWindow - 1);
+        const u32 device = (offset - base) / 4;
+        XbusDevice* dev  = xbus_device(device);
+
+        switch (base) {
+            case kClioXbusSelect:
+                return 0;                       // reserved on read
+            case kClioXbusPoll:
+                return xbus_poll_register(dev);
+            case kClioXbusCommand:              // RD_STAT
+                return dev != nullptr ? dev->read_status() : 0;
+            case kClioXbusData:                 // RD_DATA
+                return dev != nullptr ? dev->read_data() : 0;
+            default:
+                break;
+        }
+    }
 
     if (offset >= kClioDspBase && offset < kClioDspEnd) {
         return dsp_window_[(offset - kClioDspBase) / 4];
@@ -267,17 +313,13 @@ u32 Clio::read(u32 offset) {
         case kClioMode:        return mode_;
 
         case kClioXbusStatus:  return kXbusReady;
-
-        // The device answers here. Which register this is - the Poll Register
-        // or a status-FIFO read - is selectable, because the ROM's behaviour
-        // alone does not distinguish them.
-        case kClioXbusResult:
-            if (xbus_result_ == XbusResultRegister::Status) {
-                return cdrom_.read_status();
-            }
-            return xbus_poll_register();
         case kClioBadBits:     return 0;
-        case kClioTimerEnable: return timer_enabled_;
+        case kClioTimerConfigSet0:
+        case kClioTimerConfigClear0:
+            return static_cast<u32>(timer_config_ & 0xffffffffu);
+        case kClioTimerConfigSet8:
+        case kClioTimerConfigClear8:
+            return static_cast<u32>(timer_config_ >> 32);
 
         default:
             return 0;
@@ -319,19 +361,25 @@ void Clio::write(u32 offset, u32 value) {
     offset &= (kClioWindowSize - 1);
     note_write(offset, value);
 
-    if (offset == kClioXbusCommand) {
-        // WR_COM: a single byte into the device's Command FIFO. Commands are
-        // multiple bytes, so the device decides when it has a whole one.
-        const bool was_empty = cdrom_.status_empty();
-        cdrom_.write_command(static_cast<u8>(value & 0xffu));
-        // A command that completed has put a Status Byte in the return FIFO.
-        // Announce it: the OS blocks on this interrupt rather than polling, so
-        // filling the FIFO silently leaves the machine idle forever.
-        if (was_empty && !cdrom_.status_empty()) {
-            raise(kIrqExpansionBus);
+    if (offset >= kClioXbusSelect && offset < kClioXbusData + kClioXbusWindow) {
+        const u32 base   = offset & ~(kClioXbusWindow - 1);
+        const u32 device = (offset - base) / 4;
+        XbusDevice* dev  = xbus_device(device);
+        if (dev == nullptr) {
+            return;   // an unselected or absent device ignores everything
+        }
+        if (base == kClioXbusCommand) {
+            const bool was_empty = dev->status_empty();
+            dev->write_command(static_cast<u8>(value & 0xffu));
+            // A completed command has put a Status Byte in the return FIFO.
+            // Announce it: the OS blocks on EXINT rather than polling.
+            if (was_empty && !dev->status_empty()) {
+                raise(kIrqExpansionBus);
+            }
         }
         return;
     }
+
 
     if (offset >= kClioDspBase && offset < kClioDspEnd) {
         dsp_window_[(offset - kClioDspBase) / 4] = value;
@@ -400,13 +448,18 @@ void Clio::write(u32 offset, u32 value) {
             update_cpu_interrupt_line();
             break;
 
-        case kClioTimerEnable:
-            timer_enabled_ |= value;
-            break;
-        case kClioTimerDisable:
-            timer_enabled_ &= ~value;
-            break;
-
+        case kClioTimerConfigSet0:
+            timer_config_ |= value;
+            return;
+        case kClioTimerConfigClear0:
+            timer_config_ &= ~u64{value};
+            return;
+        case kClioTimerConfigSet8:
+            timer_config_ |= (u64{value} << 32);
+            return;
+        case kClioTimerConfigClear8:
+            timer_config_ &= ~(u64{value} << 32);
+            return;
         default:
             break;
     }

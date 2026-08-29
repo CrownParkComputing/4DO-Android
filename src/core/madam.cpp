@@ -151,7 +151,9 @@ u32 Madam::read(u32 offset) {
     switch (offset) {
         case kMadamRevision:  return revision_;
         case kMadamMemConfig:  return mem_config_;
-        case kMadamDmaEnable:  return dma_enable_;
+        case kMadamDmaEnable:        return dma_enable_;
+        case kMadamXbusDmaAddress:   return xbus_dma_address_;
+        case kMadamXbusDmaLength:    return xbus_dma_length_;
         case kMadamVdlAddress: return vdl_address_;
         default:
             return 0;
@@ -200,6 +202,15 @@ void Madam::write(u32 offset, u32 value) {
             break;
         case kMadamDmaEnable:
             dma_enable_ = value;
+            break;
+        case kMadamXbusDmaAddress:
+            xbus_dma_address_ = value;
+            break;
+        case kMadamXbusDmaLength:
+            // Writing the length is what arms the transfer: the address is set
+            // first and means nothing on its own.
+            xbus_dma_length_ = value;
+            xbus_dma_pending_ = true;
             break;
         case kMadamVdlAddress:
             vdl_address_ = value;

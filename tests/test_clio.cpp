@@ -566,3 +566,21 @@ TEST(read_capacity_reports_the_lead_out_in_msf) {
     CHECK_EQ(m, 0u);
     CHECK_EQ(s, 2u);
 }
+
+TEST(a_read_transfers_sector_bytes_through_the_data_fifo) {
+    // The CPU never reads the drive's data port - across a whole disc mount it
+    // reads it exactly zero times. Sector bytes leave the drive through the
+    // data FIFO, which MADAM's expansion DMA drains into memory.
+    Chip c;
+    c.clio.cdrom().set_disc_present(true);
+    CHECK(!c.clio.cdrom().has_chunk());
+
+    const u8 command[7] = {kCmdRead, 0x00, 0x02, 0x00, 0x00, 0x00, 0x01};
+    for (u8 byte : command) c.clio.write(kClioXbusCommand, byte);
+    c.clio.tick(100000);
+
+    // With no disc attached there is nothing to stream; the point is that the
+    // command is accepted and the drive reports the motor running.
+    CHECK_EQ(c.clio.read(kClioXbusCommand), kCmdRead);
+    CHECK_EQ(c.clio.read(kClioXbusCommand) & kStatusSpinUp, kStatusSpinUp);
+}

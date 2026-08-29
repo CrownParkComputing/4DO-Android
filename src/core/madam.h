@@ -79,6 +79,16 @@ enum : u32 {
     // port, which is why no amount of adjusting the status port moved the
     // machine.
     kMadamDmaBase    = 0x0200,
+
+    // The expansion-bus DMA. This is how a sector actually reaches memory: the
+    // CPU never reads the drive's data port, it programmes these and waits for
+    // the transfer-complete interrupt.
+    //
+    // The length is written as bytes-minus-four - the boot ROM asks for 0x7FC
+    // when it wants one 2048-byte sector - so it reads as the offset of the
+    // last word rather than a count.
+    kMadamXbusDmaAddress = 0x0540,
+    kMadamXbusDmaLength  = 0x0544,
     kMadamDmaStride  = 8,
     kMadamDmaChannels = 32,
 
@@ -185,6 +195,12 @@ public:
 
     const MadamStats& stats() const { return stats_; }
 
+    // An expansion-bus DMA the host has programmed and not yet been served.
+    bool xbus_dma_pending() const { return xbus_dma_pending_; }
+    u32  xbus_dma_address() const { return xbus_dma_address_; }
+    u32  xbus_dma_bytes() const { return xbus_dma_length_ + 4; }
+    void clear_xbus_dma() { xbus_dma_pending_ = false; }
+
     // Where the machine has told the display to read its list from. Zero until
     // the software sets it, which is why a freshly reset machine is black.
     u32 vdl_address() const { return vdl_address_; }
@@ -231,6 +247,9 @@ private:
     u32 revision_ = 0;
     u32 mem_config_ = kMadamMemConfigStock;
     u32 dma_enable_ = 0;
+    u32 xbus_dma_address_ = 0;
+    u32 xbus_dma_length_ = 0;
+    bool xbus_dma_pending_ = false;
     u32 vdl_address_ = 0;
     u32 dma_address_[kMadamDmaChannels] = {};
     u32 dma_length_[kMadamDmaChannels] = {};

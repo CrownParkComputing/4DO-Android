@@ -72,6 +72,11 @@ public:
     // Emulate one video frame. Returns the number of CPU cycles spent.
     u32 run_frame();
 
+private:
+    void service_expansion_dma();
+
+public:
+
     Frame framebuffer() const;
 
     Arm60& cpu() { return cpu_; }

@@ -180,6 +180,31 @@ void Console::apply_write_watch() {
     watch.clear();
 }
 
+// Move a sector from the drive into memory.
+//
+// The CPU never reads the drive's data port - across a whole disc mount it
+// reads it exactly zero times. It programmes MADAM's expansion-bus DMA with an
+// address and a length and then waits for the transfer-complete interrupt, so
+// without this the machine issues a perfectly good READ and then waits forever
+// for data that has nowhere to go.
+void Console::service_expansion_dma() {
+    if (!madam_.xbus_dma_pending() || !clio_.cdrom().has_chunk()) {
+        return;
+    }
+
+    u32 address = madam_.xbus_dma_address();
+    const u32 bytes = madam_.xbus_dma_bytes();
+    for (u32 i = 0; i < bytes; ++i) {
+        bus_.write8(address++, clio_.cdrom().read_data());
+    }
+
+    madam_.clear_xbus_dma();
+    // The DMA wrote to memory that may hold code, so anything decoded from it
+    // is now stale.
+    cpu_.invalidate_decode_cache(madam_.xbus_dma_address(), bytes);
+    clio_.raise(kIrqXbusDmaComplete);
+}
+
 u32 Console::run_frame() {
     const u32 budget = cycles_per_frame(region_);
 
@@ -203,6 +228,7 @@ u32 Console::run_frame() {
         const u32 ran = cpu_.run(slice);
         spent += ran;
         clio_.tick(ran);
+        service_expansion_dma();
         apply_write_watch();
 
         // A field boundary ends the frame even if the cycle budget has not run

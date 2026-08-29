@@ -188,21 +188,39 @@ void Console::apply_write_watch() {
 // without this the machine issues a perfectly good READ and then waits forever
 // for data that has nowhere to go.
 void Console::service_expansion_dma() {
-    if (!madam_.xbus_dma_pending() || !clio_.cdrom().has_chunk()) {
+    if (!clio_.xbus_dma_requested()) {
         return;
     }
+    clio_.clear_xbus_dma_request();
 
     u32 address = madam_.xbus_dma_address();
-    const u32 bytes = madam_.xbus_dma_bytes();
-    for (u32 i = 0; i < bytes; ++i) {
-        bus_.write8(address++, clio_.cdrom().read_data());
+    // The length register holds bytes-minus-four and the loop runs while it is
+    // non-negative, so a transfer moves length + 4 bytes.
+    const s32 length = static_cast<s32>(madam_.read(kMadamXbusDmaLength));
+
+    for (s32 left = length; left >= 0; left -= 4) {
+        // Each word is assembled from four bytes taken MOST significant first,
+        // then stored in ascending address order. Reading them straight through
+        // instead reverses every word - which does not fail, it quietly
+        // produces a sector of plausible-looking rubbish.
+        const u8 b3 = clio_.cdrom().read_data();
+        const u8 b2 = clio_.cdrom().read_data();
+        const u8 b1 = clio_.cdrom().read_data();
+        const u8 b0 = clio_.cdrom().read_data();
+        bus_.write8(address + 0, b3);
+        bus_.write8(address + 1, b2);
+        bus_.write8(address + 2, b1);
+        bus_.write8(address + 3, b0);
+        address += 4;
     }
 
+    // The drive reports the transfer finished by parking the length and raising
+    // the completion interrupt the OS enabled at start-up.
+    madam_.write(kMadamXbusDmaLength, 0xfffffffcu);
     madam_.clear_xbus_dma();
+    clio_.set_xbus_ready(true);
+    cpu_.invalidate_decode_cache(madam_.xbus_dma_address(), u32(length) + 4u);
     ++expansion_dma_count_;
-    // The DMA wrote to memory that may hold code, so anything decoded from it
-    // is now stale.
-    cpu_.invalidate_decode_cache(madam_.xbus_dma_address(), bytes);
     clio_.raise(kIrqXbusDmaComplete);
 }
 

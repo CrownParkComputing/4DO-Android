@@ -264,6 +264,12 @@ enum : u32 {
     //   bit 15  active
     //   bit 14  happened before reset
     //   bits 0..7  device number
+    // Writing bit 20 here is what actually STARTS an expansion-bus DMA. The
+    // address and length are set in MADAM beforehand and mean nothing on their
+    // own - this is the trigger, and it is pulled once per transfer.
+    kClioDmaRequest   = 0x0304,
+    kClioDmaXbusStart = 0x00100000,
+
     kClioDipir1       = 0x0410,
     kClioDipir2       = 0x0414,
     kDipirActive      = 0x8000,
@@ -363,6 +369,7 @@ private:
     u32 xbus_poll_ = 0;
     u32 xbus_device_poll_ = 0;
     bool media_changed_ = false;
+    bool xbus_dma_requested_ = false;
     u32 xbus_control_ = kXbusReady;
     u32 xbus_type0_ = 0;
     u32 xbus_xfer_count_ = 0;
@@ -415,6 +422,17 @@ public:
 
 private:
     u32 xbus_poll_for_device() const;
+
+public:
+    // Set when software pulls the expansion-bus DMA trigger; cleared once the
+    // transfer has been served.
+    bool xbus_dma_requested() const { return xbus_dma_requested_; }
+    void clear_xbus_dma_request() { xbus_dma_requested_ = false; }
+    void set_xbus_ready(bool ready) {
+        if (ready) xbus_control_ |= kXbusReady; else xbus_control_ &= ~kXbusReady;
+    }
+
+private:
 
 
     CdRomDevice cdrom_;

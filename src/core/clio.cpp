@@ -512,6 +512,12 @@ void Clio::write(u32 offset, u32 value) {
             update_cpu_interrupt_line();
             break;
 
+        case kClioDmaRequest:
+            if ((value & kClioDmaXbusStart) != 0) {
+                xbus_dma_requested_ = true;
+            }
+            return;
+
         case kClioXbusCtlSet:
             xbus_control_ |= (value & kClioXbusCtlMask);
             return;

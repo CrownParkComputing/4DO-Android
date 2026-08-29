@@ -70,7 +70,8 @@ bool Ui::wants_keyboard() const {
     return initialised_ && ImGui::GetIO().WantCaptureKeyboard;
 }
 
-UiIntent Ui::build(Console& console, bool emulating, double fps) {
+UiIntent Ui::build(Console& console, bool emulating, double display_fps,
+                   double emulated_fps, double frame_ms, u64 underruns) {
     UiIntent intent;
     if (!initialised_) {
         return intent;
@@ -83,7 +84,8 @@ UiIntent Ui::build(Console& console, bool emulating, double fps) {
     if (show_launcher_ || !emulating) {
         draw_launcher(console, intent);
     } else {
-        draw_overlay(console, fps, intent);
+        draw_overlay(console, display_fps, emulated_fps, frame_ms, underruns,
+                     intent);
     }
 
     ImGui::Render();
@@ -200,7 +202,9 @@ void Ui::draw_launcher(Console& console, UiIntent& intent) {
     ImGui::End();
 }
 
-void Ui::draw_overlay(Console& console, double fps, UiIntent& intent) {
+void Ui::draw_overlay(Console& console, double display_fps,
+                      double emulated_fps, double frame_ms, u64 underruns,
+                      UiIntent& intent) {
     const ImGuiViewport* viewport = ImGui::GetMainViewport();
     ImGui::SetNextWindowPos(
         ImVec2(viewport->WorkPos.x + 12.0f, viewport->WorkPos.y + 12.0f));
@@ -211,10 +215,24 @@ void Ui::draw_overlay(Console& console, double fps, UiIntent& intent) {
                      ImGuiWindowFlags_NoSavedSettings | ImGuiWindowFlags_NoMove |
                      ImGuiWindowFlags_NoFocusOnAppearing | ImGuiWindowFlags_NoNav);
 
-    ImGui::Text("%.1f fps", fps);
+    // The target rate, so "48" reads as "behind" rather than just as a number.
+    const double target = console.region() == Region::Pal ? 50.0 : 60.0;
+    const bool keeping_up = emulated_fps >= target - 2.0;
+
+    ImGui::TextColored(keeping_up ? ImVec4(0.45f, 0.80f, 0.60f, 1.0f)
+                                  : ImVec4(0.95f, 0.65f, 0.35f, 1.0f),
+                       "machine %.0f/%.0f fps", emulated_fps, target);
+    ImGui::Text("display %.0f fps", display_fps);
+    ImGui::Text("frame   %.2f ms", frame_ms);
+    if (underruns > 0) {
+        // The first symptom of falling behind, and it shows up before anything
+        // is visible on screen.
+        ImGui::TextColored(ImVec4(0.95f, 0.45f, 0.35f, 1.0f), "audio gaps %llu",
+                           static_cast<unsigned long long>(underruns));
+    }
+
+    ImGui::Separator();
     ImGui::Text("PC %08X", console.cpu().pc());
-    ImGui::Text("%llu cycles",
-                static_cast<unsigned long long>(console.cpu().total_cycles()));
 
     ImGui::Separator();
     if (ImGui::Button("Menu")) {

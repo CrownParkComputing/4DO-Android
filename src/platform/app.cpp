@@ -2,8 +2,12 @@
 
 #include <SDL3/SDL.h>
 
+#include <cstring>
+
 #include "core/console.h"
+#include "core/frame_mailbox.h"
 #include "core/pad.h"
+#include "platform/emulator_thread.h"
 #include "ui/ui.h"
 
 namespace retro3do {
@@ -45,6 +49,9 @@ void write_test_pattern(Console& console) {
 App::App() = default;
 
 App::~App() {
+    // Stop emulating before anything it touches goes away.
+    if (emulator_) emulator_->stop();
+    emulator_.reset();
     ui_.reset();
     stop_audio();
     if (gamepad_) SDL_CloseGamepad(gamepad_);
@@ -78,6 +85,8 @@ bool App::init() {
     SDL_SetRenderVSync(renderer_, 0);
 
     console_ = std::make_unique<Console>();
+    mailbox_ = std::make_unique<FrameMailbox>();
+    emulator_ = std::make_unique<EmulatorThread>(*console_, *mailbox_);
 
     ui_ = std::make_unique<Ui>();
     if (!ui_->init(window_, renderer_)) {
@@ -97,6 +106,11 @@ bool App::init() {
         }
         SDL_free(ids);
     }
+
+    // Emulation runs on its own thread from here on. It is started paused, so
+    // nothing runs until there is something to run.
+    emulator_->set_paused(true);
+    emulator_->start();
 
     running_ = true;
     return true;
@@ -184,18 +198,25 @@ void App::handle_events() {
 }
 
 void App::present() {
-    const Frame frame = console_->framebuffer();
-    if (frame.pixels == nullptr || frame.width <= 0 || frame.height <= 0) {
+    const int width = mailbox_->width();
+    const int height = mailbox_->height();
+    if (width <= 0 || height <= 0) {
         return;
     }
 
-    ensure_frame_texture(frame.width, frame.height);
+    ensure_frame_texture(width, height);
     if (frame_texture_ == nullptr) {
         return;
     }
 
-    SDL_UpdateTexture(frame_texture_, nullptr, frame.pixels,
-                      frame.width * static_cast<int>(sizeof(u32)));
+    // Only re-upload when a new frame has actually arrived. If the display is
+    // running faster than the emulator - which it is, at 60 Hz against a paused
+    // or slow machine - the same texture is simply drawn again.
+    const u32* pixels = mailbox_->acquire();
+    if (pixels != nullptr) {
+        SDL_UpdateTexture(frame_texture_, nullptr, pixels,
+                          width * static_cast<int>(sizeof(u32)));
+    }
 
     // Letterbox to the machine's 4:3 output rather than stretching to the
     // window, which on a phone in landscape would otherwise distort everything.
@@ -204,6 +225,7 @@ void App::present() {
     SDL_GetRenderOutputSize(renderer_, &window_w, &window_h);
 
     const float target_aspect = 4.0f / 3.0f;
+    (void)height;
     float draw_w = static_cast<float>(window_w);
     float draw_h = draw_w / target_aspect;
     if (draw_h > static_cast<float>(window_h)) {
@@ -311,9 +333,6 @@ void App::open_gamepad(u32 which) {
 void App::tick() {
     handle_events();
 
-    if (emulating_ && console_->bios_loaded()) {
-        console_->run_frame();
-    }
     feed_audio();
 
     // Frames per second, smoothed, for the overlay. Measured across the whole
@@ -330,7 +349,14 @@ void App::tick() {
                                            : smoothed_fps * 0.9 + instant * 0.1;
     }
 
-    const UiIntent intent = ui_->build(*console_, emulating_, smoothed_fps);
+    // Two different rates, and the difference matters: the emulator's frame
+    // rate says whether the machine is keeping up, while the display's says
+    // whether the app feels smooth. Showing the display rate alone would hide
+    // a machine running at half speed behind a perfectly smooth window.
+    const EmulatorStats emu = emulator_->stats();
+    const UiIntent intent =
+        ui_->build(*console_, emulating_, smoothed_fps, emu.emulated_fps,
+                   emu.frame_ms, console_->audio().underruns());
 
     if (intent.bios_chosen && !intent.bios_path.empty()) {
         if (console_->load_bios(intent.bios_path)) {
@@ -351,17 +377,26 @@ void App::tick() {
         console_->eject_disc();
     }
     if (intent.test_pattern) {
+        // Drawn on this thread, with the emulator paused, so there is no race
+        // for the console's memory.
+        emulator_->set_paused(true);
         console_->reset();
         write_test_pattern(*console_);
         console_->run_frame();
+        std::memcpy(mailbox_->writable(), console_->framebuffer().pixels,
+                    static_cast<size_t>(mailbox_->width()) * mailbox_->height() *
+                        sizeof(u32));
+        mailbox_->publish();
         emulating_ = false;
     }
     if (intent.reset) {
-        console_->reset();
+        emulator_->request_reset();
         emulating_ = console_->bios_loaded();
+        emulator_->set_paused(!emulating_);
     }
     if (intent.toggle_pause) {
         emulating_ = !emulating_;
+        emulator_->set_paused(!emulating_);
     }
     if (intent.quit) {
         running_ = false;

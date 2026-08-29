@@ -7,6 +7,8 @@
 
 #include <string>
 
+#include "core/types.h"
+
 struct SDL_Window;
 struct SDL_Renderer;
 union SDL_Event;
@@ -46,14 +48,21 @@ public:
     bool wants_keyboard() const;
 
     // Build this frame's UI. Returns what the user asked for.
-    UiIntent build(Console& console, bool emulating, double fps);
+    // display_fps is how smooth the app feels; emulated_fps is whether the
+    // machine is actually keeping up. They are different numbers and both are
+    // shown, because a machine running at half speed behind a perfectly smooth
+    // window is precisely the failure the previous core made invisible.
+    UiIntent build(Console& console, bool emulating, double display_fps,
+                   double emulated_fps, double frame_ms, u64 underruns);
 
     // Draw the built UI over whatever the app has already presented.
     void render(SDL_Renderer* renderer);
 
 private:
     void draw_launcher(Console& console, UiIntent& intent);
-    void draw_overlay(Console& console, double fps, UiIntent& intent);
+    void draw_overlay(Console& console, double display_fps,
+                      double emulated_fps, double frame_ms, u64 underruns,
+                      UiIntent& intent);
 
     bool initialised_ = false;
     bool show_launcher_ = true;

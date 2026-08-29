@@ -4719,3 +4719,11 @@ Source file was:
               #endif
               return 0;
             }
+Determining if the include file pthread.h exists passed with the following output:
+Change Dir: /home/jon/StudioProjects/Retro-3DO/android/app/.cxx/Debug/2w1l2e5o/arm64-v8a/CMakeFiles/CMakeTmp
+
+Run Build Command(s):/home/jon/Android/Sdk/cmake/3.22.1/bin/ninja cmTC_d55e0 && [1/2] Building C object CMakeFiles/cmTC_d55e0.dir/CheckIncludeFile.c.o
+[2/2] Linking C executable cmTC_d55e0
+
+
+

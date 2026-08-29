@@ -251,6 +251,61 @@ first — which shows up as a diagonal that will not hold. Disconnecting a pad
 releases its buttons, or a pad unplugged mid-press leaves the machine holding a
 direction forever.
 
+## Threading and pacing (`src/platform/emulator_thread.cpp`, `src/core/frame_mailbox.cpp`)
+
+Emulation runs on its own thread and nowhere else. It publishes finished frames
+into a mailbox and pushes audio into a ring; the display takes whatever is
+newest whenever it happens to look. Neither side ever waits for the other.
+
+**One pacing policy, in one place.** The core this replaces ran emulation and
+GPU presentation on the same thread and then stacked three independent
+frame-droppers on top — an audio-starvation check, an adaptive skip ladder, and
+a renderer that silently bailed if it could not take a lock. None knew about the
+others, so a machine only slightly behind could drop far more frames than any
+one of them intended. Dropped frames with correct audio is exactly what people
+describe as "runs slow": the mitigation was the symptom.
+
+So the rules are stated once, in the thread:
+
+- Pace to the field rate against a monotonic deadline.
+- If a frame overruns, let the deadline slip rather than trying to catch up.
+  Catching up produces a burst that starves audio and then overruns again.
+- If more than four frames behind, reset the deadline instead of accumulating
+  debt that can never be paid off — after a stall, a breakpoint or the app being
+  backgrounded, sprinting to recover minutes is worse than dropping them.
+- Always sleep to the deadline; never spin. A handheld free-running at 100% of a
+  core gets hot, and a hot handheld is slower — a loop the old core could enter
+  and not leave.
+
+**Presentation is no longer a frame-dropper at all.** A display that misses a
+frame simply sees the next one, and emulation never notices.
+
+### The mailbox
+
+A triple buffer: one slot being filled, one holding the newest finished frame,
+one being read. Publishing is a single atomic exchange with the "is it fresh"
+flag packed into the same word as the slot index, so there is no window in which
+a consumer could see an index that does not yet name a complete frame.
+
+Not a queue, because a stale frame is worthless — a display that is behind wants
+the *newest* frame, not the oldest unread one, and a queue would add latency
+that never recovers. Not a mutex, because the old core's present path took a
+lock and dropped the frame if it could not get it, which is a frame-dropper
+hidden inside what looks like a rendering detail.
+
+`acquire()` returns nullptr when nothing new has arrived, so the display can
+skip a texture upload it does not need. Tests cover the properties that matter:
+frames are never seen half-written under mismatched producer/consumer rates,
+never go backwards, and the slot being read is never written.
+
+### Two frame rates, both shown
+
+The overlay reports the machine's rate against its target *and* the display's
+rate, separately. They are different numbers, and a machine running at half
+speed behind a perfectly smooth window is precisely the failure the previous
+core made invisible. Audio underruns are shown too, because they are the first
+symptom of falling behind and appear before anything is visible on screen.
+
 ## Still to be written
 
 The DSP, SPORT, and the XBUS interface through which the machine actually asks

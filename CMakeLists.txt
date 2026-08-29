@@ -27,6 +27,7 @@ add_library(retro3do_core STATIC
     src/core/clio.cpp
     src/core/console.cpp
     src/core/disc.cpp
+    src/core/frame_mailbox.cpp
     src/core/madam.cpp
     src/core/pad.cpp
     src/core/vdlp.cpp
@@ -99,6 +100,7 @@ target_link_libraries(imgui PUBLIC ${RETRO3DO_SDL_TARGET})
 set(RETRO3DO_APP_SOURCES
     src/main.cpp
     src/platform/app.cpp
+    src/platform/emulator_thread.cpp
     src/ui/ui.cpp
 )
 
@@ -111,7 +113,8 @@ else()
     add_executable(retro3do ${RETRO3DO_APP_SOURCES})
 endif()
 
-target_link_libraries(retro3do PRIVATE retro3do_core imgui ${RETRO3DO_SDL_TARGET})
+find_package(Threads REQUIRED)
+target_link_libraries(retro3do PRIVATE retro3do_core imgui ${RETRO3DO_SDL_TARGET} Threads::Threads)
 target_include_directories(retro3do PRIVATE src)
 
 if(IOS)
@@ -147,6 +150,7 @@ if(RETRO3DO_BUILD_TESTS)
         tests/test_bus.cpp
         tests/test_clio.cpp
         tests/test_disc.cpp
+        tests/test_frame_mailbox.cpp
         tests/test_madam.cpp
         tests/test_vdlp.cpp
     )

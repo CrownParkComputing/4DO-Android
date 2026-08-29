@@ -22,7 +22,8 @@ namespace retro3do {
 
 class Console;
 class Ui;
-class AudioOutput;
+class FrameMailbox;
+class EmulatorThread;
 
 class App {
 public:
@@ -63,6 +64,8 @@ private:
 
     std::unique_ptr<Console> console_;
     std::unique_ptr<Ui> ui_;
+    std::unique_ptr<FrameMailbox> mailbox_;
+    std::unique_ptr<EmulatorThread> emulator_;
 
     SDL_AudioStream* audio_stream_ = nullptr;
     SDL_Gamepad* gamepad_ = nullptr;

@@ -105,6 +105,13 @@ build retro3do/CMakeFiles/retro3do_core.dir/src/core/console.cpp.o: CXX_COMPILER
   OBJECT_DIR = retro3do/CMakeFiles/retro3do_core.dir
   OBJECT_FILE_DIR = retro3do/CMakeFiles/retro3do_core.dir/src/core
 
+build retro3do/CMakeFiles/retro3do_core.dir/src/core/madam.cpp.o: CXX_COMPILER__retro3do_core_Debug /home/jon/StudioProjects/Retro-3DO/src/core/madam.cpp || cmake_object_order_depends_target_retro3do_core
+  DEP_FILE = retro3do/CMakeFiles/retro3do_core.dir/src/core/madam.cpp.o.d
+  FLAGS = -g -DANDROID -fdata-sections -ffunction-sections -funwind-tables -fstack-protector-strong -no-canonical-prefixes -D_FORTIFY_SOURCE=2 -Wformat -Werror=format-security   -fno-limit-debug-info  -fPIC -O2 -fno-math-errno -Wall -Wextra -Wno-unused-parameter -std=gnu++17
+  INCLUDES = -I/home/jon/StudioProjects/Retro-3DO/src
+  OBJECT_DIR = retro3do/CMakeFiles/retro3do_core.dir
+  OBJECT_FILE_DIR = retro3do/CMakeFiles/retro3do_core.dir/src/core
+
 build retro3do/CMakeFiles/retro3do_core.dir/src/core/vdlp.cpp.o: CXX_COMPILER__retro3do_core_Debug /home/jon/StudioProjects/Retro-3DO/src/core/vdlp.cpp || cmake_object_order_depends_target_retro3do_core
   DEP_FILE = retro3do/CMakeFiles/retro3do_core.dir/src/core/vdlp.cpp.o.d
   FLAGS = -g -DANDROID -fdata-sections -ffunction-sections -funwind-tables -fstack-protector-strong -no-canonical-prefixes -D_FORTIFY_SOURCE=2 -Wformat -Werror=format-security   -fno-limit-debug-info  -fPIC -O2 -fno-math-errno -Wall -Wextra -Wno-unused-parameter -std=gnu++17
@@ -120,7 +127,7 @@ build retro3do/CMakeFiles/retro3do_core.dir/src/core/vdlp.cpp.o: CXX_COMPILER__r
 #############################################
 # Link the static library retro3do/libretro3do_core.a
 
-build retro3do/libretro3do_core.a: CXX_STATIC_LIBRARY_LINKER__retro3do_core_Debug retro3do/CMakeFiles/retro3do_core.dir/src/core/arm60.cpp.o retro3do/CMakeFiles/retro3do_core.dir/src/core/bus.cpp.o retro3do/CMakeFiles/retro3do_core.dir/src/core/clio.cpp.o retro3do/CMakeFiles/retro3do_core.dir/src/core/console.cpp.o retro3do/CMakeFiles/retro3do_core.dir/src/core/vdlp.cpp.o
+build retro3do/libretro3do_core.a: CXX_STATIC_LIBRARY_LINKER__retro3do_core_Debug retro3do/CMakeFiles/retro3do_core.dir/src/core/arm60.cpp.o retro3do/CMakeFiles/retro3do_core.dir/src/core/bus.cpp.o retro3do/CMakeFiles/retro3do_core.dir/src/core/clio.cpp.o retro3do/CMakeFiles/retro3do_core.dir/src/core/console.cpp.o retro3do/CMakeFiles/retro3do_core.dir/src/core/madam.cpp.o retro3do/CMakeFiles/retro3do_core.dir/src/core/vdlp.cpp.o
   LANGUAGE_COMPILE_FLAGS = -g -DANDROID -fdata-sections -ffunction-sections -funwind-tables -fstack-protector-strong -no-canonical-prefixes -D_FORTIFY_SOURCE=2 -Wformat -Werror=format-security   -fno-limit-debug-info
   OBJECT_DIR = retro3do/CMakeFiles/retro3do_core.dir
   POST_BUILD = :

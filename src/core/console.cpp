@@ -61,6 +61,19 @@ bool Console::load_bios(const std::string& path) {
     return true;
 }
 
+bool Console::load_disc(const std::string& path) {
+    if (!disc_.open(path)) {
+        last_error_ = disc_.last_error();
+        return false;
+    }
+    last_error_.clear();
+    return true;
+}
+
+void Console::eject_disc() {
+    disc_.close();
+}
+
 void Console::set_region(Region region) {
     region_ = region;
     frame_width_  = 320;

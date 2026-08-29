@@ -181,7 +181,39 @@ earning its place, and it means a dynarec is not needed yet. MADAM is the part
 with the least margin, which is the expected answer and the reason its inner
 loop was built to vectorise from the start.
 
+## Disc images (`src/core/disc.cpp`)
+
+Not a chip — the layer that turns a file into "give me logical block N". It is
+here because the way a CD is stored in a file is the single most common source
+of a disc that "does not work".
+
+A sector on the disc is 2352 bytes: sync, header, user data, error correction.
+A dump may hold full raw sectors or only the 2048-byte cooked payload, and where
+the payload starts depends on the mode:
+
+| Layout | Stride | Payload starts at |
+|---|---|---|
+| Cooked | 2048 | 0 |
+| Raw, mode 1 | 2352 | 16 (sync 12 + header 4) |
+| Raw, mode 2 | 2352 | 24 (sync 12 + header 4 + **subheader 8**) |
+| Raw, mode 2 (2336) | 2336 | 8 |
+
+**The layout is detected, never assumed from the extension.** `.bin` is usually
+raw and `.iso` usually cooked, but both conventions are broken often enough that
+trusting them causes the characteristic failure: reading a raw image as cooked
+*almost* works, because the first 2048 bytes of sector zero really are data, and
+then every sector after it is off by 304 bytes. That looks like a corrupt disc
+rather than a misread one. Detection looks for the twelve-byte sync pattern and
+then reads the mode byte. A test walks every sector of a raw image rather than
+spot-checking, because the failure only appears from the second sector on.
+
+Cue sheets are parsed for track number, type and start position (`mm:ss:ff` at
+75 frames per second), with each track's length taken from the next track's
+start. A cue naming a WAVE or MP3 file is **refused with an error** rather than
+accepted and then playing silence.
+
 ## Still to be written
 
-The DSP, SPORT and the CD-ROM interface. Each needs its own section here as it
-lands, naming the documentation it was built from and how it was verified.
+The DSP, SPORT, and the XBUS interface through which the machine actually asks
+for sectors — the disc layer above is ready but nothing connects it to the CPU
+yet. Each needs its own section here as it lands.

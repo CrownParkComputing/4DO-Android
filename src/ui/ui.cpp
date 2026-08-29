@@ -125,6 +125,46 @@ void Ui::draw_launcher(Console& console, UiIntent& intent) {
     }
 
     ImGui::Spacing();
+    ImGui::TextUnformatted("Disc");
+    ImGui::SetNextItemWidth(-120.0f);
+    ImGui::InputTextWithHint("##disc", "path to a .iso, .bin or .cue",
+                             disc_path_buffer_, sizeof(disc_path_buffer_));
+    ImGui::SameLine();
+    if (ImGui::Button("Insert", ImVec2(110.0f, 0.0f))) {
+        intent.disc_chosen = true;
+        intent.disc_path = disc_path_buffer_;
+    }
+
+    if (console.disc_loaded()) {
+        const Disc& disc = console.disc();
+        const char* layout_name = "cooked 2048";
+        switch (disc.layout()) {
+            case SectorLayout::Raw2352Mode1: layout_name = "raw 2352, mode 1"; break;
+            case SectorLayout::Raw2352Mode2: layout_name = "raw 2352, mode 2"; break;
+            case SectorLayout::Raw2336Mode2: layout_name = "raw 2336, mode 2"; break;
+            case SectorLayout::Cooked2048:   break;
+        }
+        ImGui::TextColored(ImVec4(0.45f, 0.80f, 0.60f, 1.0f),
+                           "Disc in: %u sectors, %s, %zu track%s.",
+                           disc.sector_count(), layout_name, disc.tracks().size(),
+                           disc.tracks().size() == 1 ? "" : "s");
+
+        // The track list is worth showing: it is the quickest way to tell a
+        // good dump from one whose cue sheet does not match its image.
+        if (ImGui::TreeNode("Tracks")) {
+            for (const Track& track : disc.tracks()) {
+                ImGui::Text("%2u  %-5s  start %6u  length %6u", track.number,
+                            track.is_audio ? "audio" : "data", track.start_lba,
+                            track.length_sectors);
+            }
+            ImGui::TreePop();
+        }
+        if (ImGui::SmallButton("Eject")) {
+            intent.eject = true;
+        }
+    }
+
+    ImGui::Spacing();
     ImGui::Separator();
     ImGui::Spacing();
 

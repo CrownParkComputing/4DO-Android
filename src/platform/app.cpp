@@ -193,6 +193,17 @@ void App::tick() {
             SDL_Log("%s", console_->last_error().c_str());
         }
     }
+    if (intent.disc_chosen && !intent.disc_path.empty()) {
+        if (console_->load_disc(intent.disc_path)) {
+            SDL_Log("Disc inserted: %s (%u sectors)", intent.disc_path.c_str(),
+                    console_->disc().sector_count());
+        } else {
+            SDL_Log("%s", console_->last_error().c_str());
+        }
+    }
+    if (intent.eject) {
+        console_->eject_disc();
+    }
     if (intent.test_pattern) {
         console_->reset();
         write_test_pattern(*console_);

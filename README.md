@@ -9,8 +9,9 @@ target, and Dear ImGui draws the launcher and the in-game overlay.
 
 > **Status: early, but it draws.** CPU, interrupts, video timing, the CEL engine
 > and the display path all run: cels are rotated, scaled and drawn through the
-> palette. What is missing is audio and the CD-ROM, so no real disc boots yet.
-> See [Roadmap](#roadmap).
+> palette. Disc images load and their tracks are read. What is missing is the
+> XBUS link between disc and CPU, and audio — so no real disc boots yet. See
+> [Roadmap](#roadmap).
 
 ## Why this exists rather than another Opera port
 
@@ -96,7 +97,8 @@ platform header, it belongs in `src/platform/` instead.
 - [x] VDLP — display list to framebuffer
 - [x] MADAM — the CEL engine: affine mapping, indexed and direct cels
 - [ ] DSP — audio
-- [ ] CD-ROM: CUE/BIN, ISO, CHD
+- [x] Disc images: ISO, BIN, CUE, with sector layout detected not assumed
+- [ ] XBUS: connect the disc to the CPU so a real disc boots
 - [ ] Save states, controller mapping, on-screen pad
 
 ## Licence

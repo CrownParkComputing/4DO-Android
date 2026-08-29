@@ -13,6 +13,7 @@
 
 #include "arm60.h"
 #include "bus.h"
+#include "disc.h"
 #include "clio.h"
 #include "madam.h"
 #include "vdlp.h"
@@ -45,6 +46,13 @@ public:
     bool load_bios(const std::string& path);
     bool bios_loaded() const { return bus_.bios_loaded(); }
 
+    // Insert a disc image. The disc is opened and its table of contents read;
+    // nothing is executed until the machine asks for a sector.
+    bool load_disc(const std::string& path);
+    void eject_disc();
+    bool disc_loaded() const { return disc_.is_open(); }
+    const Disc& disc() const { return disc_; }
+
     void set_region(Region region);
     Region region() const { return region_; }
 
@@ -71,6 +79,7 @@ private:
     Clio  clio_;
     Vdlp  vdlp_;
     Madam madam_;
+    Disc  disc_;
 
     Region region_ = Region::Ntsc;
     int frame_width_  = 320;

@@ -23,6 +23,9 @@ struct UiIntent {
     bool bios_chosen = false;
     std::string bios_path;
     bool test_pattern = false;
+    bool disc_chosen = false;
+    std::string disc_path;
+    bool eject = false;
 };
 
 class Ui {
@@ -55,6 +58,7 @@ private:
     bool initialised_ = false;
     bool show_launcher_ = true;
     char bios_path_buffer_[512] = {};
+    char disc_path_buffer_[512] = {};
     std::string status_;
 };
 

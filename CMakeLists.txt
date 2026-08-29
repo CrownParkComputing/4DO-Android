@@ -25,6 +25,7 @@ add_library(retro3do_core STATIC
     src/core/bus.cpp
     src/core/clio.cpp
     src/core/console.cpp
+    src/core/disc.cpp
     src/core/madam.cpp
     src/core/vdlp.cpp
 )
@@ -142,6 +143,7 @@ if(RETRO3DO_BUILD_TESTS)
         tests/test_arm60.cpp
         tests/test_bus.cpp
         tests/test_clio.cpp
+        tests/test_disc.cpp
         tests/test_madam.cpp
         tests/test_vdlp.cpp
     )

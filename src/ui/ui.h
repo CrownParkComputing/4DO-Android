@@ -47,6 +47,12 @@ public:
     Ui& operator=(const Ui&) = delete;
 
     bool init(SDL_Window* window, SDL_Renderer* renderer);
+
+    // Show what was remembered from a previous run. Without this the fields
+    // come back empty after a restart even though a BIOS and disc are loaded,
+    // which reads as "it forgot" when in fact it did not.
+    void set_remembered_bios(const std::string& name, const std::string& target);
+    void set_remembered_disc(const std::string& name, const std::string& target);
     void shutdown();
 
     // Feed SDL events in before the app consumes them, so ImGui can claim
@@ -88,8 +94,19 @@ private:
 
     bool initialised_ = false;
     bool show_launcher_ = true;
+    // What the text fields show, and what they actually refer to.
+    //
+    // These are NOT the same thing and conflating them was a real bug: after
+    // browsing, the field shows a readable filename while the thing that must
+    // be opened is a document URI. Sending the display text to the opener gives
+    // "No content provider: <filename>", because a bare name has no scheme.
+    //
+    // So the picked target is kept separately, and cleared the moment the user
+    // edits the field by hand - at which point what they typed IS the target.
     char bios_path_buffer_[512] = {};
     char disc_path_buffer_[512] = {};
+    std::string bios_target_;
+    std::string disc_target_;
     std::string status_;
 };
 

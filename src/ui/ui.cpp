@@ -3,6 +3,7 @@
 #include <SDL3/SDL.h>
 #include <cstdio>
 #include <cstring>
+#include <string>
 
 #include "backends/imgui_impl_sdl3.h"
 #include "backends/imgui_impl_sdlrenderer3.h"
@@ -60,6 +61,18 @@ bool Ui::init(SDL_Window* window, SDL_Renderer* renderer) {
 
     initialised_ = true;
     return true;
+}
+
+void Ui::set_remembered_bios(const std::string& name, const std::string& target) {
+    std::snprintf(bios_path_buffer_, sizeof(bios_path_buffer_), "%s",
+                  name.empty() ? target.c_str() : name.c_str());
+    bios_target_ = target;
+}
+
+void Ui::set_remembered_disc(const std::string& name, const std::string& target) {
+    std::snprintf(disc_path_buffer_, sizeof(disc_path_buffer_), "%s",
+                  name.empty() ? target.c_str() : name.c_str());
+    disc_target_ = target;
 }
 
 void Ui::shutdown() {
@@ -126,8 +139,10 @@ void Ui::draw_launcher(Console& console, bool touch_visible,
 
     ImGui::TextUnformatted("System ROM");
     ImGui::SetNextItemWidth(-(230.0f * scale_));
-    ImGui::InputTextWithHint("##bios", "path to the 3DO BIOS image",
-                             bios_path_buffer_, sizeof(bios_path_buffer_));
+    if (ImGui::InputTextWithHint("##bios", "path to the 3DO BIOS image",
+                                 bios_path_buffer_, sizeof(bios_path_buffer_))) {
+        bios_target_.clear();
+    }
     ImGui::SameLine();
     if (ImGui::Button("Browse##bios", ImVec2(110.0f * scale_, 0.0f))) {
         browsing_ = Browsing::Bios;
@@ -136,7 +151,9 @@ void Ui::draw_launcher(Console& console, bool touch_visible,
     ImGui::SameLine();
     if (ImGui::Button("Load", ImVec2(80.0f * scale_, 0.0f))) {
         intent.bios_chosen = true;
-        intent.bios_path = bios_path_buffer_;
+        intent.bios_path =
+            bios_target_.empty() ? std::string(bios_path_buffer_) : bios_target_;
+        intent.bios_name = bios_path_buffer_;
     }
 
     if (console.bios_loaded()) {
@@ -151,8 +168,10 @@ void Ui::draw_launcher(Console& console, bool touch_visible,
     ImGui::Spacing();
     ImGui::TextUnformatted("Disc");
     ImGui::SetNextItemWidth(-(230.0f * scale_));
-    ImGui::InputTextWithHint("##disc", "path to a .iso, .bin or .cue",
-                             disc_path_buffer_, sizeof(disc_path_buffer_));
+    if (ImGui::InputTextWithHint("##disc", "path to a .iso, .bin, .cue or .chd",
+                                 disc_path_buffer_, sizeof(disc_path_buffer_))) {
+        disc_target_.clear();
+    }
     ImGui::SameLine();
     if (ImGui::Button("Browse##disc", ImVec2(110.0f * scale_, 0.0f))) {
         browsing_ = Browsing::Disc;
@@ -161,7 +180,9 @@ void Ui::draw_launcher(Console& console, bool touch_visible,
     ImGui::SameLine();
     if (ImGui::Button("Insert", ImVec2(80.0f * scale_, 0.0f))) {
         intent.disc_chosen = true;
-        intent.disc_path = disc_path_buffer_;
+        intent.disc_path =
+            disc_target_.empty() ? std::string(disc_path_buffer_) : disc_target_;
+        intent.disc_name = disc_path_buffer_;
     }
 
     if (!console.disc_loaded() && console.disc().is_chd()) {
@@ -306,12 +327,14 @@ void Ui::draw_launcher(Console& console, bool touch_visible,
         if (browsing_ == Browsing::Bios) {
             std::snprintf(bios_path_buffer_, sizeof(bios_path_buffer_), "%s",
                           picked_name.empty() ? picked.c_str() : picked_name.c_str());
+            bios_target_ = picked;
             intent.bios_chosen = true;
             intent.bios_path = picked;
             intent.bios_name = picked_name;
         } else if (browsing_ == Browsing::Disc) {
             std::snprintf(disc_path_buffer_, sizeof(disc_path_buffer_), "%s",
                           picked_name.empty() ? picked.c_str() : picked_name.c_str());
+            disc_target_ = picked;
             intent.disc_chosen = true;
             intent.disc_path = picked;
             intent.disc_name = picked_name;

@@ -293,6 +293,10 @@ void App::present() {
 // everyone upstream, so the choice is made once, here.
 bool App::open_bios(const std::string& path, const std::string& name) {
     if (path.empty()) return false;
+    // Logged because the single most likely failure is a display name reaching
+    // here instead of a document URI, and that is invisible without seeing the
+    // actual string.
+    SDL_Log("open BIOS: %s", path.c_str());
     if (AndroidStorage::available()) {
         return console_->load_bios_fd(AndroidStorage::open_document(path),
                                       name.empty() ? path : name);
@@ -302,6 +306,7 @@ bool App::open_bios(const std::string& path, const std::string& name) {
 
 bool App::open_disc(const std::string& path, const std::string& name) {
     if (path.empty()) return false;
+    SDL_Log("open disc: %s", path.c_str());
     if (AndroidStorage::available()) {
         return console_->load_disc_fd(AndroidStorage::open_document(path),
                                       name.empty() ? path : name);
@@ -325,6 +330,7 @@ void App::load_settings() {
     // every install, so yesterday's path being gone is ordinary rather than
     // exceptional. It simply is not loaded, and the launcher shows why.
     const std::string bios = settings_->get(settings_key::kBiosPath);
+    ui_->set_remembered_bios(settings_->get(settings_key::kBiosName), bios);
     if (!bios.empty()) {
         if (open_bios(bios, settings_->get(settings_key::kBiosName))) {
             SDL_Log("Reopened BIOS from settings");
@@ -336,6 +342,7 @@ void App::load_settings() {
     }
 
     const std::string disc = settings_->get(settings_key::kDiscPath);
+    ui_->set_remembered_disc(settings_->get(settings_key::kDiscName), disc);
     if (!disc.empty()) {
         if (!open_disc(disc, settings_->get(settings_key::kDiscName))) {
             settings_->remove(settings_key::kDiscPath);

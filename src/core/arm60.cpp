@@ -401,6 +401,10 @@ u32 Arm60::execute(const Decoded& d) {
 
 u32 Arm60::step() {
     const u32 address = regs_[15];
+    if (exec_map_ != nullptr && address < 0x00100000u) {
+        const u32 word = address >> 2;
+        exec_map_[word >> 3] |= static_cast<u8>(1u << (word & 7u));
+    }
     const Decoded& d = decoded_at(address);
 
     // The ARM pipeline makes PC read as the instruction address plus eight.

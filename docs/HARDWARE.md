@@ -976,6 +976,43 @@ their replies — and renders **the 3DO startup logo**, correctly: red diamond,
 blue block, dithered gold sphere, contact shadow and wordmark, on the light
 panel over black.
 
+## What the boot actually does, traced
+
+The CPU carries an optional execution map: one bit per word of DRAM, set the
+first time an address is executed. Diffing it per frame answers "what did the
+machine do, and when did it stop doing it", which sampling the PC at frame
+boundaries cannot - a boot sequence is thousands of functions deep and the
+interesting function runs for a few hundred microseconds, so it is never the
+address you happen to catch.
+
+The picture it gives:
+
+| Frame | What runs |
+|---|---|
+| 1-15 | early start-up; the logo is drawn |
+| 36-47 | video timing calibration, CD driver init |
+| 86-90 | the OS and operator start; an I/O request is built and a syscall blocks |
+| 146 | that syscall returns and forty instructions run |
+| after | nothing new, ever |
+
+The syscall entered at frame 90 and returning at frame 146 is a **blocking
+wait** - the call sites resolve to SWI trampoline stubs of the form
+`mov r12,#n; b common`, the Portfolio OS syscall table. Around 0.93 seconds
+pass between the two, and what returns is a signal mask which the code then
+tests bit by bit.
+
+So the machine is not hung: it is a live event loop that has run out of events.
+
+### Two things this rules out
+
+**It is not blocked on the CD.** Removing the CD-ROM device from the bus
+entirely produces the same terminal path, shifted three frames. Inserting a disc
+produces a byte-identical execution map to not inserting one - the BIOS never
+takes a different path, because it never looks.
+
+**It is not an interrupt problem.** The machine takes about 126 FIQs a frame,
+and the real service routine reads the pending register thousands of times.
+
 ### The honest boundary
 
 The logo is drawn but does not yet animate. The machine reaches the OS idle loop

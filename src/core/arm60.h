@@ -149,6 +149,15 @@ public:
 
     Mode mode() const { return static_cast<Mode>(cpsr_ & kModeMask); }
 
+    // Execution map: one bit per word of DRAM, set the first time an address is
+    // executed. Null disables it and costs one predictable branch.
+    //
+    // This is the tool for "what did the machine do, and when did it stop doing
+    // it". Sampling the PC at frame boundaries answers neither - a boot sequence
+    // is thousands of functions deep and the interesting one runs for a few
+    // hundred microseconds, so it is never the address you happen to catch.
+    void set_execution_map(u8* bits) { exec_map_ = bits; }
+
     // How many IRQ exceptions have been taken since reset. A bring-up
     // diagnostic: "is the handler running at all" is otherwise very hard to
     // tell apart from "the handler runs and does nothing useful", and the two
@@ -223,6 +232,7 @@ private:
     u64 total_cycles_ = 0;
     u64 irqs_taken_ = 0;
     u64 fiqs_taken_ = 0;
+    u8* exec_map_ = nullptr;
 
     // Decode cache, one entry per instruction slot of addressable code memory.
     // Allocated lazily per region rather than for the whole 4 GB space.

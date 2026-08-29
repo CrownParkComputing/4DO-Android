@@ -168,6 +168,11 @@ public:
     // being serviced at all.
     u64 fiqs_taken() const { return fiqs_taken_; }
 
+    // Bring-up counters: a decode cache that is thrashing looks exactly like a
+    // slow interpreter from the outside.
+    u64 decodes() const { return decodes_; }
+    u64 invalidations() const { return invalidations_; }
+
     // Cycles executed since reset. The scheduler drives everything from this.
     u64 total_cycles() const { return total_cycles_; }
 
@@ -232,6 +237,8 @@ private:
     u64 total_cycles_ = 0;
     u64 irqs_taken_ = 0;
     u64 fiqs_taken_ = 0;
+    u64 decodes_ = 0;
+    u64 invalidations_ = 0;
     u8* exec_map_ = nullptr;
 
     // Decode cache, one entry per instruction slot of addressable code memory.

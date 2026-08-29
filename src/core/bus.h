@@ -37,10 +37,17 @@ enum : u32 {
     // four hang the same way, so the configuration byte is not the missing
     // piece.
     //
-    // So something else here depends on the wrong map, and this halved layout
-    // has been masking it. That bug is worth more than this comment: with the
-    // map wrong, anything the machine places high in DRAM lands in video memory
-    // instead, which is exactly where the reference implementation puts the
+    // What the wrong map is masking is now known: SPORT. Corrected, the machine
+    // runs normally for about three thousand frames and then begins hammering
+    // the VRAM page copier - SPORT accesses go from 5 to 142 MILLION over the
+    // next two thousand frames, which is what makes the emulator appear to hang.
+    // It is not hung and it is not slow code: it is a loop that never makes
+    // progress, and the CPU's own counters stay flat throughout (745 decodes,
+    // 608 invalidations, no interrupts taken).
+    //
+    // So the next thing to fix is SPORT under the real map, not the map itself.
+    // With the map wrong, anything the machine places high in DRAM also lands in
+    // video memory, which is exactly where the reference implementation puts the
     // buffer it reads the disc into.
     kDramBase = 0x00000000,
     kDramSize = 1u * 1024 * 1024,

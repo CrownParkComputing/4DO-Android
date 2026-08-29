@@ -153,6 +153,7 @@ void Arm60::invalidate_decode_cache() {
 
 void Arm60::invalidate_decode_cache(u32 address, u32 length) {
     if (length == 0) return;
+    ++invalidations_;
     cache_->invalidate(address, length);
 }
 
@@ -291,6 +292,7 @@ const Decoded& Arm60::decoded_at(u32 address) {
     const u32 slot = (address % DecodeCache::kPageBytes) / 4;
 
     if (page.stamp[slot] != page.generation) {
+        ++decodes_;
         page.entries[slot] = decode(bus_.fetch32(address));
         page.stamp[slot] = page.generation;
     }

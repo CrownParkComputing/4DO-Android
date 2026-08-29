@@ -1,3 +1,0 @@
-/home/jon/StudioProjects/Retro-3DO/CMakeLists.txt
-/home/jon/StudioProjects/Retro-3DO/android/app/jni/CMakeLists.txt
-/home/jon/StudioProjects/Retro-3DO/third_party/SDL/CMakeLists.txt

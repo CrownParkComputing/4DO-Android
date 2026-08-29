@@ -69,7 +69,10 @@ App::~App() {
 }
 
 bool App::init() {
-    if (!SDL_Init(SDL_INIT_VIDEO | SDL_INIT_GAMEPAD)) {
+    // SDL_INIT_AUDIO is required or SDL_OpenAudioDeviceStream fails with
+    // "Audio subsystem is not initialized" - which is reported as "audio
+    // unavailable" and looks like a device problem rather than a missing flag.
+    if (!SDL_Init(SDL_INIT_VIDEO | SDL_INIT_GAMEPAD | SDL_INIT_AUDIO)) {
         last_error_ = std::string("SDL could not start: ") + SDL_GetError();
         return false;
     }
@@ -138,7 +141,11 @@ bool App::init() {
     }
     load_settings();
 
-    emulator_->set_paused(true);
+    emulator_->set_paused(!start_on_launch_);
+    emulating_ = start_on_launch_;
+    if (start_on_launch_) {
+        ui_->hide_launcher();
+    }
     emulator_->start();
 
     running_ = true;
@@ -334,6 +341,10 @@ void App::load_settings() {
     if (!bios.empty()) {
         if (open_bios(bios, settings_->get(settings_key::kBiosName))) {
             SDL_Log("Reopened BIOS from settings");
+            // Start straight away. Having to press Start on every launch when
+            // the machine already has everything it needs is a chore, and it
+            // means the app looks inert on opening when it is not.
+            start_on_launch_ = true;
         } else {
             SDL_Log("Remembered BIOS is no longer reachable; forgetting it");
             settings_->remove(settings_key::kBiosPath);

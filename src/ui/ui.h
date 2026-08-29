@@ -51,6 +51,10 @@ public:
     // Show what was remembered from a previous run. Without this the fields
     // come back empty after a restart even though a BIOS and disc are loaded,
     // which reads as "it forgot" when in fact it did not.
+    // Open straight into the machine rather than the launcher, for when a BIOS
+    // is already loaded and there is nothing to choose.
+    void hide_launcher() { show_launcher_ = false; }
+
     void set_remembered_bios(const std::string& name, const std::string& target);
     void set_remembered_disc(const std::string& name, const std::string& target);
     void shutdown();

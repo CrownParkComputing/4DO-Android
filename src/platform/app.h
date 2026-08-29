@@ -78,6 +78,7 @@ private:
     SDL_AudioStream* audio_stream_ = nullptr;
     SDL_Gamepad* gamepad_ = nullptr;
 
+    bool start_on_launch_ = false;
     bool running_ = false;
     bool emulating_ = false;
 

@@ -315,12 +315,20 @@ u8 CdRomDevice::drive_status() const {
     // lists 0x08 as STATUS_SUCCESS but marks it unconfirmed, and the driver
     // that actually boots this disc has no such bit at all. Setting one the
     // host does not expect is not harmless.
-    // Only what is true. Per MAME's cr560b a drive out of reset reports media
-    // if a disc is in it and nothing else; the motor is reported once it has
-    // been told to spin up.
+    // A drive with a disc in it reports itself ready, tray shut, disc present
+    // and ALREADY SPINNING - 0xE1 - without being told to spin up.
+    //
+    // Observed, not read: a reference emulator logs that byte as the drive's
+    // state before it issues any spin-up command. It matters because the boot
+    // branches on it. Told the motor is stopped, the driver goes off to check
+    // the data path and spin the drive up; told 0xE1, it skips both and gets on
+    // with setting the mode and reading.
+    //
+    // MAME's cr560b reports media only and leaves the motor stopped, which is
+    // where this started and is why the sequence diverged.
     u8 status = kStatusDoor;
-    if (disc_present_) status |= kStatusDiscIn;
-    if (motor_on_)     status |= kStatusSpinUp | kStatusReady;
+    if (disc_present_) status |= kStatusDiscIn | kStatusSpinUp | kStatusReady;
+    else if (motor_on_) status |= kStatusSpinUp | kStatusReady;
     return status;
 }
 

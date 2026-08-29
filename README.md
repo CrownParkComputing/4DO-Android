@@ -99,7 +99,10 @@ platform header, it belongs in `src/platform/` instead.
 - [ ] DSP — audio
 - [x] Disc images: ISO, BIN, CUE, with sector layout detected not assumed
 - [ ] XBUS: connect the disc to the CPU so a real disc boots
-- [ ] Save states, controller mapping, on-screen pad
+- [x] Audio output path: lock-free ring, SDL sink
+- [x] Controller: keyboard and gamepad through SDL
+- [ ] DSP — the machine is silent until this exists
+- [ ] Save states, on-screen pad for touch
 
 ## Licence
 

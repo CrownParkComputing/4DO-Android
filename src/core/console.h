@@ -13,9 +13,11 @@
 
 #include "arm60.h"
 #include "bus.h"
+#include "audio_ring.h"
 #include "disc.h"
 #include "clio.h"
 #include "madam.h"
+#include "pad.h"
 #include "vdlp.h"
 #include "types.h"
 
@@ -68,6 +70,8 @@ public:
     Clio& clio() { return clio_; }
     Vdlp& vdlp() { return vdlp_; }
     Madam& madam() { return madam_; }
+    PadState& pads() { return pads_; }
+    AudioRing& audio() { return audio_; }
 
     const std::string& last_error() const { return last_error_; }
 
@@ -80,6 +84,8 @@ private:
     Vdlp  vdlp_;
     Madam madam_;
     Disc  disc_;
+    PadState  pads_;
+    AudioRing audio_;
 
     Region region_ = Region::Ntsc;
     int frame_width_  = 320;

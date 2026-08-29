@@ -33,19 +33,19 @@
 			{
 				"command" : 1,
 				"file" : 0,
-				"line" : 37,
+				"line" : 40,
 				"parent" : 0
 			},
 			{
 				"command" : 1,
 				"file" : 0,
-				"line" : 41,
+				"line" : 44,
 				"parent" : 0
 			},
 			{
 				"command" : 2,
 				"file" : 0,
-				"line" : 31,
+				"line" : 34,
 				"parent" : 0
 			}
 		]
@@ -105,7 +105,10 @@
 				2,
 				3,
 				4,
-				5
+				5,
+				6,
+				7,
+				8
 			],
 			"sysroot" : 
 			{
@@ -132,7 +135,10 @@
 				2,
 				3,
 				4,
-				5
+				5,
+				6,
+				7,
+				8
 			]
 		}
 	],
@@ -142,6 +148,12 @@
 			"backtrace" : 1,
 			"compileGroupIndex" : 0,
 			"path" : "/home/jon/StudioProjects/Retro-3DO/src/core/arm60.cpp",
+			"sourceGroupIndex" : 0
+		},
+		{
+			"backtrace" : 1,
+			"compileGroupIndex" : 0,
+			"path" : "/home/jon/StudioProjects/Retro-3DO/src/core/audio_ring.cpp",
 			"sourceGroupIndex" : 0
 		},
 		{
@@ -165,7 +177,19 @@
 		{
 			"backtrace" : 1,
 			"compileGroupIndex" : 0,
+			"path" : "/home/jon/StudioProjects/Retro-3DO/src/core/disc.cpp",
+			"sourceGroupIndex" : 0
+		},
+		{
+			"backtrace" : 1,
+			"compileGroupIndex" : 0,
 			"path" : "/home/jon/StudioProjects/Retro-3DO/src/core/madam.cpp",
+			"sourceGroupIndex" : 0
+		},
+		{
+			"backtrace" : 1,
+			"compileGroupIndex" : 0,
+			"path" : "/home/jon/StudioProjects/Retro-3DO/src/core/pad.cpp",
 			"sourceGroupIndex" : 0
 		},
 		{

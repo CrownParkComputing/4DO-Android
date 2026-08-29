@@ -3,6 +3,7 @@
 #include <SDL3/SDL.h>
 
 #include "core/console.h"
+#include "core/pad.h"
 #include "ui/ui.h"
 
 namespace retro3do {
@@ -45,6 +46,8 @@ App::App() = default;
 
 App::~App() {
     ui_.reset();
+    stop_audio();
+    if (gamepad_) SDL_CloseGamepad(gamepad_);
     if (frame_texture_) SDL_DestroyTexture(frame_texture_);
     if (renderer_) SDL_DestroyRenderer(renderer_);
     if (window_) SDL_DestroyWindow(window_);
@@ -80,6 +83,19 @@ bool App::init() {
     if (!ui_->init(window_, renderer_)) {
         last_error_ = "Could not start the user interface";
         return false;
+    }
+
+    start_audio();
+
+    // Any pad already plugged in when the app starts does not generate a
+    // connection event, so they are opened explicitly.
+    int count = 0;
+    SDL_JoystickID* ids = SDL_GetGamepads(&count);
+    if (ids != nullptr) {
+        for (int i = 0; i < count; ++i) {
+            open_gamepad(ids[i]);
+        }
+        SDL_free(ids);
     }
 
     running_ = true;
@@ -120,6 +136,47 @@ void App::handle_events() {
                     running_ = false;
                 }
                 break;
+            case SDL_EVENT_KEY_DOWN:
+            case SDL_EVENT_KEY_UP:
+                // A panel with focus gets the keys; otherwise they are the pad.
+                if (!ui_->wants_keyboard()) {
+                    apply_keyboard(event.key.scancode,
+                                   event.type == SDL_EVENT_KEY_DOWN);
+                }
+                break;
+
+            case SDL_EVENT_GAMEPAD_ADDED:
+                open_gamepad(event.gdevice.which);
+                break;
+            case SDL_EVENT_GAMEPAD_REMOVED:
+                if (gamepad_ != nullptr &&
+                    SDL_GetGamepadID(gamepad_) == event.gdevice.which) {
+                    SDL_CloseGamepad(gamepad_);
+                    gamepad_ = nullptr;
+                }
+                break;
+
+            case SDL_EVENT_GAMEPAD_BUTTON_DOWN:
+            case SDL_EVENT_GAMEPAD_BUTTON_UP: {
+                const bool down = event.type == SDL_EVENT_GAMEPAD_BUTTON_DOWN;
+                PadState& pads = console_->pads();
+                switch (event.gbutton.button) {
+                    case SDL_GAMEPAD_BUTTON_DPAD_UP:    pads.press(0, PadButton::Up, down); break;
+                    case SDL_GAMEPAD_BUTTON_DPAD_DOWN:  pads.press(0, PadButton::Down, down); break;
+                    case SDL_GAMEPAD_BUTTON_DPAD_LEFT:  pads.press(0, PadButton::Left, down); break;
+                    case SDL_GAMEPAD_BUTTON_DPAD_RIGHT: pads.press(0, PadButton::Right, down); break;
+                    case SDL_GAMEPAD_BUTTON_SOUTH:      pads.press(0, PadButton::A, down); break;
+                    case SDL_GAMEPAD_BUTTON_EAST:       pads.press(0, PadButton::B, down); break;
+                    case SDL_GAMEPAD_BUTTON_WEST:       pads.press(0, PadButton::C, down); break;
+                    case SDL_GAMEPAD_BUTTON_START:      pads.press(0, PadButton::Play, down); break;
+                    case SDL_GAMEPAD_BUTTON_BACK:       pads.press(0, PadButton::Stop, down); break;
+                    case SDL_GAMEPAD_BUTTON_LEFT_SHOULDER:  pads.press(0, PadButton::LeftShift, down); break;
+                    case SDL_GAMEPAD_BUTTON_RIGHT_SHOULDER: pads.press(0, PadButton::RightShift, down); break;
+                    default: break;
+                }
+                break;
+            }
+
             default:
                 break;
         }
@@ -163,12 +220,101 @@ void App::present() {
     SDL_RenderTexture(renderer_, frame_texture_, nullptr, &destination);
 }
 
+
+// ---------------------------------------------------------------------------
+// Audio
+// ---------------------------------------------------------------------------
+bool App::start_audio() {
+    SDL_AudioSpec spec;
+    spec.format = SDL_AUDIO_S16;
+    spec.channels = 2;
+    spec.freq = static_cast<int>(kAudioSampleRate);
+
+    // A stream rather than a callback: SDL does the resampling if the device
+    // will not take 44.1 kHz, which on a phone it frequently will not.
+    audio_stream_ = SDL_OpenAudioDeviceStream(SDL_AUDIO_DEVICE_DEFAULT_PLAYBACK,
+                                              &spec, nullptr, nullptr);
+    if (audio_stream_ == nullptr) {
+        // Audio not being available is not fatal. A device with no output, or
+        // one whose audio server is busy, should still run the emulator.
+        SDL_Log("Audio unavailable, continuing silently: %s", SDL_GetError());
+        return false;
+    }
+    SDL_ResumeAudioStreamDevice(audio_stream_);
+    return true;
+}
+
+void App::stop_audio() {
+    if (audio_stream_ != nullptr) {
+        SDL_DestroyAudioStream(audio_stream_);
+        audio_stream_ = nullptr;
+    }
+}
+
+void App::feed_audio() {
+    if (audio_stream_ == nullptr) {
+        return;
+    }
+
+    // Keep roughly two frames queued. Less and any hitch is audible; more and
+    // input starts to feel detached from the sound.
+    constexpr int kTargetQueuedBytes =
+        static_cast<int>(kAudioSampleRate / 30) * static_cast<int>(sizeof(StereoSample));
+
+    const int queued = SDL_GetAudioStreamQueued(audio_stream_);
+    if (queued >= kTargetQueuedBytes) {
+        return;
+    }
+
+    StereoSample chunk[1024];
+    int wanted = (kTargetQueuedBytes - queued) / static_cast<int>(sizeof(StereoSample));
+    while (wanted > 0) {
+        const u32 count = static_cast<u32>(wanted > 1024 ? 1024 : wanted);
+        console_->audio().pull(chunk, count);
+        SDL_PutAudioStreamData(audio_stream_, chunk,
+                               static_cast<int>(count * sizeof(StereoSample)));
+        wanted -= static_cast<int>(count);
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Input
+// ---------------------------------------------------------------------------
+void App::apply_keyboard(int scancode, bool down) {
+    PadState& pads = console_->pads();
+    switch (scancode) {
+        case SDL_SCANCODE_UP:     pads.press(0, PadButton::Up, down); break;
+        case SDL_SCANCODE_DOWN:   pads.press(0, PadButton::Down, down); break;
+        case SDL_SCANCODE_LEFT:   pads.press(0, PadButton::Left, down); break;
+        case SDL_SCANCODE_RIGHT:  pads.press(0, PadButton::Right, down); break;
+        case SDL_SCANCODE_Z:      pads.press(0, PadButton::A, down); break;
+        case SDL_SCANCODE_X:      pads.press(0, PadButton::B, down); break;
+        case SDL_SCANCODE_C:      pads.press(0, PadButton::C, down); break;
+        case SDL_SCANCODE_RETURN: pads.press(0, PadButton::Play, down); break;
+        case SDL_SCANCODE_SPACE:  pads.press(0, PadButton::Stop, down); break;
+        case SDL_SCANCODE_Q:      pads.press(0, PadButton::LeftShift, down); break;
+        case SDL_SCANCODE_W:      pads.press(0, PadButton::RightShift, down); break;
+        default: break;
+    }
+}
+
+void App::open_gamepad(u32 which) {
+    if (gamepad_ != nullptr) {
+        return;  // one pad for now; the 3DO chains up to eight
+    }
+    gamepad_ = SDL_OpenGamepad(which);
+    if (gamepad_ != nullptr) {
+        SDL_Log("Gamepad connected: %s", SDL_GetGamepadName(gamepad_));
+    }
+}
+
 void App::tick() {
     handle_events();
 
     if (emulating_ && console_->bios_loaded()) {
         console_->run_frame();
     }
+    feed_audio();
 
     // Frames per second, smoothed, for the overlay. Measured across the whole
     // turn of the loop, so it reflects what the user actually sees.

@@ -10,9 +10,13 @@
 #include <memory>
 #include <string>
 
+#include "core/types.h"
+
 struct SDL_Window;
 struct SDL_Renderer;
 struct SDL_Texture;
+struct SDL_AudioStream;
+struct SDL_Gamepad;
 
 namespace retro3do {
 
@@ -43,6 +47,11 @@ private:
     void tick();
 
     void handle_events();
+    bool start_audio();
+    void stop_audio();
+    void feed_audio();
+    void apply_keyboard(int scancode, bool down);
+    void open_gamepad(u32 which);
     void present();
     void ensure_frame_texture(int width, int height);
 
@@ -54,6 +63,9 @@ private:
 
     std::unique_ptr<Console> console_;
     std::unique_ptr<Ui> ui_;
+
+    SDL_AudioStream* audio_stream_ = nullptr;
+    SDL_Gamepad* gamepad_ = nullptr;
 
     bool running_ = false;
     bool emulating_ = false;

@@ -212,6 +212,45 @@ Cue sheets are parsed for track number, type and start position (`mm:ss:ff` at
 start. A cue naming a WAVE or MP3 file is **refused with an error** rather than
 accepted and then playing silence.
 
+## Audio output (`src/core/audio_ring.cpp`)
+
+Not a chip either — the transport between the emulator and the platform's audio
+device. It is the one piece with a hard realtime deadline on *both* ends, so it
+is lock-free, single-producer single-consumer, and never allocates.
+
+Two policies are deliberate and tested:
+
+- **An underrun yields silence, not a repeated sample.** Repeating is the other
+  obvious choice and it buzzes, which sounds like a broken emulator rather than
+  a dropped frame.
+- **A full ring refuses the excess rather than blocking.** The emulator thread
+  must never wait on the audio thread — on Android and iOS that would stall the
+  device's whole audio pipeline, not just this app.
+
+`refused()` counts samples the ring had no room for, and the header says plainly
+what that does and does not mean: a producer that retries loses nothing even
+though the count rises, so it measures back-pressure rather than lost audio. The
+emulator never retries, so for the emulator the two coincide. This distinction
+exists because a test caught the original counter conflating them.
+
+The console fills the ring with the right number of samples every frame even
+though the DSP does not exist yet, so pacing and underrun behaviour are exercised
+from the start rather than appearing for the first time when sound is switched
+on.
+
+## Control pad (`src/core/pad.cpp`)
+
+Pads daisy-chain on the 3DO — the machine sees one serial stream with every
+connected pad in it, which is why it needs no multitap. Up to eight.
+
+Each pad's buttons live in a single atomic word, so the emulation thread always
+sees a coherent set rather than a half-applied update. Presses are
+read-modify-write rather than stores, because the host may map several sources
+(keyboard *and* gamepad) onto pad one and a store would lose whichever arrived
+first — which shows up as a diagonal that will not hold. Disconnecting a pad
+releases its buttons, or a pad unplugged mid-press leaves the machine holding a
+direction forever.
+
 ## Still to be written
 
 The DSP, SPORT, and the XBUS interface through which the machine actually asks

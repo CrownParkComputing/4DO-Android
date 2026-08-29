@@ -93,6 +93,8 @@ void Console::reset() {
     clio_.reset();
     vdlp_.reset();
     madam_.reset();
+    pads_.reset();
+    audio_.reset();
     frame_count_ = 0;
     std::fill(framebuffer_.begin(), framebuffer_.end(), 0xff000000u);
 }
@@ -129,6 +131,20 @@ u32 Console::run_frame() {
             clio_.clear_field_complete();
             break;
         }
+    }
+
+    // Audio for this frame. The DSP does not exist yet, so the machine is
+    // silent — but the ring is filled with the right number of samples anyway,
+    // so that the pacing and underrun behaviour are exercised from the start
+    // rather than appearing for the first time when sound is switched on.
+    {
+        const u32 fields_per_second = region_ == Region::Pal ? 50u : 60u;
+        const u32 samples_this_frame = kAudioSampleRate / fields_per_second;
+        StereoSample silence[kAudioSampleRate / 50];
+        for (u32 i = 0; i < samples_this_frame; ++i) {
+            silence[i] = StereoSample{};
+        }
+        audio_.push(silence, samples_this_frame);
     }
 
     // The field has ended, so draw it. This is the only place the framebuffer

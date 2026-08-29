@@ -273,9 +273,13 @@ u8 CdRomDevice::drive_status() const {
     // Only what is actually true. A drive out of reset has not been told to
     // spin up, so reporting the motor running - and "ready" with it - describes
     // a drive in a state the machine never asked for.
-    u8 status = 0;
+    // The door is shut. This drive is built into the machine rather than
+    // plugged into it, so there is no state in which it is not - and the host
+    // does look: reporting it changes which code the boot takes.
+    u8 status = kStatusDoor;
     if (disc_present_) status |= kStatusDiscIn;
     if (motor_on_)     status |= kStatusSpinUp | kStatusReady;
+    if (last_ok_)      status |= kStatusSuccess;
     return status;
 }
 
@@ -287,6 +291,7 @@ void CdRomDevice::reset() {
     media_changed_ = false;
     interrupt_request_ = false;
     motor_on_ = false;
+    last_ok_ = false;
     pending_reply_.clear();
     transfer_lba_ = 0;
     transfer_sectors_ = 0;
@@ -326,6 +331,7 @@ void CdRomDevice::write_command(u8 byte) {
         fprintf(stderr, "\n");
     }
 
+    last_ok_ = true;
     build_reply(last_command_);
 
     completion_pending_ = true;

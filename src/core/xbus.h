@@ -207,6 +207,7 @@ private:
     bool disc_present_ = false;
     bool media_changed_ = false;
     bool motor_on_ = false;
+    bool last_ok_ = false;
 
     Disc* disc_ = nullptr;
 

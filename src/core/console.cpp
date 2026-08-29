@@ -219,6 +219,10 @@ u32 Console::run_frame() {
         audio_.push(silence, samples_this_frame);
     }
 
+    // The machine tells the display where its list is by writing a MADAM
+    // register; the display reads it each field rather than being pushed to.
+    vdlp_.set_list_address(madam_.vdl_address());
+
     // The field has ended, so draw it. This is the only place the framebuffer
     // is produced, and it happens after emulation rather than during it — the
     // console still does not present, it only fills a buffer.

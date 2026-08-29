@@ -31,22 +31,20 @@ void Vdlp::reset() {
 void Vdlp::render_line(u32* out, int width, u32 framebuffer_address, int line) {
     const u8* vram = bus_.vram();
 
-    // Two pixels live in each 32-bit word, most significant half first.
-    const u32 line_bytes = static_cast<u32>(width) * 2u;
-    u32 offset = (framebuffer_address - kVramBase) + static_cast<u32>(line) * line_bytes;
+    const u32 base = framebuffer_address - kVramBase;
 
     for (int x = 0; x < width; ++x) {
         // Bounds-check every pixel rather than the line: a display list can
         // legitimately point near the end of VRAM, and a game that sets a bad
         // pointer should show corruption, not crash the emulator.
-        if (offset + 1 >= kVramSize) {
+        const u32 at = base + framebuffer_offset(x, line, width);
+        if (at + 1 >= kVramSize) {
             out[x] = 0xff000000u;
             continue;
         }
         const u16 pixel =
-            static_cast<u16>((static_cast<u16>(vram[offset]) << 8) | vram[offset + 1]);
+            static_cast<u16>((static_cast<u16>(vram[at]) << 8) | vram[at + 1]);
         out[x] = expand_rgb555(pixel);
-        offset += 2;
     }
 }
 

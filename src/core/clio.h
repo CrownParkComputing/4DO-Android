@@ -157,7 +157,16 @@ public:
     bool field_complete() const { return field_complete_; }
     void clear_field_complete() { field_complete_ = false; }
 
+    // Bring-up diagnostics: the last value written to each low register, and
+    // whether it was ever written at all. Knowing WHICH registers a boot ROM
+    // programs, and with what, is most of the work of finding out what it
+    // expects - and guessing at that from behaviour alone is very slow.
+    static constexpr u32 kTrackedRegisters = 2048;
+    bool register_written(u32 offset) const;
+    u32  register_last_write(u32 offset) const;
+
 private:
+    void note_write(u32 offset, u32 value);
     void update_cpu_interrupt_line();
     void tick_timers(u32 cycles);
 
@@ -191,6 +200,8 @@ private:
     u32 watchdog_ = 0;
     u32 seed_ = 0;
     u32 timer_slack_ = 0;
+    u32 written_value_[kTrackedRegisters] = {};
+    bool written_flag_[kTrackedRegisters] = {};
 
     // The DSP is not emulated. Its window is backed by plain storage so that an
     // uploaded program is retained and can be read back and inspected, rather

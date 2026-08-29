@@ -66,6 +66,25 @@ private:
     u32 entries_walked_ = 0;
 };
 
+// Where a pixel lives in the framebuffer, as a byte offset from its base.
+//
+// The framebuffer is INTERLEAVED, not linear: each 32-bit word holds two pixels
+// at the same x from two adjacent scanlines, the even line in the high half and
+// the odd line in the low half. A pair of lines therefore occupies `width`
+// words, and consecutive pixels on one line are four bytes apart.
+//
+// This lives in one place on purpose. MADAM writes the framebuffer and the VDLP
+// reads it, and if the two disagree about the layout the picture is wrong in a
+// way that looks like a rendering bug in whichever one you happen to suspect.
+// They were briefly inconsistent, and the test that caught it was the one that
+// draws a cel and then checks it appears in the frame - the seam between them.
+constexpr u32 framebuffer_offset(int x, int y, int width) {
+    const u32 pair = static_cast<u32>(y) / 2u;
+    const u32 pair_bytes = static_cast<u32>(width) * 4u;
+    return pair * pair_bytes + static_cast<u32>(x) * 4u +
+           ((y & 1) != 0 ? 2u : 0u);
+}
+
 // Expand a 3DO pixel to XRGB8888.
 //
 // VRAM holds 16 bits per pixel as 0RRRRRGGGGGBBBBB. Five bits per channel are

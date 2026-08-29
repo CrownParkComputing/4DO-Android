@@ -208,8 +208,28 @@ u32 Clio::read(u32 offset) {
     }
 }
 
+
+bool Clio::register_written(u32 offset) const {
+    const u32 index = offset / 4;
+    return index < kTrackedRegisters && written_flag_[index];
+}
+
+u32 Clio::register_last_write(u32 offset) const {
+    const u32 index = offset / 4;
+    return index < kTrackedRegisters ? written_value_[index] : 0;
+}
+
+void Clio::note_write(u32 offset, u32 value) {
+    const u32 index = offset / 4;
+    if (index < kTrackedRegisters) {
+        written_value_[index] = value;
+        written_flag_[index] = true;
+    }
+}
+
 void Clio::write(u32 offset, u32 value) {
     offset &= (kClioWindowSize - 1);
+    note_write(offset, value);
 
     if (offset >= kClioDspBase && offset < kClioDspEnd) {
         dsp_window_[(offset - kClioDspBase) / 4] = value;

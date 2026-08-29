@@ -58,6 +58,15 @@ enum : u32 {
     kMadamMemConfig  = 0x0004,
     kMadamClipXY     = 0x0008,   // TODO(madam): confirm
     kMadamCelStart   = 0x0100,   // writing here starts the engine on a list
+
+    // The address of the video display list, which is what the VDLP walks to
+    // produce a field.
+    //
+    // Found by recording every register the boot ROM programs: it writes
+    // exactly one word-aligned value pointing into VRAM, `0x001B0000`, and
+    // this is where. It is an absolute bus address, not a VRAM offset - as a
+    // VRAM offset it would be past the end of a 1 MB VRAM.
+    kMadamVdlAddress = 0x0580,
     kMadamPipStart   = 0x0104,   // TODO(madam): confirm
     kMadamMatrixBase = 0x7000,   // the hardware matrix unit
     kMadamWindowSize = 0x10000,
@@ -151,11 +160,32 @@ public:
 
     const MadamStats& stats() const { return stats_; }
 
+    // Where the machine has told the display to read its list from. Zero until
+    // the software sets it, which is why a freshly reset machine is black.
+    u32 vdl_address() const { return vdl_address_; }
+
     // Read one CCB. Public because it is worth testing on its own: a
     // misread CCB produces garbage that is very hard to attribute afterwards.
     Ccb read_ccb(u32 address) const;
 
+    // Where cels are drawn. In the real machine this comes from the current
+    // framebuffer; until MADAM's own register set is confirmed the console
+    // points it at VRAM directly.
+    void set_target(u32 address, u32 stride_bytes) {
+        target_address_ = address;
+        target_stride_bytes_ = stride_bytes;
+    }
+
+    // Bring-up diagnostics: the last value written to each low register, and
+    // whether it was ever written at all. Knowing WHICH registers a boot ROM
+    // programs, and with what, is most of the work of finding out what it
+    // expects; guessing that from behaviour alone is very slow.
+    static constexpr u32 kTrackedRegisters = 2048;
+    bool register_written(u32 offset) const;
+    u32  register_last_write(u32 offset) const;
+
 private:
+    void note_write(u32 offset, u32 value);
     void draw_cel(const Ccb& ccb);
 
     // Fetch one source pixel, already expanded to RGB555. Handles the indexed
@@ -168,23 +198,16 @@ private:
 
     u32 revision_ = 0;
     u32 mem_config_ = kMadamMemConfigStock;
+    u32 vdl_address_ = 0;
     u32 clip_width_ = 320;
     u32 clip_height_ = 240;
 
-    // Where cels are drawn. In the real machine this comes from the current
-    // framebuffer; until MADAM's own register set is confirmed the console
-    // points it at VRAM directly.
     u32 target_address_ = 0;
     u32 target_stride_bytes_ = 320 * 2;
 
-public:
-    void set_target(u32 address, u32 stride_bytes) {
-        target_address_ = address;
-        target_stride_bytes_ = stride_bytes;
-    }
-
-private:
     MadamStats stats_;
+    u32 written_value_[kTrackedRegisters] = {};
+    bool written_flag_[kTrackedRegisters] = {};
 };
 
 // Decode the pixel format from a CCB's PRE0 word.

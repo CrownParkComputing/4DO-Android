@@ -7,11 +7,10 @@ One C++ codebase builds for Android, iOS, Linux and Windows. There is no
 per-platform front end: SDL provides the window, input, audio and GPU on every
 target, and Dear ImGui draws the launcher and the in-game overlay.
 
-> **Status: early, but it draws.** CPU, interrupts, video timing, the CEL engine
-> and the display path all run: cels are rotated, scaled and drawn through the
-> palette. Disc images load and their tracks are read. What is missing is the
-> XBUS link between disc and CPU, and audio — so no real disc boots yet. See
-> [Roadmap](#roadmap).
+> **Status: it boots.** A real 3DO BIOS passes its power-on self test and
+> displays the 3DO logo. Disc images load and their tracks are read, but nothing
+> connects a disc to the CPU yet, and there is no audio — so a game will not run
+> yet. See [Roadmap](#roadmap).
 
 ## Why this exists rather than another Opera port
 
@@ -98,6 +97,7 @@ platform header, it belongs in `src/platform/` instead.
 - [x] MADAM — the CEL engine: affine mapping, indexed and direct cels
 - [ ] DSP — audio
 - [x] Disc images: ISO, BIN, CUE, with sector layout detected not assumed
+- [x] SPORT — page copy and fill; the ROM does not pass its self test without it
 - [ ] XBUS: connect the disc to the CPU so a real disc boots
 - [x] Emulation on its own thread, with one pacing policy and a triple-buffered frame mailbox
 - [x] Audio output path: lock-free ring, SDL sink

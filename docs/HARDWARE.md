@@ -527,9 +527,33 @@ with `0x7FF` and wait for a particular line — so masking it off makes that wai
 never finish.
 
 With SPORT, the map correction and the field flag in place, the ROM **passes its
-power-on self test**: three billion instructions with no panic, reaching much
-deeper code (`0x1CCC0` rather than `0x10AC`) and writing 35 KB of VRAM rather
-than 2 KB. It still does not set a display list, so there is no picture yet.
+power-on self test** and **boots to the 3DO logo**.
+
+### Getting to a picture
+
+Two more things were needed, and both were found by recording every register the
+ROM programs rather than by reasoning about what it might do:
+
+**MADAM `0x0580` is the display-list address.** The ROM writes exactly one
+word-aligned value pointing into VRAM, `0x001B0000`, and this is where. It is an
+absolute bus address, not a VRAM offset — as an offset it would be past the end
+of a 1 MB VRAM. Nothing had connected MADAM to the VDLP, so the display list
+address stayed zero and the screen stayed black no matter how well the ROM ran.
+
+**The framebuffer is interleaved, not linear.** Each 32-bit word holds two
+pixels at the same x from two adjacent scanlines: the even line in the high
+half, the odd line in the low half. So a pair of lines occupies `width` words,
+and consecutive pixels on one line are four bytes apart rather than two.
+
+That one is worth recognising by sight. Reading it linearly produced a logo that
+was clearly *the* logo — right colours, right shapes — but squashed to half
+width, duplicated across the screen, and with every other line black. It reads
+as a stride bug and it is a pixel-order one.
+
+The offset is computed by `framebuffer_offset()` in one place, used by both
+MADAM (which writes) and the VDLP (which reads). They were briefly inconsistent,
+and the test that caught it was the one that draws a cel and then checks it
+appears in the frame — the seam between the two chips.
 
 A useful thing to recognise: the routine at DRAM `0x100` is a **nested delay
 loop**, not a hang, and its inner count is chosen by comparing PC against

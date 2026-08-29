@@ -1,6 +1,7 @@
 #include "madam.h"
 
 #include "bus.h"
+#include "vdlp.h"
 
 namespace retro3do {
 namespace {
@@ -104,6 +105,7 @@ Madam::Madam(Bus& bus) : bus_(bus) {
 void Madam::reset() {
     revision_ = 0;
     mem_config_ = kMadamMemConfigStock;
+    vdl_address_ = 0;
     clip_width_ = 320;
     clip_height_ = 240;
     target_address_ = kVramBase;
@@ -123,19 +125,43 @@ u32 Madam::read(u32 offset) {
     offset &= (kMadamWindowSize - 1);
     switch (offset) {
         case kMadamRevision:  return revision_;
-        case kMadamMemConfig: return mem_config_;
+        case kMadamMemConfig:  return mem_config_;
+        case kMadamVdlAddress: return vdl_address_;
         default:              return 0;
+    }
+}
+
+
+bool Madam::register_written(u32 offset) const {
+    const u32 index = offset / 4;
+    return index < kTrackedRegisters && written_flag_[index];
+}
+
+u32 Madam::register_last_write(u32 offset) const {
+    const u32 index = offset / 4;
+    return index < kTrackedRegisters ? written_value_[index] : 0;
+}
+
+void Madam::note_write(u32 offset, u32 value) {
+    const u32 index = offset / 4;
+    if (index < kTrackedRegisters) {
+        written_value_[index] = value;
+        written_flag_[index] = true;
     }
 }
 
 void Madam::write(u32 offset, u32 value) {
     offset &= (kMadamWindowSize - 1);
+    note_write(offset, value);
     switch (offset) {
         case kMadamRevision:
             revision_ = value;
             break;
         case kMadamMemConfig:
             mem_config_ = value;
+            break;
+        case kMadamVdlAddress:
+            vdl_address_ = value;
             break;
         case kMadamCelStart:
             // Writing the list address is what starts the engine. The real chip
@@ -244,9 +270,11 @@ void Madam::put_pixel(s32 x, s32 y, u16 pixel) {
         static_cast<u32>(y) >= clip_height_) {
         return;
     }
-    const u32 address = target_address_ +
-                        static_cast<u32>(y) * target_stride_bytes_ +
-                        static_cast<u32>(x) * 2u;
+    // The same layout the display reads. MADAM writing linearly while the VDLP
+    // read interleaved produced a picture that was wrong in both chips' favour
+    // depending on which you suspected, so the offset is computed in one place.
+    const u32 address =
+        target_address_ + framebuffer_offset(x, y, static_cast<int>(clip_width_));
     bus_.write16(address, pixel);
     ++stats_.pixels_written;
 }

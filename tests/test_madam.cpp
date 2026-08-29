@@ -7,6 +7,7 @@
 #include "core/bus.h"
 #include "core/console.h"
 #include "core/madam.h"
+#include "core/vdlp.h"
 #include "test_harness.h"
 
 using namespace retro3do;
@@ -57,8 +58,10 @@ constexpr u32 kFormatDirect16 = 6;
 constexpr u32 kFormatIndexed8 = 5;
 constexpr u32 kFormatIndexed4 = 3;
 
+// The framebuffer is interleaved, so a pixel is not at y*width + x. Using the
+// same helper the chips use keeps the tests honest about the real layout.
 u16 read_target(Bus& bus, int x, int y, int stride_pixels = 320) {
-    return bus.read16(kVramBase + static_cast<u32>(y * stride_pixels + x) * 2u);
+    return bus.read16(kVramBase + framebuffer_offset(x, y, stride_pixels));
 }
 
 }  // namespace
@@ -139,8 +142,8 @@ TEST(colour_zero_is_transparent) {
     madam.set_target(kVramBase, 320 * 2);
 
     // Pre-fill the destination so a transparent pixel is visible as "unchanged".
-    bus.write16(kVramBase + (0 * 320 + 0) * 2, rgb555(0, 31, 0));
-    bus.write16(kVramBase + (0 * 320 + 1) * 2, rgb555(0, 31, 0));
+    bus.write16(kVramBase + framebuffer_offset(0, 0, 320), rgb555(0, 31, 0));
+    bus.write16(kVramBase + framebuffer_offset(1, 0, 320), rgb555(0, 31, 0));
 
     bus.write16(kSourceAt + 0, 0);                 // transparent
     bus.write16(kSourceAt + 2, rgb555(31, 0, 0));  // opaque
@@ -451,7 +454,9 @@ TEST(a_cel_drawn_into_vram_appears_in_the_frame) {
     bus.write32(list + 4, kVramBase);
     bus.write32(list + 8, kVramBase);
     bus.write32(list + 12, 0);
-    console.vdlp().set_list_address(list);
+    // Through MADAM's register, as the machine does: the console reads the
+    // display-list address from there each field.
+    bus.write32(kMadamBase + kMadamVdlAddress, list);
 
     console.run_frame();
 

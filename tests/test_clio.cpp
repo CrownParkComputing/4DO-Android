@@ -75,76 +75,77 @@ TEST(the_disable_port_clears_enables_without_touching_pending) {
 }
 
 TEST(an_enabled_and_pending_interrupt_reaches_the_cpu) {
+    // CLIO drives FIQ, not IRQ. The boot ROM installs handlers at both vectors,
+    // so delivering to IRQ looks like it works - a handler runs and returns -
+    // but it is the wrong handler and it services nothing.
     Chip c;
-    // Unmask IRQ at the CPU, which reset leaves masked.
-    c.cpu.set_cpsr(c.cpu.cpsr() & ~kFlagI);
+    c.cpu.set_cpsr(c.cpu.cpsr() & ~kFlagF);
     c.clio.write(kClioIrq0Enable, kIrqVerticalBlank0);
     c.clio.raise(kIrqVerticalBlank0);
 
     // The CPU samples the line at an instruction boundary.
     c.cpu.step();
-    CHECK_EQ(c.cpu.pc(), kVectorIrq);
-    CHECK(c.cpu.mode() == Mode::Irq);
+    CHECK_EQ(c.cpu.pc(), kVectorFiq);
+    CHECK(c.cpu.mode() == Mode::Fiq);
 }
 
 TEST(the_interrupt_line_drops_when_the_source_is_acknowledged) {
     Chip c;
-    c.cpu.set_cpsr(c.cpu.cpsr() & ~kFlagI);
+    c.cpu.set_cpsr(c.cpu.cpsr() & ~kFlagF);
     c.clio.write(kClioIrq0Enable, kIrqVerticalBlank0);
     c.clio.raise(kIrqVerticalBlank0);
     c.cpu.step();
-    CHECK_EQ(c.cpu.pc(), kVectorIrq);
+    CHECK_EQ(c.cpu.pc(), kVectorFiq);
 
     // Acknowledge, return to a normal mode, and the CPU must not re-enter.
     c.clio.write(kClioIrq0Clear, kIrqVerticalBlank0);
-    c.cpu.set_cpsr((c.cpu.cpsr() & ~kModeMask & ~kFlagI) |
+    c.cpu.set_cpsr((c.cpu.cpsr() & ~kModeMask & ~kFlagF) |
                    static_cast<u32>(Mode::Supervisor));
     c.cpu.set_reg(15, kRomBase);
     c.cpu.step();
     CHECK(c.cpu.mode() == Mode::Supervisor);
 }
 
-TEST(a_source_interrupts_once_per_edge_not_continuously) {
-    // CLIO signals a rising edge rather than holding the line, so a handler that
-    // returns without acknowledging is NOT re-entered.
-    //
-    // This is the opposite of what an earlier version asserted, and the boot ROM
-    // is what settled it: its vertical-blank handler reads a software flag,
-    // returns, and never writes any CLIO register. Held level livelocks the
-    // machine on its own startup interrupt and the boot animation never runs.
+TEST(an_unacknowledged_source_keeps_interrupting) {
+    // CLIO HOLDS the line while any enabled source is pending, so a handler
+    // that returns without acknowledging is entered again. That is the whole
+    // reason the acknowledge port exists, and the real service routine uses it:
+    // across a boot it reads the pending register many thousands of times.
     Chip c;
-    c.cpu.set_cpsr(c.cpu.cpsr() & ~kFlagI);
+    c.cpu.set_cpsr(c.cpu.cpsr() & ~kFlagF);
     c.clio.write(kClioIrq0Enable, kIrqVerticalBlank0);
     c.clio.raise(kIrqVerticalBlank0);
 
     c.cpu.step();
-    CHECK_EQ(c.cpu.pc(), kVectorIrq);
+    CHECK_EQ(c.cpu.pc(), kVectorFiq);
 
-    // Return to normal execution without acknowledging anything.
-    c.cpu.set_cpsr((c.cpu.cpsr() & ~kModeMask & ~kFlagI) |
+    // Return to ordinary code WITHOUT acknowledging.
+    c.cpu.set_cpsr((c.cpu.cpsr() & ~kModeMask & ~kFlagF) |
                    static_cast<u32>(Mode::Supervisor));
     c.cpu.set_reg(15, kRomBase);
     c.cpu.step();
-    // Ordinary execution continues; the edge was consumed.
-    CHECK(c.cpu.pc() != kVectorIrq);
+    CHECK_EQ(c.cpu.pc(), kVectorFiq);   // still asserted
 
-    // Still pending and still enabled - the state is visible to software, it
-    // simply does not keep interrupting.
-    CHECK_EQ(c.clio.read(kClioIrq0Pending) & kIrqVerticalBlank0,
-             kIrqVerticalBlank0);
+    // Acknowledging is what stops it.
+    c.clio.write(kClioIrq0Clear, kIrqVerticalBlank0);
+    c.cpu.set_cpsr((c.cpu.cpsr() & ~kModeMask & ~kFlagF) |
+                   static_cast<u32>(Mode::Supervisor));
+    c.cpu.set_reg(15, kRomBase);
+    c.cpu.step();
+    CHECK(c.cpu.pc() != kVectorFiq);
 }
 
 TEST(a_second_edge_interrupts_again) {
     // A fresh source arriving must still be delivered, or the machine would
     // take exactly one interrupt ever.
     Chip c;
-    c.cpu.set_cpsr(c.cpu.cpsr() & ~kFlagI);
+    c.cpu.set_cpsr(c.cpu.cpsr() & ~kFlagF);
     c.clio.write(kClioIrq0Enable, kIrqVerticalBlank0 | kTimer3Irq);
     c.clio.raise(kIrqVerticalBlank0);
     c.cpu.step();
-    CHECK_EQ(c.cpu.pc(), kVectorIrq);
+    CHECK_EQ(c.cpu.pc(), kVectorFiq);
 
-    c.cpu.set_cpsr((c.cpu.cpsr() & ~kModeMask & ~kFlagI) |
+    c.cpu.set_cpsr((c.cpu.cpsr() & ~kModeMask & ~kFlagF) |
                    static_cast<u32>(Mode::Supervisor));
     c.cpu.set_reg(15, kRomBase);
 
@@ -152,7 +153,7 @@ TEST(a_second_edge_interrupts_again) {
     c.clio.write(kClioIrq0Clear, kIrqVerticalBlank0);
     c.clio.raise(kIrqVerticalBlank0);
     c.cpu.step();
-    CHECK_EQ(c.cpu.pc(), kVectorIrq);
+    CHECK_EQ(c.cpu.pc(), kVectorFiq);
 }
 
 TEST(clio_registers_are_reachable_through_the_bus) {
@@ -323,39 +324,27 @@ TEST(a_reset_silences_everything) {
 }
 
 TEST(a_new_source_still_interrupts_while_an_older_one_stays_pending) {
-    // The edge is per source, not per line.
-    //
-    // The boot ROM never acknowledges anything - it drives its animation by
-    // polling the line counter instead - so vertical blank goes pending early
-    // and simply stays pending for the rest of the run. A single edge flag for
-    // the whole interrupt line stays latched behind it, and every later source
-    // is silently swallowed.
-    //
-    // That is not a subtle failure. It is how the OS came to boot, ask the CD
-    // drive fifteen questions, and then idle forever: the expansion bus raised
-    // its completion interrupt, the bit sat plainly pending and enabled with
-    // interrupts unmasked at the CPU, and the CPU never took it.
+    // Every enabled+pending source contributes to the line. An implementation
+    // that latches a single edge for the line as a whole swallows every later
+    // source once the first one sticks - which is how the OS came to boot, ask
+    // the CD drive its questions, and then idle forever while the expansion-bus
+    // completion sat plainly pending, enabled and unmasked.
     Chip c;
-    c.cpu.set_cpsr(c.cpu.cpsr() & ~kFlagI);
+    c.cpu.set_cpsr(c.cpu.cpsr() & ~kFlagF);
     c.clio.write(kClioIrq0Enable, kIrqVerticalBlank1 | kIrqExpansionBus);
 
-    // Vertical blank arrives and is never acknowledged.
     c.clio.raise(kIrqVerticalBlank1);
     c.cpu.step();
-    CHECK_EQ(c.cpu.pc(), kVectorIrq);
+    CHECK_EQ(c.cpu.pc(), kVectorFiq);
 
-    // Back to ordinary code, source still pending, still enabled.
-    c.cpu.set_cpsr((c.cpu.cpsr() & ~kModeMask & ~kFlagI) |
+    // Acknowledge only the vertical blank, then raise the expansion bus.
+    c.clio.write(kClioIrq0Clear, kIrqVerticalBlank1);
+    c.clio.raise(kIrqExpansionBus);
+    c.cpu.set_cpsr((c.cpu.cpsr() & ~kModeMask & ~kFlagF) |
                    static_cast<u32>(Mode::Supervisor));
     c.cpu.set_reg(15, kRomBase);
     c.cpu.step();
-    CHECK(c.cpu.pc() != kVectorIrq);
-
-    // Now a DIFFERENT source arrives. It must be delivered.
-    c.clio.raise(kIrqExpansionBus);
-    c.cpu.set_cpsr(c.cpu.cpsr() & ~kFlagI);
-    c.cpu.step();
-    CHECK_EQ(c.cpu.pc(), kVectorIrq);
+    CHECK_EQ(c.cpu.pc(), kVectorFiq);
 }
 
 TEST(a_multi_byte_cd_command_completes_once_not_once_per_byte) {
@@ -451,4 +440,37 @@ TEST(only_the_control_nibble_of_the_poll_register_is_writable) {
     const u32 poll = c.clio.read(kClioXbusPoll);
     CHECK_EQ(poll & kXbusStatusIrqEnable, kXbusStatusIrqEnable);
     CHECK_EQ(poll & kXbusStatusReady, kXbusStatusReady);
+}
+
+TEST(the_control_register_only_changes_bits_that_are_write_enabled) {
+    // To change a low bit you must also set its write-enable in the next
+    // nibble. Writing the value on its own does nothing, which is a quiet way
+    // to lose every setting software makes here.
+    Chip c;
+    CHECK_EQ(c.clio.read(kClioControl), 0u);
+
+    c.clio.write(kClioControl, 0x02);      // no write-enable: ignored
+    CHECK_EQ(c.clio.read(kClioControl), 0u);
+
+    c.clio.write(kClioControl, 0x22);      // enable bit 1, set bit 1
+    CHECK_EQ(c.clio.read(kClioControl), 0x02u);
+
+    c.clio.write(kClioControl, 0x11);      // enable bit 0, set bit 0
+    CHECK_EQ(c.clio.read(kClioControl), 0x03u);
+
+    c.clio.write(kClioControl, 0x20);      // enable bit 1, clear bit 1
+    CHECK_EQ(c.clio.read(kClioControl), 0x01u);
+}
+
+TEST(both_ports_of_an_interrupt_pair_read_the_same_mask) {
+    // The ports differ in what a WRITE does, not a read. Returning zero from
+    // the clear ports means software reading back its own mask sees nothing.
+    Chip c;
+    c.clio.write(kClioIrq0Enable, kIrqVerticalBlank1);
+    CHECK_EQ(c.clio.read(kClioIrq0Enable), kIrqVerticalBlank1);
+    CHECK_EQ(c.clio.read(kClioIrq0Disable), kIrqVerticalBlank1);
+
+    c.clio.raise(kIrqVerticalBlank1);
+    CHECK_EQ(c.clio.read(kClioIrq0Pending), kIrqVerticalBlank1);
+    CHECK_EQ(c.clio.read(kClioIrq0Clear), kIrqVerticalBlank1);
 }

@@ -131,7 +131,20 @@ enum : u32 {
     kClioIrq1Disable  = 0x006c,
 
     kClioHDelay       = 0x0080,   // TODO(clio): confirm
-    kClioAdbio        = 0x0084,   // TODO(clio): confirm
+    // A masked-write control register: to change any of the low four bits you
+    // must also set that bit's write-enable in the next four. Clearing bit 0 is
+    // a write of 0x10; setting it is 0x11. Writing the value alone does nothing
+    // at all, which is a quiet way to lose every setting software makes here.
+    //
+    //   bit 0  PAL/NTSC selector
+    //   bit 1  DSP sound output enable
+    //   bit 2  ROM bank selector
+    //
+    // The boot ROM writes 0x22 - enable bit 1, set bit 1 - to turn on sound
+    // output, and reads the register back afterwards.
+    kClioControl      = 0x0084,
+    kClioControlWriteEnableShift = 4,
+    kClioControlMask  = 0x000f,
     kClioAdbctl       = 0x0088,   // TODO(clio): confirm
 
     // Timer bank: sixteen timers, each a counter followed by its reload value.
@@ -326,6 +339,7 @@ private:
     // by the address written to. `xbus_poll_` is the bus-level register used
     // when a device other than the built-in drive is selected; the drive keeps
     // its own control nibble in `xbus_device_poll_`.
+    u32 control_ = 0;
     u32 xbus_sel_ = 0;
     u32 xbus_poll_ = 0;
     u32 xbus_device_poll_ = 0;

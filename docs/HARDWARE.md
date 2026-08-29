@@ -845,6 +845,22 @@ settled by asking the ROM rather than guessing: once the OS boots it enables
 Bits 9, 29 and 30 are enabled and never fire, so the source the idle OS is
 blocked on is one of those three. Bit 3, the original guess, is not even enabled.
 
+## Interrupts go to FIQ, not IRQ
+
+CLIO drives the ARM's **fast** interrupt. This one register of wiring hid behind
+every other interrupt problem in this file, because delivering to IRQ *looks*
+like it works: the boot ROM installs a handler at both vectors, so a handler
+runs and returns quite happily.
+
+It is simply the wrong handler. The tell was that across an entire boot the
+machine never read the pending register and never wrote the clear port - which
+is impossible for an OS servicing its own interrupts, and is what eventually
+gave it away. Delivered to FIQ, the real service routine reads the pending
+register over twelve thousand times in 120 frames.
+
+Everything below was an attempt to explain the symptoms of this bug without
+having found it, and is kept because each wrong turn is a plausible one.
+
 ## Interrupts: the edge is per source
 
 This one was wrong twice, in opposite directions, and both failures are worth
@@ -865,8 +881,11 @@ drive fifteen questions, and idles forever — while the expansion-bus completio
 bit sits plainly pending and enabled, with interrupts unmasked at the CPU, and
 the CPU never takes it.
 
-CLIO therefore tracks **which sources have already been signalled** and raises a
-fresh edge for any newly-active one. Both failure modes are pinned by tests.
+Both of those readings were attempts to work around delivering to the wrong
+vector. With FIQ and the real service routine, the ordinary hardware model is
+also the correct one: CLIO **holds** the line while any enabled source is
+pending, and software acknowledges through the clear port. Both historical
+failure modes are still pinned by tests.
 
 ## Expansion bus: selection is by VALUE
 

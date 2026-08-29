@@ -144,7 +144,7 @@ public:
     // finishes writing a command it reads RD_STAT exactly ten times, from a
     // single instruction, without consulting the poll register between reads -
     // so the reply length is fixed and the driver already knows it.
-    static constexpr size_t kReplyBytes = 10;
+    static size_t kReplyBytes;
 
 private:
     std::deque<u8> status_;

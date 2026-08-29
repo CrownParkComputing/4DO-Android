@@ -1,4 +1,6 @@
 #include "madam.h"
+#include <cstdlib>
+#include <cstdio>
 
 #include "bus.h"
 #include "vdlp.h"
@@ -149,8 +151,17 @@ u32 Madam::read(u32 offset) {
     switch (offset) {
         case kMadamRevision:  return revision_;
         case kMadamMemConfig:  return mem_config_;
+        case kMadamDmaEnable:  return dma_enable_;
         case kMadamVdlAddress: return vdl_address_;
-        default:              return 0;
+        default:
+            if (getenv("UNIMPL")) {
+                static bool seen[2048/4] = {};
+                if (offset/4 < 2048/4 && !seen[offset/4]) {
+                    seen[offset/4] = true;
+                    fprintf(stderr, "  UNIMPLEMENTED MADAM read +%04X\n", offset);
+                }
+            }
+            return 0;
     }
 }
 
@@ -193,6 +204,9 @@ void Madam::write(u32 offset, u32 value) {
             break;
         case kMadamMemConfig:
             mem_config_ = value;
+            break;
+        case kMadamDmaEnable:
+            dma_enable_ = value;
             break;
         case kMadamVdlAddress:
             vdl_address_ = value;

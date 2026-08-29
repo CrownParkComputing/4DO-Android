@@ -1,4 +1,6 @@
 #include "clio.h"
+#include <cstdlib>
+#include <cstdio>
 
 #include <algorithm>
 
@@ -137,10 +139,20 @@ void Clio::update_cpu_interrupt_line() {
     // forever waiting on a CD command that had in fact already completed.
     //
     // Tracking the signalled set per source gives each one its own edge.
+    // CLIO drives the CPU's FIQ, not its IRQ.
+    //
+    // This is the thing that made the interrupt behaviour so hard to read. The
+    // boot ROM installs handlers at BOTH vectors, so delivering to IRQ looks
+    // like it works - a handler runs and returns. But it is the wrong handler:
+    // it touches no CLIO register, acknowledges nothing, and does nothing
+    // useful. Across an entire boot the machine never read the pending register
+    // or wrote the clear port, which is impossible for an OS servicing its own
+    // interrupts, and was the clue.
+    //
+    // Delivering to FIQ reaches the real service routine, and with it the
+    // acknowledgement that makes a level-held line the correct model.
     const u32 active = irq0_pending_ & irq0_enabled_;
-    if ((active & ~signalled_) != 0) {
-        cpu_.signal_irq();
-    }
+    cpu_.set_fiq(active != 0);
     signalled_ = active;
 }
 
@@ -156,23 +168,6 @@ void Clio::tick(u32 cycles) {
         raise(kIrqExpansionBus);
     }
 
-    // CLIO acknowledges the sources it delivered, once the CPU has accepted
-    // them. Software is not what clears them: across a whole boot the ROM
-    // writes no CLIO clear port at all, and reads no pending register either -
-    // its handler saves registers, calls a dispatcher and returns.
-    //
-    // Without this the machine deadlocks in a way that looks nothing like an
-    // interrupt bug. The first vertical blank goes pending, nothing ever clears
-    // it, and every later source is stuck behind it forever - so the OS boots,
-    // brings up the CD, reaches its idle loop, and then sits there touching no
-    // hardware whatsoever, waiting for a timer tick that cannot arrive.
-    const u64 taken = cpu_.irqs_taken();
-    if (taken != last_irqs_taken_) {
-        last_irqs_taken_ = taken;
-        irq0_pending_ &= ~signalled_;
-        signalled_ = 0;
-        update_cpu_interrupt_line();
-    }
 
     tick_timers(cycles);
 
@@ -316,11 +311,19 @@ u32 Clio::read(u32 offset) {
         case kClioHCount:      return pixel_in_line_;
         case kClioSeed:        return seed_;
 
-        case kClioIrq0Pending: return irq0_pending_;
-        case kClioIrq0Enable:  return irq0_enabled_;
-        case kClioIrq1Pending: return irq1_pending_;
-        case kClioIrq1Enable:  return irq1_enabled_;
+        // Both ports of each pair read back the same value; they differ only in
+        // what a WRITE does. Returning zero from the clear ports means software
+        // that reads back its own mask through one of them sees nothing set.
+        case kClioIrq0Pending:
+        case kClioIrq0Clear:    return irq0_pending_;
+        case kClioIrq0Enable:
+        case kClioIrq0Disable:  return irq0_enabled_;
+        case kClioIrq1Pending:
+        case kClioIrq1Clear:    return irq1_pending_;
+        case kClioIrq1Enable:
+        case kClioIrq1Disable:  return irq1_enabled_;
 
+        case kClioControl:     return control_;
         case kClioMode:        return mode_;
 
         case kClioXbusStatus:  return kXbusReady;
@@ -333,6 +336,13 @@ u32 Clio::read(u32 offset) {
             return static_cast<u32>(timer_config_ >> 32);
 
         default:
+            if (getenv("UNIMPL")) {
+                static bool seen[2048/4] = {};
+                if (offset/4 < 2048/4 && !seen[offset/4]) {
+                    seen[offset/4] = true;
+                    fprintf(stderr, "  UNIMPLEMENTED CLIO read +%04X\n", offset);
+                }
+            }
             return 0;
     }
 }
@@ -479,6 +489,13 @@ void Clio::write(u32 offset, u32 value) {
             update_cpu_interrupt_line();
             break;
 
+        case kClioControl: {
+            // Only bits whose write-enable is set in the next nibble change.
+            const u32 enable = (value >> kClioControlWriteEnableShift) &
+                               kClioControlMask;
+            control_ = (control_ & ~enable) | (value & enable & kClioControlMask);
+            return;
+        }
         case kClioTimerConfigSet0:
             timer_config_ |= value;
             return;

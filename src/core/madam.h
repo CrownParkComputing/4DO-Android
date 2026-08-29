@@ -56,6 +56,10 @@ enum : u32 {
     // ROM then fails its memory test and jumps to a panic handler that stores
     // registers to MADAM in an infinite loop.
     kMadamMemConfig  = 0x0004,
+
+    // MCTL: one bit per DMA channel. The boot ROM writes it repeatedly during
+    // start-up and reads it back, so it has to hold its value.
+    kMadamDmaEnable  = 0x0008,
     kMadamClipXY     = 0x0008,   // TODO(madam): confirm
     // DMA channels. Each is eight bytes: an address then a length.
     //
@@ -226,6 +230,7 @@ private:
 
     u32 revision_ = 0;
     u32 mem_config_ = kMadamMemConfigStock;
+    u32 dma_enable_ = 0;
     u32 vdl_address_ = 0;
     u32 dma_address_[kMadamDmaChannels] = {};
     u32 dma_length_[kMadamDmaChannels] = {};

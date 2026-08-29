@@ -1082,6 +1082,36 @@ takes a different path, because it never looks.
 **It is not an interrupt problem.** The machine takes about 126 FIQs a frame,
 and the real service routine reads the pending register thousands of times.
 
+## The drive is not the problem any more
+
+The CD model has been checked byte for byte against the driver that boots this
+disc, by building that core as a standalone Linux binary and logging both sides.
+They now agree exactly:
+
+```
+0x83 (read id)     83 00 10 00 01 00 00 00 00 00 00 E1   12 bytes
+0x82 (last status) 82 00 00 00 00 00 00 00 00 E1         10 bytes
+```
+
+Same opcodes, same lengths, same bytes, same poll register - 0x0F idle, 0x1F
+while status is waiting - and the same power-on state, 0xE1 with a disc.
+
+And the boot still diverges at the THIRD command. The working core sets mode and
+goes on to read four sectors; this one runs a data-path check instead:
+
+```
+this:   83 82 80 02 8B 8C 8D 85 09 09 09 09 09 10 83 83 ...
+working: 83 82 09 8B 8C 10 10 10 10 8D 8B 8C 10 10 10 10 ...
+```
+
+Since the drive answers identically, whatever the BIOS is branching on is not
+coming from the drive. 0x80 is a data-path check - the command a host issues
+when it is not confident the bus is working - so the difference is somewhere in
+the machine around the bus, not in the device on the end of it.
+
+That is worth stating plainly because it redirects the search: further work on
+the CD-ROM model is not what will make this boot.
+
 ## The poll register and drive status, settled
 
 Taken from the driver that actually boots this BIOS. Where it disagrees with

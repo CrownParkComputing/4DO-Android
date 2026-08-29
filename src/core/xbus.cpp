@@ -316,12 +316,16 @@ u8 CdRomDevice::drive_status() const {
     // lists 0x08 as STATUS_SUCCESS but marks it unconfirmed, and the driver
     // that actually boots this disc has no such bit at all. Setting one the
     // host does not expect is not harmless.
-    u8 status = kStatusDoor;
-    if (disc_present_) status |= kStatusDiscIn;
-    if (motor_on_)     status |= kStatusSpinUp;
-    // Ready is set by a command completing, not by the motor. The drive reports
-    // it explicitly once it has answered something.
-    if (ready_)        status |= kStatusReady;
+    // A drive with a disc in it powers up READY, tray closed, disc present and
+    // ALREADY SPINNING - it does not wait to be told to spin up. Reporting the
+    // motor stopped until a MOTOR ON arrives makes the host see a drive in a
+    // state it never asked about, and it takes a different branch entirely.
+    //
+    // Empty, it still reports ready with the tray shut; only the disc and the
+    // motor are missing.
+    u8 status = kStatusDoor | kStatusReady;
+    if (disc_present_ && motor_on_) status |= kStatusDiscIn | kStatusSpinUp;
+    else if (disc_present_)         status |= kStatusDiscIn;
     return status;
 }
 
@@ -332,8 +336,9 @@ void CdRomDevice::reset() {
     completion_delay_ = 0;
     media_changed_ = false;
     interrupt_request_ = false;
-    motor_on_ = false;
-    ready_ = false;
+    // Spinning from power-on when there is something to spin.
+    motor_on_ = disc_present_;
+    ready_ = true;
     last_error_ = 0;
     streaming_ = false;
     pending_reply_.clear();
@@ -388,6 +393,7 @@ u8 CdRomDevice::read_status() {
     }
     const u8 byte = status_.front();
     status_.pop_front();
+    if (trace()) fprintf(stderr, "  R %02X\n", byte);
 
     return byte;
 }

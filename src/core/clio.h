@@ -254,6 +254,7 @@ enum : u32 {
     // reads as status-and-data-available with no enables set, which the boot
     // ROM's scan correctly reads as "nothing to do here".
     kXbusPollUnfitted    = 0x0030,
+    kXbusPollEnableAll   = 0x000f,
 
     kXbusReady        = 0x0080,
 
@@ -378,7 +379,11 @@ private:
     u32 xbus_sel_low_ = 0;
     u32 xbus_sel_high_ = 0;
     u32 xbus_poll_ = 0;
-    u32 xbus_device_poll_ = 0;
+    // The drive powers up with every interrupt enable already set. Starting
+    // them clear means no condition can ever be both asserted and enabled, so
+    // the drive can never interrupt and the host reads a register that says
+    // nothing is switched on.
+    u32 xbus_device_poll_ = kXbusPollEnableAll;
     bool media_changed_ = false;
     bool xbus_dma_requested_ = false;
     u32 xbus_control_ = kXbusReady;

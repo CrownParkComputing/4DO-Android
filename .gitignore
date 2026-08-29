@@ -1,0 +1,26 @@
+build/
+build-*/
+.cache/
+compile_commands.json
+
+# Android
+android/.gradle/
+android/build/
+android/app/build/
+android/local.properties
+android/.cxx/
+*.apk
+*.aab
+*.keystore
+
+# iOS / macOS
+ios/build/
+ios/Pods/
+*.xcuserdatad
+xcuserdata/
+.DS_Store
+
+# Editors
+.idea/
+.vscode/
+*.swp

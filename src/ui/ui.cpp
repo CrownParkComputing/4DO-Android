@@ -1,0 +1,185 @@
+#include "ui.h"
+
+#include <SDL3/SDL.h>
+#include <cstring>
+
+#include "backends/imgui_impl_sdl3.h"
+#include "backends/imgui_impl_sdlrenderer3.h"
+#include "core/console.h"
+#include "imgui.h"
+
+namespace retro3do {
+
+Ui::Ui() = default;
+
+Ui::~Ui() {
+    shutdown();
+}
+
+bool Ui::init(SDL_Window* window, SDL_Renderer* renderer) {
+    IMGUI_CHECKVERSION();
+    ImGui::CreateContext();
+
+    ImGuiIO& io = ImGui::GetIO();
+    io.ConfigFlags |= ImGuiConfigFlags_NavEnableGamepad;
+    // No imgui.ini: on mobile there is nowhere sensible to write it, and a
+    // remembered window layout is not wanted on a fixed-size screen anyway.
+    io.IniFilename = nullptr;
+
+    ImGui::StyleColorsDark();
+
+    // Scale the whole UI with the display, so the launcher is usable on a phone
+    // without a separate touch layout.
+    const float scale = SDL_GetWindowDisplayScale(window);
+    if (scale > 0.0f) {
+        ImGui::GetStyle().ScaleAllSizes(scale);
+        io.FontGlobalScale = scale;
+    }
+
+    if (!ImGui_ImplSDL3_InitForSDLRenderer(window, renderer)) {
+        return false;
+    }
+    if (!ImGui_ImplSDLRenderer3_Init(renderer)) {
+        return false;
+    }
+
+    initialised_ = true;
+    return true;
+}
+
+void Ui::shutdown() {
+    if (!initialised_) {
+        return;
+    }
+    ImGui_ImplSDLRenderer3_Shutdown();
+    ImGui_ImplSDL3_Shutdown();
+    ImGui::DestroyContext();
+    initialised_ = false;
+}
+
+void Ui::process_event(const SDL_Event& event) {
+    if (!initialised_) return;
+    ImGui_ImplSDL3_ProcessEvent(&event);
+}
+
+bool Ui::wants_mouse() const {
+    return initialised_ && ImGui::GetIO().WantCaptureMouse;
+}
+
+bool Ui::wants_keyboard() const {
+    return initialised_ && ImGui::GetIO().WantCaptureKeyboard;
+}
+
+UiIntent Ui::build(Console& console, bool emulating, double fps) {
+    UiIntent intent;
+    if (!initialised_) {
+        return intent;
+    }
+
+    ImGui_ImplSDLRenderer3_NewFrame();
+    ImGui_ImplSDL3_NewFrame();
+    ImGui::NewFrame();
+
+    if (show_launcher_ || !emulating) {
+        draw_launcher(console, intent);
+    } else {
+        draw_overlay(console, fps, intent);
+    }
+
+    ImGui::Render();
+    return intent;
+}
+
+void Ui::draw_launcher(Console& console, UiIntent& intent) {
+    const ImGuiViewport* viewport = ImGui::GetMainViewport();
+    ImGui::SetNextWindowPos(viewport->WorkPos);
+    ImGui::SetNextWindowSize(viewport->WorkSize);
+
+    ImGui::Begin("Retro-3DO", nullptr,
+                 ImGuiWindowFlags_NoDecoration | ImGuiWindowFlags_NoMove |
+                     ImGuiWindowFlags_NoSavedSettings |
+                     ImGuiWindowFlags_NoBringToFrontOnFocus);
+
+    ImGui::TextUnformatted("Retro-3DO");
+    ImGui::TextDisabled("A 3DO Interactive Multiplayer emulator");
+    ImGui::Separator();
+    ImGui::Spacing();
+
+    ImGui::TextUnformatted("System ROM");
+    ImGui::SetNextItemWidth(-120.0f);
+    ImGui::InputTextWithHint("##bios", "path to the 3DO BIOS image",
+                             bios_path_buffer_, sizeof(bios_path_buffer_));
+    ImGui::SameLine();
+    if (ImGui::Button("Load", ImVec2(110.0f, 0.0f))) {
+        intent.bios_chosen = true;
+        intent.bios_path = bios_path_buffer_;
+    }
+
+    if (console.bios_loaded()) {
+        ImGui::TextColored(ImVec4(0.45f, 0.80f, 0.60f, 1.0f), "BIOS loaded.");
+    } else if (!console.last_error().empty()) {
+        ImGui::TextColored(ImVec4(0.95f, 0.45f, 0.35f, 1.0f), "%s",
+                           console.last_error().c_str());
+    } else {
+        ImGui::TextDisabled("No BIOS loaded yet. The machine needs one to boot.");
+    }
+
+    ImGui::Spacing();
+    ImGui::Separator();
+    ImGui::Spacing();
+
+    ImGui::BeginDisabled(!console.bios_loaded());
+    if (ImGui::Button("Start", ImVec2(140.0f, 0.0f))) {
+        show_launcher_ = false;
+        intent.reset = true;
+    }
+    ImGui::EndDisabled();
+
+    ImGui::SameLine();
+    if (ImGui::Button("Quit", ImVec2(140.0f, 0.0f))) {
+        intent.quit = true;
+    }
+
+    ImGui::Spacing();
+    ImGui::Separator();
+    ImGui::TextDisabled(
+        "The core is under construction: the CPU and memory map run, the "
+        "graphics and audio chips do not exist yet.");
+
+    ImGui::End();
+}
+
+void Ui::draw_overlay(Console& console, double fps, UiIntent& intent) {
+    const ImGuiViewport* viewport = ImGui::GetMainViewport();
+    ImGui::SetNextWindowPos(
+        ImVec2(viewport->WorkPos.x + 12.0f, viewport->WorkPos.y + 12.0f));
+    ImGui::SetNextWindowBgAlpha(0.55f);
+
+    ImGui::Begin("##overlay", nullptr,
+                 ImGuiWindowFlags_NoDecoration | ImGuiWindowFlags_AlwaysAutoResize |
+                     ImGuiWindowFlags_NoSavedSettings | ImGuiWindowFlags_NoMove |
+                     ImGuiWindowFlags_NoFocusOnAppearing | ImGuiWindowFlags_NoNav);
+
+    ImGui::Text("%.1f fps", fps);
+    ImGui::Text("PC %08X", console.cpu().pc());
+    ImGui::Text("%llu cycles",
+                static_cast<unsigned long long>(console.cpu().total_cycles()));
+
+    ImGui::Separator();
+    if (ImGui::Button("Menu")) {
+        show_launcher_ = true;
+    }
+    ImGui::SameLine();
+    if (ImGui::Button("Reset")) {
+        intent.reset = true;
+    }
+
+    ImGui::End();
+}
+
+void Ui::render(SDL_Renderer* renderer) {
+    if (!initialised_) return;
+    ImGui_ImplSDLRenderer3_RenderDrawData(ImGui::GetDrawData(), renderer);
+}
+
+}  // namespace retro3do

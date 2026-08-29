@@ -1,0 +1,14 @@
+{
+	"backtraceGraph" : 
+	{
+		"commands" : [],
+		"files" : [],
+		"nodes" : []
+	},
+	"installers" : [],
+	"paths" : 
+	{
+		"build" : "retro3do/third_party/SDL",
+		"source" : "/home/jon/StudioProjects/Retro-3DO/third_party/SDL"
+	}
+}

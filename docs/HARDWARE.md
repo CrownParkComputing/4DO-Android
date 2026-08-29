@@ -732,6 +732,29 @@ which is what the expansion bus uses. The registers are implemented and
 readable; **no transfer is performed**, because what a device would place in
 that buffer depends on the command set.
 
+### Three experiments that close off the shortcuts
+
+Worth recording, because each looked like it might work and none did:
+
+**Feeding the DMA buffer a marker changes nothing** — the ROM never reads it.
+The buffer is only consulted after the driver exists, so there is no way to
+learn the reply format by watching what the ROM inspects. That was the most
+promising route and it is closed.
+
+**Forcing the awaited flag runs a great deal of code and then parks.** Writing
+a non-zero value into the driver record makes the machine execute 3403 distinct
+instructions instead of ten, reach User mode, and then settle into a four
+instruction loop that shifts a stack value left forever. So the wait really is
+the gate, and the operating system genuinely needs the driver rather than merely
+a flag saying one exists. A shortcut here produces a machine that runs further
+and then hangs somewhere less obvious, which is worse than not booting.
+
+**The device table is empty.** The enumeration reads `table[n]` at DRAM
+`0x26B94` and every slot is zero, so it dereferences null and sends whatever
+byte happens to be at address `0x14` as its command. That is the *consequence*
+of no device having been enumerated, not the cause — the table is populated by
+whatever answers the bus first.
+
 ### The honest boundary
 
 Getting from the logo to the animated startup needs the **expansion-bus command

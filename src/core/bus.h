@@ -124,6 +124,15 @@ public:
 
     WriteWatch& write_watch() { return write_watch_; }
 
+    // True for any address that belongs to a chip rather than to memory. Byte
+    // and halfword accesses to those go through a read-modify-write of the
+    // containing word, because the registers are word-wide.
+    static bool is_device(u32 address) {
+        return (address >= kSportBase && address < kSportBase + kSportSize) ||
+               (address >= kMadamBase && address < kMadamBase + kMadamSize) ||
+               (address >= kClioBase && address < kClioBase + kClioSize);
+    }
+
     // Accesses to regions that are recognised but not implemented. A silent
     // drop is the hardest kind of gap to find, so they are counted.
     u64 sport_accesses() const { return sport_accesses_; }

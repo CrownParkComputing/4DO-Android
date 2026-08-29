@@ -61,6 +61,7 @@ void Clio::reset() {
     pixel_in_line_ = 0;
     field_complete_ = false;
     field_odd_ = false;
+    irq_asserted_ = false;
 
     mode_ = 0;
     csys_bits_ = 0;
@@ -77,6 +78,7 @@ void Clio::reset() {
     seed_ = 0;
     timer_slack_ = 0;
 
+    irq_asserted_ = false;
     cpu_.set_irq(false);
 }
 
@@ -101,11 +103,19 @@ void Clio::raise_secondary(u32 sources) {
 
 void Clio::update_cpu_interrupt_line() {
     const bool asserted = (irq0_pending_ & irq0_enabled_) != 0;
-    // The line is level-sensitive: the CPU re-samples it at every instruction
-    // boundary, so a handler that fails to clear the source will be re-entered.
-    // That is the hardware's behaviour and a useful way to catch a missing
-    // acknowledgement early.
-    cpu_.set_irq(asserted);
+
+    // Signal on the RISING EDGE only, rather than holding the line.
+    //
+    // The boot ROM settles this. Its vertical-blank handler reads a software
+    // flag in RAM, returns, and never writes any CLIO register to acknowledge
+    // the source - across a whole run it touches only seven CLIO registers,
+    // none of them an acknowledgement. With a held line the machine livelocks
+    // on its own startup interrupt: enter handler, return, re-enter, forever,
+    // and the boot animation never advances.
+    if (asserted && !irq_asserted_) {
+        cpu_.signal_irq();
+    }
+    irq_asserted_ = asserted;
 }
 
 // ---------------------------------------------------------------------------
@@ -200,6 +210,11 @@ u32 Clio::read(u32 offset) {
         case kClioIrq1Enable:  return irq1_enabled_;
 
         case kClioMode:        return mode_;
+
+        // Report the bus as ready but with nothing attached. The ROM needs the
+        // ready bit to stop spinning; what it finds afterwards is the job of a
+        // real XBUS implementation, which does not exist yet.
+        case kClioXbusStatus:  return kXbusReady;
         case kClioBadBits:     return 0;
         case kClioTimerEnable: return timer_enabled_;
 

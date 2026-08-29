@@ -126,6 +126,7 @@ void Arm60::reset() {
     regs_[15] = kRomBase;
 
     irq_line_ = false;
+    irq_latched_ = false;
     fiq_line_ = false;
     total_cycles_ = 0;
 
@@ -218,7 +219,9 @@ void Arm60::check_interrupts() {
         enter_exception(kVectorFiq, Mode::Fiq, regs_[15] + 4, true);
         return;
     }
-    if (irq_line_ && (cpsr_ & kFlagI) == 0) {
+    if ((irq_line_ || irq_latched_) && (cpsr_ & kFlagI) == 0) {
+        // A latched edge is consumed; a held line is not.
+        irq_latched_ = false;
         enter_exception(kVectorIrq, Mode::Irq, regs_[15] + 4, false);
     }
 }

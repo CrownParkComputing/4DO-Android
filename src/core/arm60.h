@@ -117,9 +117,19 @@ public:
     // and the debugger; the emulator proper calls run().
     u32 step();
 
-    // Raise the level-sensitive interrupt lines. The CPU samples these at
-    // instruction boundaries and honours the CPSR I and F masks.
+    // The interrupt inputs, in both flavours.
+    //
+    // `set_irq` holds the line, which is the textbook model: while it is high
+    // and unmasked the CPU keeps taking the exception, so a handler that does
+    // not acknowledge its source is re-entered forever.
+    //
+    // `signal_irq` latches a single edge instead, cleared when the CPU takes
+    // it. CLIO uses this one. That is not a simplification but what the boot
+    // ROM requires: its vertical-blank handler reads a software flag, returns,
+    // and never touches a CLIO register to acknowledge anything. Held level
+    // would livelock the machine on its own startup interrupt.
     void set_irq(bool asserted) { irq_line_ = asserted; }
+    void signal_irq() { irq_latched_ = true; }
     void set_fiq(bool asserted) { fiq_line_ = asserted; }
 
     // Invalidate the decode cache. Must be called whenever memory that could
@@ -197,6 +207,7 @@ private:
 
     bool pc_written_ = false;
     bool irq_line_ = false;
+    bool irq_latched_ = false;
     bool fiq_line_ = false;
 
     u64 total_cycles_ = 0;

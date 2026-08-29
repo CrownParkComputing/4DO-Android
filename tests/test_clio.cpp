@@ -93,14 +93,42 @@ TEST(the_interrupt_line_drops_when_the_source_is_acknowledged) {
     CHECK(c.cpu.mode() == Mode::Supervisor);
 }
 
-TEST(an_unacknowledged_source_re_enters_the_handler) {
-    // The line is level-sensitive, so a handler that forgets to acknowledge is
-    // re-entered immediately. That is the hardware's behaviour, and asserting it
-    // here means a missing acknowledgement shows up as an obvious loop rather
-    // than as a mysterious slowdown.
+TEST(a_source_interrupts_once_per_edge_not_continuously) {
+    // CLIO signals a rising edge rather than holding the line, so a handler that
+    // returns without acknowledging is NOT re-entered.
+    //
+    // This is the opposite of what an earlier version asserted, and the boot ROM
+    // is what settled it: its vertical-blank handler reads a software flag,
+    // returns, and never writes any CLIO register. Held level livelocks the
+    // machine on its own startup interrupt and the boot animation never runs.
     Chip c;
     c.cpu.set_cpsr(c.cpu.cpsr() & ~kFlagI);
     c.clio.write(kClioIrq0Enable, kIrqVerticalBlank0);
+    c.clio.raise(kIrqVerticalBlank0);
+
+    c.cpu.step();
+    CHECK_EQ(c.cpu.pc(), kVectorIrq);
+
+    // Return to normal execution without acknowledging anything.
+    c.cpu.set_cpsr((c.cpu.cpsr() & ~kModeMask & ~kFlagI) |
+                   static_cast<u32>(Mode::Supervisor));
+    c.cpu.set_reg(15, kRomBase);
+    c.cpu.step();
+    // Ordinary execution continues; the edge was consumed.
+    CHECK(c.cpu.pc() != kVectorIrq);
+
+    // Still pending and still enabled - the state is visible to software, it
+    // simply does not keep interrupting.
+    CHECK_EQ(c.clio.read(kClioIrq0Pending) & kIrqVerticalBlank0,
+             kIrqVerticalBlank0);
+}
+
+TEST(a_second_edge_interrupts_again) {
+    // A fresh source arriving must still be delivered, or the machine would
+    // take exactly one interrupt ever.
+    Chip c;
+    c.cpu.set_cpsr(c.cpu.cpsr() & ~kFlagI);
+    c.clio.write(kClioIrq0Enable, kIrqVerticalBlank0 | kIrqTimer);
     c.clio.raise(kIrqVerticalBlank0);
     c.cpu.step();
     CHECK_EQ(c.cpu.pc(), kVectorIrq);
@@ -108,6 +136,10 @@ TEST(an_unacknowledged_source_re_enters_the_handler) {
     c.cpu.set_cpsr((c.cpu.cpsr() & ~kModeMask & ~kFlagI) |
                    static_cast<u32>(Mode::Supervisor));
     c.cpu.set_reg(15, kRomBase);
+
+    // Acknowledge, then raise again: that is a new edge.
+    c.clio.write(kClioIrq0Clear, kIrqVerticalBlank0);
+    c.clio.raise(kIrqVerticalBlank0);
     c.cpu.step();
     CHECK_EQ(c.cpu.pc(), kVectorIrq);
 }

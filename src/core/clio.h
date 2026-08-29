@@ -115,6 +115,21 @@ enum : u32 {
     kClioTimerEnable  = 0x0200,   // TODO(clio): confirm
     kClioTimerDisable = 0x0204,   // TODO(clio): confirm
 
+    // The expansion bus, through which the CD-ROM is reached. Its status
+    // register carries a ready bit; the boot ROM polls it in a tight loop once
+    // it has drawn its logo:
+    //
+    //   LDR r1, [r0]        ; r0 = 0x03400400
+    //   TST r1, #0x80
+    //   BEQ -4              ; spin until ready
+    //
+    // Returning zero here is what leaves a booted machine sitting on a static
+    // logo: it has finished starting up and is waiting for the disc hardware to
+    // answer.
+    kClioXbusStatus   = 0x0400,
+    kClioXbusData     = 0x0404,   // TODO(clio): confirm
+    kXbusReady        = 0x0080,
+
     // The DSP lives inside CLIO's window rather than having its own chip
     // select. The boot ROM uploads a program here, starts it, waits, and then
     // gives up - so the DSP is on the critical path to booting, not merely to
@@ -192,6 +207,7 @@ private:
 
     bool field_complete_ = false;
     bool field_odd_ = false;
+    bool irq_asserted_ = false;
 
     u32 revision_ = 0;
     u32 mode_ = 0;

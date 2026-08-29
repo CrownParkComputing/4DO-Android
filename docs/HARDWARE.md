@@ -612,6 +612,48 @@ freeform window manager, so the app appears in a floating window rather than
 filling the screen, and driving it with blind `adb input tap` is unreliable
 because other windows compete for the foreground.
 
+## Interrupts are edge-triggered, not level-held
+
+This reverses what an earlier version of this file asserted, and the boot ROM is
+what settled it.
+
+CLIO signals a **rising edge** to the CPU rather than holding the line. A
+handler that returns without acknowledging its source is therefore *not*
+re-entered.
+
+The evidence is decisive. The ROM's vertical-blank handler pushes registers,
+calls a routine that reads a **software flag in RAM** and returns, and never
+writes any CLIO register at all — across a whole run it touches exactly seven
+CLIO registers, none of them an acknowledgement. With a held line the machine
+livelocks on its own startup interrupt: enter handler, return, re-enter,
+forever. The logo appears and then nothing ever moves.
+
+`Arm60` keeps both inputs. `set_irq` holds a level, which is the textbook model
+and is what a future source may want; `signal_irq` latches one edge, consumed
+when the CPU takes it. CLIO uses the latter.
+
+## Byte and halfword access to device registers
+
+`read8`/`read16`/`write8`/`write16` originally handled memory only, so any
+byte-wide access to a chip register silently returned zero or vanished. That is
+the worst class of gap — invisible, and it produces wrong behaviour far from its
+cause. They now route through the containing word, as the hardware does.
+
+## Where it stops now: XBUS
+
+With the above in place the ROM boots, draws its logo, leaves its interrupt
+handler and runs its main program. It then polls **CLIO `0x0400`** for a ready
+bit (`0x80`) — the expansion bus, through which the CD-ROM is reached. Returning
+zero there leaves a fully booted machine sitting on a static logo, which is
+exactly what it looked like.
+
+Reporting the bus ready lets it proceed into actual transactions: it writes a
+command at `+0x100` from that base and polls status at `+0x140` for bit `0x10`.
+
+That is the CD-ROM protocol, and XBUS is now the next piece of hardware. The
+ready bit is currently a stub — the bus reports itself ready with nothing
+attached, which is enough to get the ROM moving and no more.
+
 ## Still to be written
 
 The DSP, SPORT, and the XBUS interface through which the machine actually asks

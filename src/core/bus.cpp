@@ -106,6 +106,15 @@ u16 Bus::read16(u32 address) {
     if (addr >= kRomBase && addr < kRomBase + kRomSize) {
         return load_be16(&rom_[addr - kRomBase]);
     }
+    // Device registers are word-wide, but software may reach them with a
+    // halfword access. Reading the containing word and extracting is what the
+    // hardware does; leaving these out entirely - as an earlier version did -
+    // means such an access silently returns nothing and the write silently
+    // vanishes, which is invisible and extremely hard to attribute.
+    if (is_device(addr)) {
+        const u32 word = read32(addr & ~u32{3});
+        return static_cast<u16>((addr & 2u) ? (word & 0xffffu) : (word >> 16));
+    }
     return 0;
 }
 
@@ -121,6 +130,11 @@ u8 Bus::read8(u32 address) {
     }
     if (address >= kNvramBase && address < kNvramBase + kNvramSize) {
         return nvram_[address - kNvramBase];
+    }
+    if (is_device(address)) {
+        const u32 word = read32(address & ~u32{3});
+        const unsigned shift = (3u - (address & 3u)) * 8u;
+        return static_cast<u8>((word >> shift) & 0xffu);
     }
     return 0;
 }
@@ -185,6 +199,15 @@ void Bus::write16(u32 address, u16 value) {
         store_be16(&vram_[addr - kVramBase], value);
         return;
     }
+    if (is_device(addr)) {
+        const u32 aligned = addr & ~u32{3};
+        const u32 word = read32(aligned);
+        const u32 merged = (addr & 2u) ? ((word & 0xffff0000u) | value)
+                                       : ((word & 0x0000ffffu) |
+                                          (static_cast<u32>(value) << 16));
+        write32(aligned, merged);
+        return;
+    }
 }
 
 void Bus::write8(u32 address, u8 value) {
@@ -199,6 +222,14 @@ void Bus::write8(u32 address, u8 value) {
     }
     if (address >= kNvramBase && address < kNvramBase + kNvramSize) {
         nvram_[address - kNvramBase] = value;
+        return;
+    }
+    if (is_device(address)) {
+        const u32 aligned = address & ~u32{3};
+        const unsigned shift = (3u - (address & 3u)) * 8u;
+        const u32 word = read32(aligned);
+        write32(aligned, (word & ~(0xffu << shift)) |
+                             (static_cast<u32>(value) << shift));
         return;
     }
 }

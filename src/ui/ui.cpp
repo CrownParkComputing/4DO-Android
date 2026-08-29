@@ -136,6 +136,16 @@ void Ui::draw_launcher(Console& console, UiIntent& intent) {
     ImGui::EndDisabled();
 
     ImGui::SameLine();
+    if (ImGui::Button("Test pattern", ImVec2(140.0f, 0.0f))) {
+        // Draws without a BIOS. It exercises the whole display path — bus into
+        // VRAM, display list, VDLP, texture upload, letterboxing — so on a new
+        // device it separates "the video path is broken" from "the emulator is
+        // not running", which otherwise look identical.
+        intent.test_pattern = true;
+        show_launcher_ = false;
+    }
+
+    ImGui::SameLine();
     if (ImGui::Button("Quit", ImVec2(140.0f, 0.0f))) {
         intent.quit = true;
     }
@@ -143,8 +153,9 @@ void Ui::draw_launcher(Console& console, UiIntent& intent) {
     ImGui::Spacing();
     ImGui::Separator();
     ImGui::TextDisabled(
-        "The core is under construction: the CPU and memory map run, the "
-        "graphics and audio chips do not exist yet.");
+        "Under construction. The CPU, interrupts and display path work — the "
+        "test pattern proves them. MADAM, which draws the graphics, does not "
+        "exist yet, so a BIOS will run but show nothing.");
 
     ImGui::End();
 }

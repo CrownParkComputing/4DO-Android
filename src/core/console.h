@@ -13,6 +13,8 @@
 
 #include "arm60.h"
 #include "bus.h"
+#include "clio.h"
+#include "vdlp.h"
 #include "types.h"
 
 namespace retro3do {
@@ -54,6 +56,8 @@ public:
 
     Arm60& cpu() { return cpu_; }
     Bus& bus() { return bus_; }
+    Clio& clio() { return clio_; }
+    Vdlp& vdlp() { return vdlp_; }
 
     const std::string& last_error() const { return last_error_; }
 
@@ -62,6 +66,8 @@ private:
 
     Bus   bus_;
     Arm60 cpu_;
+    Clio  clio_;
+    Vdlp  vdlp_;
 
     Region region_ = Region::Ntsc;
     int frame_width_  = 320;

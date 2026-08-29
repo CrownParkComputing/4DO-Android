@@ -3,7 +3,7 @@
 	"artifacts" : 
 	[
 		{
-			"path" : "retro3do/libimgui.a"
+			"path" : "retro3do/libretro3do_core.a"
 		}
 	],
 	"backtrace" : 1,
@@ -12,7 +12,7 @@
 		"commands" : 
 		[
 			"add_library",
-			"target_link_libraries",
+			"target_compile_options",
 			"target_include_directories"
 		],
 		"files" : 
@@ -27,19 +27,25 @@
 			{
 				"command" : 0,
 				"file" : 0,
-				"line" : 79,
+				"line" : 23,
 				"parent" : 0
 			},
 			{
 				"command" : 1,
 				"file" : 0,
-				"line" : 88,
+				"line" : 36,
+				"parent" : 0
+			},
+			{
+				"command" : 1,
+				"file" : 0,
+				"line" : 40,
 				"parent" : 0
 			},
 			{
 				"command" : 2,
 				"file" : 0,
-				"line" : 87,
+				"line" : 30,
 				"parent" : 0
 			}
 		]
@@ -53,22 +59,34 @@
 					"fragment" : "-g -DANDROID -fdata-sections -ffunction-sections -funwind-tables -fstack-protector-strong -no-canonical-prefixes -D_FORTIFY_SOURCE=2 -Wformat -Werror=format-security   -fno-limit-debug-info  -fPIC"
 				},
 				{
+					"backtrace" : 2,
+					"fragment" : "-O2"
+				},
+				{
+					"backtrace" : 2,
+					"fragment" : "-fno-math-errno"
+				},
+				{
+					"backtrace" : 3,
+					"fragment" : "-Wall"
+				},
+				{
+					"backtrace" : 3,
+					"fragment" : "-Wextra"
+				},
+				{
+					"backtrace" : 3,
+					"fragment" : "-Wno-unused-parameter"
+				},
+				{
 					"fragment" : "-std=gnu++17"
 				}
 			],
 			"includes" : 
 			[
 				{
-					"backtrace" : 3,
-					"path" : "/home/jon/StudioProjects/Retro-3DO/third_party/imgui"
-				},
-				{
-					"backtrace" : 2,
-					"path" : "/home/jon/StudioProjects/Retro-3DO/android/app/.cxx/Debug/2w1l2e5o/arm64-v8a/retro3do/third_party/SDL/include-revision"
-				},
-				{
-					"backtrace" : 2,
-					"path" : "/home/jon/StudioProjects/Retro-3DO/third_party/SDL/include"
+					"backtrace" : 4,
+					"path" : "/home/jon/StudioProjects/Retro-3DO/src"
 				}
 			],
 			"language" : "CXX",
@@ -86,8 +104,7 @@
 				1,
 				2,
 				3,
-				4,
-				5
+				4
 			],
 			"sysroot" : 
 			{
@@ -95,16 +112,9 @@
 			}
 		}
 	],
-	"dependencies" : 
-	[
-		{
-			"backtrace" : 2,
-			"id" : "SDL3-shared::@bbf573702d147a204f21"
-		}
-	],
-	"id" : "imgui::@4146b486723d3652d7ff",
-	"name" : "imgui",
-	"nameOnDisk" : "libimgui.a",
+	"id" : "retro3do_core::@4146b486723d3652d7ff",
+	"name" : "retro3do_core",
+	"nameOnDisk" : "libretro3do_core.a",
 	"paths" : 
 	{
 		"build" : "retro3do",
@@ -120,8 +130,7 @@
 				1,
 				2,
 				3,
-				4,
-				5
+				4
 			]
 		}
 	],
@@ -130,37 +139,31 @@
 		{
 			"backtrace" : 1,
 			"compileGroupIndex" : 0,
-			"path" : "/home/jon/StudioProjects/Retro-3DO/third_party/imgui/imgui.cpp",
+			"path" : "/home/jon/StudioProjects/Retro-3DO/src/core/arm60.cpp",
 			"sourceGroupIndex" : 0
 		},
 		{
 			"backtrace" : 1,
 			"compileGroupIndex" : 0,
-			"path" : "/home/jon/StudioProjects/Retro-3DO/third_party/imgui/imgui_draw.cpp",
+			"path" : "/home/jon/StudioProjects/Retro-3DO/src/core/bus.cpp",
 			"sourceGroupIndex" : 0
 		},
 		{
 			"backtrace" : 1,
 			"compileGroupIndex" : 0,
-			"path" : "/home/jon/StudioProjects/Retro-3DO/third_party/imgui/imgui_tables.cpp",
+			"path" : "/home/jon/StudioProjects/Retro-3DO/src/core/clio.cpp",
 			"sourceGroupIndex" : 0
 		},
 		{
 			"backtrace" : 1,
 			"compileGroupIndex" : 0,
-			"path" : "/home/jon/StudioProjects/Retro-3DO/third_party/imgui/imgui_widgets.cpp",
+			"path" : "/home/jon/StudioProjects/Retro-3DO/src/core/console.cpp",
 			"sourceGroupIndex" : 0
 		},
 		{
 			"backtrace" : 1,
 			"compileGroupIndex" : 0,
-			"path" : "/home/jon/StudioProjects/Retro-3DO/third_party/imgui/backends/imgui_impl_sdl3.cpp",
-			"sourceGroupIndex" : 0
-		},
-		{
-			"backtrace" : 1,
-			"compileGroupIndex" : 0,
-			"path" : "/home/jon/StudioProjects/Retro-3DO/third_party/imgui/backends/imgui_impl_sdlrenderer3.cpp",
+			"path" : "/home/jon/StudioProjects/Retro-3DO/src/core/vdlp.cpp",
 			"sourceGroupIndex" : 0
 		}
 	],

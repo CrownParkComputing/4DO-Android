@@ -22,6 +22,7 @@ struct UiIntent {
     bool toggle_pause = false;
     bool bios_chosen = false;
     std::string bios_path;
+    bool test_pattern = false;
 };
 
 class Ui {

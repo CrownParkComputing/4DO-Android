@@ -68,10 +68,63 @@ expensive kind of bug to find later, so both directions are pinned by tests.
 
 Reads of unmapped space currently return zero rather than raising a data abort.
 That is a scaffolding decision to keep early boot alive while the chips are
-being written, and should become a real abort once CLIO exists.
+being written, and should become a real abort once MADAM exists.
+
+## CLIO (`src/core/clio.cpp`)
+
+The I/O controller: interrupt controller, timer bank, video line and pixel
+counters. It is the chip that lets boot code get anywhere — without interrupts
+and a running line counter, the BIOS spins forever waiting for a vertical blank.
+
+The part implemented with confidence is the **interrupt handshake**, because its
+shape is unusual enough to be worth stating plainly:
+
+- Pending and enable are separate registers, and each has **separate set and
+  clear ports** rather than being read-modify-written. A handler acknowledges by
+  writing the bits it handled to the clear port, which cannot lose a source that
+  fires while the handler is running.
+- Disabling a source **masks it without acknowledging it**; the pending bit
+  survives.
+- The line into the CPU is **level-sensitive**. A handler that fails to
+  acknowledge is re-entered immediately. That is the hardware's behaviour and is
+  asserted by a test, so a missing acknowledgement shows up as an obvious loop
+  rather than as a mysterious slowdown.
+- Bank 1 does not reach the CPU directly; it chains into a bit in bank 0, so a
+  handler always reads bank 0 first.
+
+Marked `TODO(clio)`: most individual register offsets, which timer prescaler
+sets the decrement rate (timers currently run at the CPU clock — the right shape
+at the wrong speed), and which bank-0 bit bank 1 chains into.
+
+A scanline is derived, not hardcoded: 12.5 MHz over 60 fields of 263 lines is
+about 792 cycles, and deriving it keeps PAL right when the region changes the
+line count.
+
+## VDLP (`src/core/vdlp.cpp`)
+
+The Video Display List Processor. The 3DO has no fixed framebuffer register: the
+display is a linked list in VRAM, each entry naming a framebuffer, a line count,
+a colour table and the next entry. That is how games change palette or buffer
+partway down the screen.
+
+Confident and tested: **pixels are 16-bit RGB555 in VRAM, two per 32-bit
+big-endian word**. Five bits per channel are widened to eight by replicating the
+top three bits into the low ones. A plain left-shift instead would make white
+come out as `0xF8F8F8` — which looks fine in a screenshot and is wrong against
+hardware, so both ends of the range are asserted.
+
+Marked `TODO(vdl)`: the bit assignments inside a VDL control word, and the word
+order within an entry. Until those are confirmed, `render_linear()` reads VRAM as
+a plain framebuffer, which is what the app's test pattern uses to prove the video
+path independently of the list format.
+
+Malformed lists are handled rather than trusted — a self-referencing entry, an
+entry claiming zero lines, and a walk longer than 1024 entries all terminate.
+Games do write garbage here during startup, and an infinite walk would look like
+a freeze.
 
 ## Still to be written
 
-MADAM (the CEL engine), CLIO, VDLP, the DSP, SPORT and the CD-ROM interface.
-Each needs its own section here as it lands, naming the documentation it was
-built from and how it was verified.
+MADAM (the CEL engine), the DSP, SPORT and the CD-ROM interface. Each needs its
+own section here as it lands, naming the documentation it was built from and how
+it was verified.

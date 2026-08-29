@@ -1547,10 +1547,10 @@
 			[
 				{
 					"name" : "HELPSTRING",
-					"value" : "The CMake toolchain file"
+					"value" : "No help, variable specified on the command line."
 				}
 			],
-			"type" : "FILEPATH",
+			"type" : "UNINITIALIZED",
 			"value" : "/home/jon/Android/Sdk/ndk/28.2.13676358/build/cmake/android.toolchain.cmake"
 		},
 		{

@@ -23,7 +23,9 @@ option(RETRO3DO_USE_SYSTEM_SDL "Link the system SDL3 instead of the vendored one
 add_library(retro3do_core STATIC
     src/core/arm60.cpp
     src/core/bus.cpp
+    src/core/clio.cpp
     src/core/console.cpp
+    src/core/vdlp.cpp
 )
 target_include_directories(retro3do_core PUBLIC src)
 
@@ -138,6 +140,8 @@ if(RETRO3DO_BUILD_TESTS)
         tests/test_main.cpp
         tests/test_arm60.cpp
         tests/test_bus.cpp
+        tests/test_clio.cpp
+        tests/test_vdlp.cpp
     )
     target_link_libraries(retro3do_tests PRIVATE retro3do_core)
     target_include_directories(retro3do_tests PRIVATE src tests)

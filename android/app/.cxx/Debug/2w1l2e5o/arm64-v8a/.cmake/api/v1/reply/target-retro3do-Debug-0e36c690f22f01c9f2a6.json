@@ -26,19 +26,19 @@
 			{
 				"command" : 0,
 				"file" : 0,
-				"line" : 102,
+				"line" : 104,
 				"parent" : 0
 			},
 			{
 				"command" : 1,
 				"file" : 0,
-				"line" : 108,
+				"line" : 110,
 				"parent" : 0
 			},
 			{
 				"command" : 2,
 				"file" : 0,
-				"line" : 109,
+				"line" : 111,
 				"parent" : 0
 			}
 		]
@@ -105,11 +105,11 @@
 	[
 		{
 			"backtrace" : 2,
-			"id" : "SDL3-shared::@bbf573702d147a204f21"
+			"id" : "retro3do_core::@4146b486723d3652d7ff"
 		},
 		{
 			"backtrace" : 2,
-			"id" : "retro3do_core::@4146b486723d3652d7ff"
+			"id" : "SDL3-shared::@bbf573702d147a204f21"
 		},
 		{
 			"backtrace" : 2,

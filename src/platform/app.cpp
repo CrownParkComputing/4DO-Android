@@ -11,6 +11,34 @@ namespace {
 constexpr int kDefaultWindowWidth  = 1280;
 constexpr int kDefaultWindowHeight = 960;
 
+// Fill VRAM with a colour ramp and build a one-entry display list over it, so
+// the machine draws something without a BIOS. This goes through the real bus
+// and the real VDLP: if it appears, the whole video path works.
+void write_test_pattern(Console& console) {
+    Bus& bus = console.bus();
+    const Frame frame = console.framebuffer();
+
+    for (int y = 0; y < frame.height; ++y) {
+        for (int x = 0; x < frame.width; ++x) {
+            const unsigned r = static_cast<unsigned>(x * 31 / (frame.width - 1));
+            const unsigned g = static_cast<unsigned>(y * 31 / (frame.height - 1));
+            const unsigned b = 31u - r;
+            const u16 pixel = static_cast<u16>((r << 10) | (g << 5) | b);
+
+            const u32 offset = static_cast<u32>(y * frame.width + x) * 2u;
+            bus.write16(kVramBase + offset, pixel);
+        }
+    }
+
+    // A display list in DRAM pointing at the start of VRAM.
+    const u32 list = 0x1000u;
+    bus.write32(list + 0, static_cast<u32>(frame.height));
+    bus.write32(list + 4, kVramBase);
+    bus.write32(list + 8, kVramBase);
+    bus.write32(list + 12, 0);
+    console.vdlp().set_list_address(list);
+}
+
 }  // namespace
 
 App::App() = default;
@@ -164,6 +192,12 @@ void App::tick() {
         } else {
             SDL_Log("%s", console_->last_error().c_str());
         }
+    }
+    if (intent.test_pattern) {
+        console_->reset();
+        write_test_pattern(*console_);
+        console_->run_frame();
+        emulating_ = false;
     }
     if (intent.reset) {
         console_->reset();

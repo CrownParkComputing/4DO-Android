@@ -15,7 +15,8 @@ u32 cycles_per_frame(Region region) {
 
 }  // namespace
 
-Console::Console() : cpu_(bus_) {
+Console::Console() : cpu_(bus_), clio_(cpu_), vdlp_(bus_) {
+    bus_.attach_clio(&clio_);
     set_region(Region::Ntsc);
     reset();
 }
@@ -63,12 +64,17 @@ void Console::set_region(Region region) {
     region_ = region;
     frame_width_  = 320;
     frame_height_ = region == Region::Pal ? 288 : 240;
+    // A field carries more lines than are visible: the rest is vertical blank,
+    // which is when the machine does its display-list work.
+    clio_.set_scanlines_per_field(region == Region::Pal ? 313 : 263);
     framebuffer_.assign(static_cast<size_t>(frame_width_) * frame_height_, 0xff000000u);
 }
 
 void Console::reset() {
     bus_.reset();
     cpu_.reset();
+    clio_.reset();
+    vdlp_.reset();
     frame_count_ = 0;
     std::fill(framebuffer_.begin(), framebuffer_.end(), 0xff000000u);
 }
@@ -93,9 +99,24 @@ u32 Console::run_frame() {
     while (spent < budget) {
         const u32 slice = (budget - spent) < kSliceCycles ? (budget - spent)
                                                           : kSliceCycles;
-        spent += cpu_.run(slice);
+        const u32 ran = cpu_.run(slice);
+        spent += ran;
+        clio_.tick(ran);
         apply_write_watch();
+
+        // A field boundary ends the frame even if the cycle budget has not run
+        // out. The video hardware, not the arithmetic, decides when a frame is
+        // finished; running past it would drift the two apart.
+        if (clio_.field_complete()) {
+            clio_.clear_field_complete();
+            break;
+        }
     }
+
+    // The field has ended, so draw it. This is the only place the framebuffer
+    // is produced, and it happens after emulation rather than during it — the
+    // console still does not present, it only fills a buffer.
+    vdlp_.render_field(framebuffer_.data(), frame_width_, frame_height_);
 
     ++frame_count_;
     return spent;

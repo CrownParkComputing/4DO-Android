@@ -662,3 +662,30 @@ TEST(the_audio_interrupt_arrives_without_a_dsp) {
     CHECK_EQ(console.bus().read32(kClioBase + kClioIrq0Pending) & kIrqAudioTimer,
              kIrqAudioTimer);
 }
+
+TEST(ejecting_reports_an_empty_drive_and_spinning_up_reloads_it) {
+    // The driver ejects the disc on purpose partway through a mount, reads the
+    // status back, and decides what to do next from it. Told the drive is
+    // still fully loaded it concludes the eject silently failed and waits for
+    // a drive-ready notification that never comes.
+    Chip c;
+    c.clio.cdrom().set_disc_present(true);
+
+    const auto command = [&](u8 opcode) {
+        for (int i = 0; i < 7; ++i) {
+            c.clio.write(kClioXbusCommand, i == 0 ? opcode : 0u);
+        }
+        CHECK_EQ(c.clio.read(kClioXbusCommand), opcode);
+        return static_cast<u8>(c.clio.read(kClioXbusCommand));
+    };
+
+    // Loaded: tray shut, disc in, spinning, ready.
+    CHECK_EQ(command(kCmdReadStatus), 0xe1u);
+
+    // Ejected: ready and nothing else.
+    CHECK_EQ(command(kCmdEject), kStatusReady);
+    CHECK_EQ(command(kCmdReadStatus), kStatusReady);
+
+    // Spinning up closes the tray again - the other half of the handshake.
+    CHECK_EQ(command(kCmdMotorOn), 0xe1u);
+}

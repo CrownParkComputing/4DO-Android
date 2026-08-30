@@ -237,8 +237,29 @@ void CdRomDevice::build_reply(u8 command) {
         }
 
         case kCmdMotorOn:
+            // Spinning up closes the tray as well as starting the motor. This
+            // is the other half of the eject handshake: the driver ejects, sees
+            // an empty drive, and spins it back up to load it again.
             motor_on_ = true;
+            tray_open_ = false;
+            media_changed_ = false;
             pending_reply_.push_back(kCmdMotorOn);
+            pending_reply_.push_back(drive_status());
+            break;
+
+        case kCmdEject:
+            tray_open_ = true;
+            motor_on_ = false;
+            media_changed_ = false;
+            last_error_ = 0;
+            pending_reply_.push_back(kCmdEject);
+            pending_reply_.push_back(drive_status());
+            break;
+
+        case kCmdInject:
+            // Reports the tray's state without changing it. Closing it is the
+            // spin-up's job.
+            pending_reply_.push_back(kCmdInject);
             pending_reply_.push_back(drive_status());
             break;
 
@@ -359,6 +380,16 @@ u8 CdRomDevice::drive_status() const {
     //
     // MAME's cr560b reports media only and leaves the motor stopped, which is
     // where this started and is why the sequence diverged.
+    //
+    // EJECT is the exception to all of it. The tray really can open, and while
+    // it is open the drive reports READY and nothing else - no tray, no disc,
+    // no motor. The driver ejects the disc on purpose partway through a mount,
+    // reads the status back, and uses it to decide what to do next; told the
+    // drive is still fully loaded it concludes the eject silently failed and
+    // waits for a drive-ready notification that never comes.
+    if (tray_open_) {
+        return kStatusReady;
+    }
     u8 status = kStatusDoor;
     if (disc_present_) status |= kStatusDiscIn | kStatusSpinUp | kStatusReady;
     else if (motor_on_) status |= kStatusSpinUp | kStatusReady;
@@ -371,6 +402,7 @@ void CdRomDevice::reset() {
     media_changed_ = false;
     interrupt_request_ = false;
     motor_on_ = false;
+    tray_open_ = false;
     ready_ = false;
     last_error_ = 0;
     pending_reply_.clear();

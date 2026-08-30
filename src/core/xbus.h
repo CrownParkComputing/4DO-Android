@@ -58,6 +58,8 @@ enum : u8 {
     kCmdSeek          = 0x01,
     kCmdMotorOn       = 0x02,
     kCmdMotorOff      = 0x03,
+    kCmdEject         = 0x06,
+    kCmdInject        = 0x07,
     kCmdReadStatus    = 0x05,
     kCmdSetMode       = 0x09,
     kCmdPlayMsf       = 0x0e,
@@ -205,6 +207,7 @@ private:
     bool disc_present_ = false;
     bool media_changed_ = false;
     bool motor_on_ = false;
+    bool tray_open_ = false;
     bool ready_ = false;
     u8   last_error_ = 0;
 

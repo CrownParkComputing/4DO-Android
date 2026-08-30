@@ -92,7 +92,19 @@ enum : u32 {
     kMadamDmaStride  = 8,
     kMadamDmaChannels = 32,
 
-    kMadamCelStart   = 0x0100,   // writing here starts the engine on a list
+    // The engine's control ports. NONE of them carries an address: writing to
+    // SPRSTRT starts a walk from whatever NEXTCCB already holds, and the value
+    // written is discarded. Treating the written value as the list head means
+    // the engine draws from wherever the last store happened to land.
+    kMadamCelStart   = 0x0100,
+    kMadamCelStop    = 0x0104,
+    kMadamCelResume  = 0x0108,
+    kMadamCelPause   = 0x010c,
+
+    // Where the walk is, and where it goes next. Software both reads and
+    // writes these, so they are real state rather than loop variables.
+    kMadamCurrentCcb = 0x05a0,
+    kMadamNextCcb    = 0x05a4,
 
     // The address of the video display list, which is what the VDLP walks to
     // produce a field.
@@ -206,6 +218,7 @@ public:
     // a register write; exposed directly so tests can drive it without going
     // through the register interface.
     void render_cel_list(u32 address);
+    void run_cel_engine();
 
     // The rectangle cels are clipped to. Defaults to the whole visible field.
     void set_clip(u32 width, u32 height);
@@ -268,6 +281,8 @@ private:
     u32 xbus_dma_length_ = 0;
     bool xbus_dma_pending_ = false;
     u32 vdl_address_ = 0;
+    u32 current_ccb_ = 0;
+    u32 next_ccb_ = 0;
     u32 dma_address_[kMadamDmaChannels] = {};
     u32 dma_length_[kMadamDmaChannels] = {};
     u32 clip_width_ = 320;

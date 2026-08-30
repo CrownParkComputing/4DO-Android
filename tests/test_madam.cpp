@@ -429,7 +429,9 @@ TEST(writing_the_start_register_runs_the_list) {
               pre0_for(kFormatDirect16, 1), pre1_for(1));
 
     // The CPU would do this; here the test writes the register directly.
-    bus.write32(kMadamBase + kMadamCelStart, kCcbAt);
+    // The list head goes in NEXTCCB; the start port only says "go".
+    bus.write32(kMadamBase + kMadamNextCcb, kCcbAt);
+    bus.write32(kMadamBase + kMadamCelStart, 0);
 
     CHECK_EQ(console.madam().stats().cels_drawn, 1u);
     CHECK_EQ(read_target(bus, 5, 5), rgb555(31, 0, 0));
@@ -447,7 +449,9 @@ TEST(a_cel_drawn_into_vram_appears_in_the_frame) {
     write_ccb(bus, kCcbAt, 0, kSourceAt, 0, fixed(3), fixed(7),
               fixed(1), 0, 0, fixed(1),
               pre0_for(kFormatDirect16, 1), pre1_for(1));
-    bus.write32(kMadamBase + kMadamCelStart, kCcbAt);
+    // The list head goes in NEXTCCB; the start port only says "go".
+    bus.write32(kMadamBase + kMadamNextCcb, kCcbAt);
+    bus.write32(kMadamBase + kMadamCelStart, 0);
 
     const u32 list = 0x8000u;
     bus.write32(list + 0, 240);
@@ -588,4 +592,36 @@ TEST(a_reset_clears_the_dma_channels) {
     bus.write32(kMadamBase + 0x218, 0xDEADBEEFu);
     madam.reset();
     CHECK_EQ(madam.dma_address(3), 0u);
+}
+
+TEST(the_start_port_ignores_the_value_written_to_it) {
+    // None of the engine's control ports carries an address. Treating the
+    // written value as the list head makes the engine draw from wherever the
+    // last store happened to land, which is usually nothing at all.
+    Console console;
+    console.reset();
+    Bus& bus = console.bus();
+    bus.write16(kSourceAt + 0, rgb555(31, 0, 0));
+    write_ccb(bus, kCcbAt, 0, kSourceAt, 0, fixed(5), fixed(5),
+              fixed(1), 0, 0, fixed(1),
+              pre0_for(kFormatDirect16, 1), pre1_for(1));
+
+    bus.write32(kMadamBase + kMadamNextCcb, kCcbAt);
+    bus.write32(kMadamBase + kMadamCelStart, 0xdeadbeef);
+    CHECK_EQ(console.madam().stats().cels_drawn, 1u);
+}
+
+TEST(stopping_the_engine_clears_where_it_would_go_next) {
+    Console console;
+    console.reset();
+    Bus& bus = console.bus();
+    bus.write16(kSourceAt + 0, rgb555(31, 0, 0));
+    write_ccb(bus, kCcbAt, 0, kSourceAt, 0, fixed(5), fixed(5),
+              fixed(1), 0, 0, fixed(1),
+              pre0_for(kFormatDirect16, 1), pre1_for(1));
+
+    bus.write32(kMadamBase + kMadamNextCcb, kCcbAt);
+    bus.write32(kMadamBase + kMadamCelStop, 0);
+    bus.write32(kMadamBase + kMadamCelStart, 0);
+    CHECK_EQ(console.madam().stats().cels_drawn, 0u);
 }

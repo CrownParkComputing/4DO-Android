@@ -155,6 +155,8 @@ u32 Madam::read(u32 offset) {
         case kMadamXbusDmaAddress:   return xbus_dma_address_;
         case kMadamXbusDmaLength:    return xbus_dma_length_;
         case kMadamVdlAddress: return vdl_address_;
+        case kMadamCurrentCcb: return current_ccb_;
+        case kMadamNextCcb:    return next_ccb_;
         default:
             return 0;
     }
@@ -219,13 +221,28 @@ void Madam::write(u32 offset, u32 value) {
         case kMadamVdlAddress:
             vdl_address_ = value;
             break;
+        // The value written to any of these is discarded; the port itself is
+        // the instruction. The real chip runs the walk asynchronously and
+        // raises an interrupt when it finishes; this runs it to completion
+        // immediately, which is indistinguishable to software that waits for
+        // the completion flag and wrong only for software that races it.
         case kMadamCelStart:
-            // Writing the list address is what starts the engine. The real chip
-            // runs asynchronously and raises an interrupt when it finishes;
-            // this runs it to completion immediately, which is indistinguishable
-            // to software that waits for the completion flag and wrong only for
-            // software that races it.
-            render_cel_list(value);
+            run_cel_engine();
+            break;
+        case kMadamCelStop:
+            next_ccb_ = 0;
+            break;
+        case kMadamCelResume:
+            run_cel_engine();
+            break;
+        case kMadamCelPause:
+            break;
+
+        case kMadamCurrentCcb:
+            current_ccb_ = value;
+            break;
+        case kMadamNextCcb:
+            next_ccb_ = value;
             break;
         default:
             break;
@@ -431,6 +448,14 @@ void Madam::draw_cel(const Ccb& ccb) {
     ++stats_.cels_drawn;
 }
 
+// Walk from NEXTCCB, which is where the hardware starts and where it leaves
+// off. The walk consumes NEXTCCB as it goes, so software that starts the
+// engine twice without reloading it draws nothing the second time - which is
+// what the hardware does.
+void Madam::run_cel_engine() {
+    render_cel_list(next_ccb_);
+}
+
 void Madam::render_cel_list(u32 address) {
     stats_ = MadamStats{};
 
@@ -438,10 +463,12 @@ void Madam::render_cel_list(u32 address) {
         return;
     }
 
-    u32 current = address;
+    next_ccb_ = address;
     while (stats_.cels_walked < kMaxCels) {
-        const Ccb ccb = read_ccb(current);
+        current_ccb_ = next_ccb_;
+        const Ccb ccb = read_ccb(current_ccb_);
         ++stats_.cels_walked;
+        next_ccb_ = ccb.next_address;
 
         if ((ccb.flags & kCcbSkip) == 0) {
             draw_cel(ccb);
@@ -450,10 +477,9 @@ void Madam::render_cel_list(u32 address) {
         if (ccb.flags & kCcbLast) {
             return;
         }
-        if (ccb.next_address == 0 || ccb.next_address == current) {
+        if (next_ccb_ == 0 || next_ccb_ == current_ccb_) {
             return;
         }
-        current = ccb.next_address;
     }
 
     // Ran out of patience rather than reaching the end. Recorded rather than

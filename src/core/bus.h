@@ -37,18 +37,27 @@ enum : u32 {
     // four hang the same way, so the configuration byte is not the missing
     // piece.
     //
-    // What the wrong map is masking is now known: SPORT. Corrected, the machine
-    // runs normally for about three thousand frames and then begins hammering
-    // the VRAM page copier - SPORT accesses go from 5 to 142 MILLION over the
-    // next two thousand frames, which is what makes the emulator appear to hang.
-    // It is not hung and it is not slow code: it is a loop that never makes
-    // progress, and the CPU's own counters stay flat throughout (745 decodes,
-    // 608 invalidations, no interrupts taken).
+    // Corrected, the ROM PANICS. It parks in its own crash handler at 0x00000174:
     //
-    // So the next thing to fix is SPORT under the real map, not the map itself.
-    // With the map wrong, anything the machine places high in DRAM also lands in
-    // video memory, which is exactly where the reference implementation puts the
-    // buffer it reads the disc into.
+    //     mov   r8, #0x03300000        ; MADAM's base
+    //     stmdb r8, {r0,r1,r2,r3,r4}   ; dump five registers just below it
+    //     b     -12                    ; and spin
+    //
+    // caught in Supervisor mode with interrupts masked, reporting r3 = 0xFFEEFFEE
+    // as a signature and r4 = 7 as the code. The routine at 0x00000A4C is called
+    // from 0x00000170 with lr pointing AT that handler, so it is not meant to
+    // return at all - and under the real map it runs its loop out and returns,
+    // which is the failure.
+    //
+    // That also explained an apparent hang: the register dump lands at
+    // 0x032FFFEC, which used to be decoded as SPORT, so the crash loop looked
+    // like 142 million page copies. Narrowing SPORT to the windows it really has
+    // fixed that, and the machine now fails honestly and quickly instead.
+    //
+    // So the open question is why that routine returns, not why the map is
+    // wrong. With the map wrong, anything the machine places high in DRAM also
+    // lands in video memory, which is where the reference implementation puts
+    // the buffer it reads the disc into.
     kDramBase = 0x00000000,
     kDramSize = 1u * 1024 * 1024,
 
@@ -75,7 +84,13 @@ enum : u32 {
     // accesses are counted and visible rather than vanishing silently, which
     // is what made this hard to find in the first place.
     kSportBase = 0x03200000,
-    kSportSize = 0x00100000,
+    // SPORT decodes only the windows it actually has: the copy window at
+    // +0x0000, the fill-value register at +0x2000, and the fill window at
+    // +0x4000. Claiming the whole megabyte the region is listed as means every
+    // stray access anywhere in it is treated as a page copy - and the machine
+    // does make them, repeatedly, near the top of the region. Under the real
+    // memory map that turns into 142 million page copies and looks like a hang.
+    kSportSize = 0x00006000,
 
     kMadamBase = 0x03300000,        // confirmed by the boot ROM
     kMadamSize = 0x00100000,

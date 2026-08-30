@@ -39,8 +39,14 @@
 #   Need for Speed        barely draws. The reference manages sixty-five cels
 #                         to our thirty-three, so it does not work there
 #                         either. Not ours alone to fix.
-#   Wing Commander III    draws a starfield where the reference has a
-#                         cutscene. OURS - the reference gets there.
+#   Wing Commander III    OURS. The 262 cels it draws are byte-identical to
+#                         the reference's first 262, and its drive traffic
+#                         matches command for command - it reads everything it
+#                         asks for and then idles on the once-a-second version
+#                         poll, while the reference goes on to 303 cels and a
+#                         cutscene. So it is not a decode fault: the machine
+#                         stops asking. Waiting on something, not broken at
+#                         drawing.
 #   Wing Commander III d2 will not open at all - suspect a bad dump
 #
 # Eleven of twelve draw. The one that does not is a bad file.

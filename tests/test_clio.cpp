@@ -650,16 +650,31 @@ TEST(the_secondary_bank_bit_always_reads_set_in_the_first_banks_enable) {
     CHECK_EQ(c.clio.read(kClioIrq0Enable) & kIrqSecondaryBank, kIrqSecondaryBank);
 }
 
-TEST(the_audio_interrupt_arrives_without_a_dsp) {
-    // Standing in for the DSP until there is one. The interrupt matters more
-    // than the sound: the audio folio drives the frame clock everything else
-    // is sequenced against, and a machine that never raises it runs a title's
-    // opening logo and then stops.
+TEST(the_dsp_raises_the_audio_interrupt_from_its_own_program) {
+    // The interrupt comes out of the program rather than from a timer: a
+    // title decides when it wants to be woken, and titles differ. This is the
+    // smallest program that asks for one - store a value into the interrupt
+    // register, then sleep.
     Console console;
     console.reset();
-    console.bus().write32(kClioBase + kClioIrq0Enable, kIrqAudioTimer);
+    Bus& bus = console.bus();
+
+    // A control-format move of an immediate into 0x3EE, then sleep.
+    const u16 program[] = {0x9bee, 0xc001, 0x8380};
+    for (u32 i = 0; i < 3; ++i) {
+        bus.write32(kClioBase + 0x2000 + i * 4, program[i]);
+    }
+
+    bus.write32(kClioBase + kClioIrq0Enable, kIrqAudioTimer);
+    bus.write32(kClioBase + kClioIrq0Clear, kIrqAudioTimer);
+
+    // A stopped DSP never reaches the instruction, whatever is loaded.
     console.run_frame();
-    CHECK_EQ(console.bus().read32(kClioBase + kClioIrq0Pending) & kIrqAudioTimer,
+    CHECK_EQ(bus.read32(kClioBase + kClioIrq0Pending) & kIrqAudioTimer, 0u);
+
+    bus.write32(kClioBase + kClioDspRun, 1);
+    console.run_frame();
+    CHECK_EQ(bus.read32(kClioBase + kClioIrq0Pending) & kIrqAudioTimer,
              kIrqAudioTimer);
 }
 

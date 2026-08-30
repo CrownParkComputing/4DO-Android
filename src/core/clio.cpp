@@ -1,4 +1,5 @@
 #include "clio.h"
+#include "dsp.h"
 #include <cstdlib>
 #include <cstdio>
 #include <cstring>
@@ -396,6 +397,30 @@ u32 Clio::read_impl(u32 offset) {
         }
     }
 
+    if (dsp_ != nullptr) {
+        if (offset >= kClioDspRead2 && offset < kClioDspRead1) {
+            u32 address = ((offset - kClioDspRead2) >> 1) & 0xff;
+            address += 0x300;
+            return (static_cast<u32>(dsp_->read_data(static_cast<u16>(address))) << 16) |
+                   dsp_->read_data(static_cast<u16>(address + 1));
+        }
+        if (offset >= kClioDspRead1 && offset < kClioDspEnd) {
+            u32 address = ((offset - kClioDspRead1) >> 2) & 0xff;
+            address += 0x300;
+            return dsp_->read_data(static_cast<u16>(address));
+        }
+        if (offset == kClioDspSemaphore) {
+            return dsp_->read_semaphore();
+        }
+    }
+    if (offset == kClioDspNoise) {
+        // A hardware noise source, like the one at 0x3C.
+        random_state_ += 0x9e3779b9u;
+        u32 z = random_state_;
+        z = (z ^ (z >> 16)) * 0x85ebca6bu;
+        z = (z ^ (z >> 13)) * 0xc2b2ae35u;
+        return z ^ (z >> 16);
+    }
     if (offset >= kClioDspBase && offset < kClioDspEnd) {
         return dsp_window_[(offset - kClioDspBase) / 4];
     }
@@ -555,6 +580,56 @@ void Clio::write_impl(u32 offset, u32 value) {
     }
 
 
+    if (dsp_ != nullptr && offset >= kClioDspProgram2 && offset < kClioDspEnd) {
+        if (offset < kClioDspProgram1) {
+            // Two program words per store. The 0x400 bit is a mirror.
+            const u32 address = ((offset & ~0x400u) - kClioDspProgram2) >> 1;
+            dsp_->write_program(static_cast<u16>(address),
+                                static_cast<u16>(value >> 16));
+            dsp_->write_program(static_cast<u16>(address + 1),
+                                static_cast<u16>(value));
+            return;
+        }
+        if (offset < 0x3000) {
+            // One program word per store. The 0x800 bit is a mirror.
+            const u32 address = ((offset & ~0x800u) - kClioDspProgram1) >> 2;
+            dsp_->write_program(static_cast<u16>(address),
+                                static_cast<u16>(value));
+            return;
+        }
+        if (offset < kClioDspData1) {
+            const u32 address = ((offset - kClioDspData2) >> 1) & 0xff;
+            dsp_->write_data(static_cast<u16>(address),
+                             static_cast<u16>(value >> 16));
+            dsp_->write_data(static_cast<u16>(address + 1),
+                             static_cast<u16>(value));
+            return;
+        }
+        if (offset < kClioDspRead2) {
+            const u32 address = ((offset - kClioDspData1) >> 2) & 0xff;
+            dsp_->write_data(static_cast<u16>(address), static_cast<u16>(value));
+            return;
+        }
+        return;
+    }
+    if (dsp_ != nullptr) {
+        switch (offset) {
+            case kClioDspSemaphore:
+                dsp_->write_semaphore(value);
+                return;
+            case kClioDspReset:
+                dsp_->reset();
+                return;
+            case kClioDspRun:
+                // Starting and stopping the DSP is a single register, and a
+                // stopped DSP never reaches the instruction that raises the
+                // audio interrupt - so the machine above it stops too.
+                dsp_->set_running(value > 0);
+                return;
+            default:
+                break;
+        }
+    }
     if (offset >= kClioDspBase && offset < kClioDspEnd) {
         dsp_window_[(offset - kClioDspBase) / 4] = value;
         ++dsp_writes_;
@@ -623,12 +698,24 @@ void Clio::write_impl(u32 offset, u32 value) {
             update_cpu_interrupt_line();
             break;
 
+        case kClioFifoClear:
+            // Stop and clear whichever channels the mask names. The bits are
+            // the same ones that enable them.
+            xbus_dma_enable_ &= ~value;
+            if (channel_handler_ != nullptr) {
+                channel_handler_(channel_context_, xbus_dma_enable_, value);
+            }
+            return;
+
         case kClioDmaRequestSet:
         case kClioDmaRequestClear:
             if (offset == kClioDmaRequestSet) {
                 xbus_dma_enable_ |= value;
             } else {
                 xbus_dma_enable_ &= ~value;
+            }
+            if (channel_handler_ != nullptr) {
+                channel_handler_(channel_context_, xbus_dma_enable_, 0);
             }
             // The request bit alone starts the transfer. There is no second
             // enable to check - gating on one in the bus-control register

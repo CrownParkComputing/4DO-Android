@@ -86,6 +86,17 @@ enum : u32 {
     kMadamPbusLength  = 0x0574,
     kMadamPbusPointer = 0x0578,
 
+    // The DSP's DMA channels. Thirteen carry samples INTO the DSP and four
+    // carry them out, and each has a current address and length plus a reload
+    // pair so a channel can run continuously without the CPU in the loop.
+    //
+    //   0x400 + channel*16   input  channels 0..12
+    //   0x500 + channel*16   output channels 0..3
+    //     +0x00 address   +0x04 length   +0x08 next address   +0x0C next length
+    kMadamFifoBase   = 0x0400,
+    kMadamFifoEnd    = 0x0540,
+    kMadamFifoOutput = 0x0500,
+
     kMadamDmaBase    = 0x0200,
 
     // The expansion-bus DMA. This is how a sector actually reaches memory: the
@@ -271,6 +282,29 @@ public:
     void advance_pbus_pointer() { pbus_pointer_ += 4; }
     void finish_pbus() { dma_enable_ &= ~kMadamPbusStart; }
 
+    // --- the DSP's DMA channels ------------------------------------------
+    //
+    // The channels are MADAM's registers but they move data for the DSP, so
+    // the DSP drives them through here rather than owning them.
+    u16  fifo_input_next(u16 channel);
+    u16  fifo_input_peek(u16 channel);
+    u16  fifo_input_status(u16 channel) const;
+    u16  fifo_output_status(u16 channel) const;
+    void fifo_output(u16 channel, u16 value);
+
+    // Software enables and disables channels through CLIO, not MADAM, so the
+    // mask is handed over rather than decoded here.
+    void set_dma_channel_enable(u32 mask) { dma_channel_enable_ = mask; }
+    void clear_fifo(u32 channel, bool output);
+
+    // Raised when a channel runs out and cannot reload. The interrupt bit
+    // differs between input and output channels, so the caller is told which.
+    using FifoDoneHandler = void (*)(void* context, u32 channel, bool output);
+    void set_fifo_done_handler(FifoDoneHandler handler, void* context) {
+        fifo_done_ = handler;
+        fifo_done_context_ = context;
+    }
+
     const MadamStats& stats() const { return stats_; }
 
     // Lifetime totals. `stats()` describes the LAST list only, which reads as
@@ -337,10 +371,27 @@ private:
     u32 vdl_address_ = 0;
     u64 engine_runs_ = 0;
     u64 total_cels_drawn_ = 0;
+    // A DSP DMA channel. `index` is how far through the current buffer it has
+    // read; a length of zero with no reload set means the channel is idle.
+    struct Fifo {
+        s32 index = 0;
+        u32 address = 0;
+        s32 length = 0;
+        u32 next_address = 0;
+        s32 next_length = 0;
+    };
+    static constexpr u32 kInputFifos = 13;
+    static constexpr u32 kOutputFifos = 4;
+    Fifo input_fifo_[kInputFifos];
+    Fifo output_fifo_[kOutputFifos];
+    u32 dma_channel_enable_ = 0;
+
     u32 pbus_address_ = 0;
     u32 pbus_length_ = 0;
     u32 pbus_pointer_ = 0;
     void (*pbus_handler_)(void*) = nullptr;
+    FifoDoneHandler fifo_done_ = nullptr;
+    void* fifo_done_context_ = nullptr;
     void* pbus_context_ = nullptr;
     u32 current_ccb_ = 0;
     u32 next_ccb_ = 0;

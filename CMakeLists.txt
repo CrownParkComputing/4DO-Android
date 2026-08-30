@@ -72,6 +72,7 @@ add_library(retro3do_core STATIC
     src/core/bus.cpp
     src/core/chd.cpp
     src/core/clio.cpp
+    src/core/dsp.cpp
     src/core/pbus.cpp
     src/core/console.cpp
     src/core/disc.cpp

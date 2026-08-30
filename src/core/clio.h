@@ -26,6 +26,7 @@
 namespace retro3do {
 
 class Arm60;
+class Dsp;
 
 // Sources on the first interrupt bank. Only the ones the machine currently
 // generates are named; the rest of the bits exist but are never raised yet.
@@ -301,6 +302,8 @@ enum : u32 {
     // transfer runs when request bit 20 is set AND bit 11 of the bus control
     // register is set; the address and length live in MADAM and mean nothing on
     // their own.
+    // Writing here stops and clears the channels named in the mask.
+    kClioFifoClear    = 0x0300,
     kClioDmaRequestSet   = 0x0304,
     kClioDmaRequestClear = 0x0308,
     kClioDmaXbusBit      = 0x00100000,
@@ -321,8 +324,28 @@ enum : u32 {
     // 0x034017E8, 0x034017FC and 0x03401800 as control registers, alongside
     // values (0x9900C000, 0x9901C000, 0x83808000) that look like DSP
     // instructions.
+    // The DSP's windows. These are not one register file: they are several
+    // views onto two different memories, at different word widths, with
+    // mirrors.
+    //
+    //   0x1800-0x1FFF  program memory, TWO DSP words per CPU word
+    //   0x2000-0x2FFF  program memory, one word per CPU word
+    //   0x3000-0x33FF  data memory, two words per CPU word
+    //   0x3400-0x37FF  data memory, one word per CPU word
+    //   0x3800-0x3BFF  data memory read back, two words
+    //   0x3C00-0x3FFF  data memory read back, one word
     kClioDspBase      = 0x1000,
     kClioDspEnd       = 0x4000,
+    kClioDspProgram2  = 0x1800,
+    kClioDspProgram1  = 0x2000,
+    kClioDspData2     = 0x3000,
+    kClioDspData1     = 0x3400,
+    kClioDspRead2     = 0x3800,
+    kClioDspRead1     = 0x3c00,
+    kClioDspSemaphore = 0x17d0,
+    kClioDspReset     = 0x17e8,
+    kClioDspNoise     = 0x17f0,
+    kClioDspRun       = 0x17fc,
 
     kClioWindowSize   = 0x10000,
 };
@@ -436,6 +459,9 @@ private:
     // reads a fixed 0x4000, and that constant is the difference between a
     // machine that mounts a disc and one that boots to a logo and stops.
     static constexpr u32 kDipir2Value = 0x4000;
+    Dsp* dsp_ = nullptr;
+    void (*channel_handler_)(void*, u32, u32) = nullptr;
+    void* channel_context_ = nullptr;
     u32 dipir1_ = 0;
     u32 dipir2_ = kDipir2Value;
 
@@ -498,6 +524,16 @@ public:
     // The expansion transfer runs INSIDE the store that triggers it, before the
     // CPU executes another instruction - not at the next convenient boundary.
     // The host writes the trigger and then looks at the result straight away.
+    // The DSP is a separate device; CLIO is only its window onto the bus.
+    void attach_dsp(Dsp* dsp) { dsp_ = dsp; }
+
+    // Software enables DMA channels through CLIO but the channels are MADAM's,
+    // so the mask is forwarded rather than acted on here.
+    void set_channel_handler(void (*handler)(void*, u32, u32), void* context) {
+        channel_handler_ = handler;
+        channel_context_ = context;
+    }
+
     void set_xbus_dma_handler(void (*handler)(void*), void* context) {
         dma_handler_ = handler;
         dma_context_ = context;

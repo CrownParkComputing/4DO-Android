@@ -190,6 +190,22 @@ u32 Madam::read(u32 offset) {
         return is_length ? dma_length_[channel] : dma_address_[channel];
     }
 
+    if (offset >= kMadamFifoBase && offset < kMadamFifoEnd) {
+        const bool output = offset >= kMadamFifoOutput;
+        const u32 channel = (offset >> 4) & 0x0f;
+        const Fifo& fifo = output ? output_fifo_[channel % kOutputFifos]
+                                  : input_fifo_[channel % kInputFifos];
+        switch (offset & 0x0f) {
+            // The address and length read back as the channel's CURRENT
+            // position, not as what software wrote. That is how software finds
+            // out how far a sound has played.
+            case 0x00: return fifo.address + static_cast<u32>(fifo.index);
+            case 0x04: return static_cast<u32>(fifo.length - fifo.index);
+            case 0x08: return fifo.next_address;
+            default:   return static_cast<u32>(fifo.next_length);
+        }
+    }
+
     switch (offset) {
         case kMadamRevision:  return revision_;
         case kMadamMemConfig:  return mem_config_;
@@ -207,6 +223,112 @@ u32 Madam::read(u32 offset) {
     }
 }
 
+
+// ---------------------------------------------------------------------------
+// The DSP's DMA channels
+// ---------------------------------------------------------------------------
+//
+// A channel walks a buffer in memory a word at a time. When it reaches the
+// end it interrupts and, if software has left a reload address behind, picks
+// that up and carries on - which is how a sound stays continuous without the
+// CPU being woken for every buffer.
+//
+// An address of zero means the channel is idle. That is not a sentinel this
+// code invented: software clears the address to stop a channel.
+
+u16 Madam::fifo_input_peek(u16 channel) {
+    if (channel >= kInputFifos) {
+        return 0;
+    }
+    const Fifo& fifo = input_fifo_[channel];
+    const u32 address = fifo.address + static_cast<u32>(fifo.index);
+    return static_cast<u16>((static_cast<u16>(bus_.read8(address)) << 8) |
+                            bus_.read8(address + 1));
+}
+
+u16 Madam::fifo_input_next(u16 channel) {
+    if (channel >= kInputFifos) {
+        return 0;
+    }
+    Fifo& fifo = input_fifo_[channel];
+    if (fifo.address == 0) {
+        return 0;
+    }
+
+    if ((fifo.length - fifo.index) > 0) {
+        const u16 value = fifo_input_peek(channel);
+        fifo.index += 2;
+        return value;
+    }
+
+    fifo.index = 0;
+    if (fifo_done_ != nullptr) {
+        fifo_done_(fifo_done_context_, channel, false);
+    }
+
+    // Reload only if software armed one AND left the channel enabled.
+    if (fifo.next_address != 0 && (dma_channel_enable_ & (1u << channel)) != 0) {
+        fifo.address = fifo.next_address;
+        fifo.length = fifo.next_length;
+        const u16 value = fifo_input_peek(channel);
+        fifo.index += 2;
+        return value;
+    }
+
+    fifo.address = 0;
+    return 0;
+}
+
+void Madam::fifo_output(u16 channel, u16 value) {
+    if (channel >= kOutputFifos) {
+        return;
+    }
+    Fifo& fifo = output_fifo_[channel];
+    if (fifo.address == 0) {
+        return;
+    }
+
+    if ((fifo.length - fifo.index) > 0) {
+        const u32 address = fifo.address + static_cast<u32>(fifo.index);
+        bus_.write8(address, static_cast<u8>(value >> 8));
+        bus_.write8(address + 1, static_cast<u8>(value));
+        fifo.index += 2;
+        return;
+    }
+
+    fifo.index = 0;
+    if (fifo_done_ != nullptr) {
+        fifo_done_(fifo_done_context_, channel, true);
+    }
+    if (fifo.next_address != 0 && (dma_channel_enable_ & (1u << channel)) != 0) {
+        fifo.address = fifo.next_address;
+        fifo.length = fifo.next_length;
+    } else {
+        fifo.address = 0;
+    }
+}
+
+u16 Madam::fifo_input_status(u16 channel) const {
+    if (channel >= kInputFifos) {
+        return 0;
+    }
+    return input_fifo_[channel].address != 0 ? 2u : 0u;
+}
+
+u16 Madam::fifo_output_status(u16 channel) const {
+    if (channel >= kOutputFifos) {
+        return 0;
+    }
+    return output_fifo_[channel].address != 0 ? 1u : 0u;
+}
+
+void Madam::clear_fifo(u32 channel, bool output) {
+    if (output) {
+        if (channel < kOutputFifos) output_fifo_[channel] = Fifo{};
+    } else {
+        if (channel < kInputFifos) input_fifo_[channel] = Fifo{};
+    }
+}
 
 bool Madam::register_written(u32 offset) const {
     const u32 index = offset / 4;
@@ -242,6 +364,34 @@ void Madam::write(u32 offset, u32 value) {
             dma_length_[channel] = value;
         } else {
             dma_address_[channel] = value;
+        }
+        return;
+    }
+
+    if (offset >= kMadamFifoBase && offset < kMadamFifoEnd) {
+        const bool output = offset >= kMadamFifoOutput;
+        const u32 channel = (offset >> 4) & 0x0f;
+        Fifo& fifo = output ? output_fifo_[channel % kOutputFifos]
+                            : input_fifo_[channel % kInputFifos];
+        switch (offset & 0x0f) {
+            case 0x00:
+                fifo.address = value;
+                // Setting the address abandons any reload that was armed.
+                if (!output) fifo.next_address = 0;
+                break;
+            case 0x04:
+                // A length of zero means an idle channel rather than a
+                // zero-length one, and everything else is four bytes longer
+                // than software asked for.
+                fifo.length = value != 0 ? static_cast<s32>(value + 4) : 0;
+                if (!output) fifo.next_length = 0;
+                break;
+            case 0x08:
+                fifo.next_address = value;
+                break;
+            default:
+                fifo.next_length = value != 0 ? static_cast<s32>(value + 4) : 0;
+                break;
         }
         return;
     }

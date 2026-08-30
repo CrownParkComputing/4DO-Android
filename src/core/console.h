@@ -17,6 +17,7 @@
 #include "disc.h"
 #include "clio.h"
 #include "madam.h"
+#include "dsp.h"
 #include "pbus.h"
 #include "pad.h"
 #include "sport.h"
@@ -38,7 +39,7 @@ struct Frame {
     int height = 0;
 };
 
-class Console {
+class Console : public DspHost {
 public:
     Console();
     ~Console();
@@ -80,7 +81,23 @@ public:
 private:
     void service_expansion_dma();
     void service_pbus_dma();
-    void tick_audio_interrupt(u32 cycles);
+    void tick_dsp(u32 cycles);
+
+public:
+    // --- DspHost ----------------------------------------------------------
+    // The DSP's DMA channels are MADAM's registers and its interrupt is
+    // CLIO's, so the machine wires them together rather than the DSP reaching
+    // for either.
+    u16  dsp_input_next(u16 channel) override { return madam_.fifo_input_next(channel); }
+    u16  dsp_input_peek(u16 channel) override { return madam_.fifo_input_peek(channel); }
+    u16  dsp_input_status(u16 channel) override { return madam_.fifo_input_status(channel); }
+    u16  dsp_output_status(u16 channel) override { return madam_.fifo_output_status(channel); }
+    void dsp_output(u16 channel, u16 value) override { madam_.fifo_output(channel, value); }
+    void dsp_audio_interrupt() override { clio_.raise(kIrqAudioTimer); }
+
+    const Dsp& dsp() const { return dsp_; }
+
+private:
 
 public:
     // The controller state the machine will report on its next input scan.
@@ -113,11 +130,16 @@ private:
     Clio  clio_;
     Vdlp  vdlp_;
     Madam madam_;
+    Dsp dsp_;
     Pbus pbus_;
     Joypad joypad_;
-    // One interrupt per audio sample at 44.1 kHz, in CPU cycles.
-    static constexpr u32 kAudioInterruptPeriod = 12500000u / 44100u;
-    u32 audio_interrupt_accumulator_ = 0;
+    // The DSP runs one pass of its program per audio sample. At 44.1 kHz
+    // that is about every 283 CPU cycles.
+    static constexpr u32 kSamplePeriod = 12500000u / 44100u;
+    u32 sample_accumulator_ = 0;
+
+    // The last pair of DAC words the DSP produced, as (right << 16) | left.
+    u32 last_sample_ = 0;
     Sport sport_;
     Disc  disc_;
     PadState  pads_;

@@ -31,7 +31,7 @@ u32 lba_to_msf(u32 lba) {
 
 void CdRomDevice::tick(u32 cycles) {
     // Fetch the next sector when the drive would have reached it.
-    if (streaming_ && data_pos_ >= data_.size()) {
+    if (transfer_sectors_ > 0 && data_pos_ >= data_.size()) {
         if (sector_delay_ > cycles) {
             sector_delay_ -= cycles;
         } else {
@@ -223,7 +223,6 @@ void CdRomDevice::build_reply(u8 command) {
 
         case kCmdMotorOff:
             motor_on_ = false;
-            streaming_ = false;
             pending_reply_.push_back(kCmdMotorOff);
             pending_reply_.push_back(drive_status());
             break;
@@ -251,7 +250,6 @@ u32 CdRomDevice::disc_sectors() const {
 void CdRomDevice::start_transfer(u32 lba, u32 sectors) {
     transfer_lba_ = lba;
     transfer_sectors_ = sectors;
-    streaming_ = true;
     data_.clear();
     data_pos_ = 0;
     sector_delay_ = kSectorDelay;
@@ -262,38 +260,35 @@ void CdRomDevice::start_transfer(u32 lba, u32 sectors) {
 // sector rather than materialising all of it, which matters: a read can ask for
 // far more than would be reasonable to hold at once.
 bool CdRomDevice::fill_next_sector_now() {
-    // The count in a READ is a floor, not a limit. The drive goes on delivering
-    // consecutive sectors for as long as the host keeps draining them, and the
-    // host decides how much it actually wants by how much it DMAs.
+    // Deliver exactly the blocks the command asked for, and no more.
     //
-    // This is not a guess: a real drive asked for ONE block at LBA 0 answers
-    // with LBA 0, then 1, then 2, then 3, and keeps going. Stopping at the
-    // requested count means the machine reads the disc's volume label and
-    // nothing else - it never gets the directory the label points at, so it
-    // never finds anything to launch.
-    if (disc_ == nullptr || !streaming_) {
+    // An earlier version streamed on indefinitely, on the evidence that a
+    // reference emulator reads LBA 0, then 1, 2 and 3 after a single one-block
+    // READ. That reading was wrong: those sectors come from SEPARATE read
+    // commands, one per sector, which the command trace shows plainly. Leaving
+    // the drive streaming holds data-ready asserted for ever, which tells the
+    // host the previous transfer never finished.
+    if (disc_ == nullptr || transfer_sectors_ == 0) {
         return false;
     }
     if (transfer_lba_ >= disc_->sector_count()) {
-        streaming_ = false;
+        transfer_sectors_ = 0;
         return false;
     }
     u8 sector[kSectorUserBytes];
     if (!disc_->read_sector(transfer_lba_, sector)) {
-        streaming_ = false;
+        transfer_sectors_ = 0;
         return false;
     }
     data_.assign(sector, sector + kSectorUserBytes);
     data_pos_ = 0;
     ++transfer_lba_;
-    if (transfer_sectors_ > 0) {
-        --transfer_sectors_;
-    }
+    --transfer_sectors_;
     return true;
 }
 
 bool CdRomDevice::has_chunk() const {
-    return data_pos_ < data_.size() || streaming_;
+    return data_pos_ < data_.size() || transfer_sectors_ > 0;
 }
 
 u8 CdRomDevice::read_data() {
@@ -342,7 +337,6 @@ void CdRomDevice::reset() {
     motor_on_ = false;
     ready_ = false;
     last_error_ = 0;
-    streaming_ = false;
     pending_reply_.clear();
     transfer_lba_ = 0;
     transfer_sectors_ = 0;

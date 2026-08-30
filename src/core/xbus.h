@@ -209,7 +209,6 @@ private:
     bool motor_on_ = false;
     bool ready_ = false;
     u8   last_error_ = 0;
-    bool streaming_ = false;
 
     // A drive delivers sectors at its rotational rate - 75 a second at single
     // speed, 150 at double - not instantly. Data-ready has to pulse per sector

@@ -48,6 +48,10 @@ constexpr u32 kVdlLineModulo[8] = {320, 384, 512, 640, 1024, 320, 320, 320};
 
 class Vdlp {
 public:
+    // The line the display list starts running on. Not the first visible one:
+    // it runs through the vertical blank as well.
+    static constexpr u32 kListStartLine = 5;
+
     explicit Vdlp(Bus& bus);
 
     void reset();
@@ -55,6 +59,18 @@ public:
     // Where the display list starts. Written by MADAM in the real machine; for
     // now the console sets it directly.
     void set_list_address(u32 address) { list_address_ = address; }
+
+    // Where the visible part of a field sits within it.
+    //
+    // The display list starts running well before the first visible line, and
+    // the framebuffer address advances on every line it runs for - blanking
+    // included. So the picture that reaches the screen begins some way into
+    // the buffer, and a machine that starts at the top of the buffer shows
+    // everything shifted down by however many lines it skipped.
+    void set_field_shape(u32 first_visible, u32 total_lines) {
+        first_visible_line_ = first_visible;
+        total_lines_ = total_lines;
+    }
     u32  list_address() const { return list_address_; }
 
     // Walk the display list and produce a whole field into `out`, which must
@@ -66,6 +82,15 @@ public:
     // get a picture on screen while the VDL control bits are still unconfirmed,
     // and it is what the tests use to check the pixel conversion in isolation.
     void render_linear(u32* out, int width, int height, u32 vram_offset);
+
+    // Which line of the framebuffer ends up at the top of the screen. The list
+    // runs for this many lines before the first visible one, advancing the
+    // address the whole time, so it is not zero.
+    u32 buffer_start_line() const {
+        return first_visible_line_ > kListStartLine
+                   ? first_visible_line_ - kListStartLine
+                   : 0u;
+    }
 
     // Number of VDL entries followed on the last field. Zero means the list was
     // empty or did not look like a list, which is the symptom to look for when
@@ -84,6 +109,12 @@ private:
     Bus& bus_;
     u32 list_address_ = 0;
     u32 modulo_index_ = 0;
+
+    // Defaults to no blanking at all - the first line the list runs for is the
+    // first line shown, and the field is however tall the output is. That is
+    // what a test wants. The console replaces it with the real region shape.
+    u32 first_visible_line_ = kListStartLine;
+    u32 total_lines_ = 0;
     u32 entries_walked_ = 0;
 };
 

@@ -59,7 +59,21 @@ void write_ccb(Bus& bus, u32 at, u32 flags, u32 source, u32 plut,
 u32 pre0_for(u32 format_code, u32 height) {
     return format_code | ((height - 1u) << 6);
 }
-u32 pre1_for(u32 width) { return width - 1u; }
+// A cel's rows are strided by a word count carried in PRE1, and the smallest
+// stride the field can express is two words. So a row is never shorter than
+// eight bytes however narrow the cel is - which is why the tests below space
+// their rows out rather than packing them.
+u32 row_words(u32 width, u32 bpp) {
+    const u32 needed = (width * bpp + 31u) / 32u;
+    return needed < 2u ? 2u : needed;
+}
+u32 row_bytes(u32 width, u32 bpp) { return row_words(width, bpp) * 4u; }
+
+u32 pre1_for(u32 width, u32 bpp = 16) {
+    const u32 offset = row_words(width, bpp) - 2u;
+    const u32 field = bpp < 8 ? (offset << 24) : (offset << 16);
+    return (width - 1u) | field;
+}
 
 constexpr u32 kFormatDirect16 = 6;
 constexpr u32 kFormatIndexed8 = 5;
@@ -126,8 +140,8 @@ TEST(a_direct_cel_lands_where_it_is_told) {
     // A 2x2 cel of four distinct colours.
     bus.write16(kSourceAt + 0, rgb555(31, 0, 0));
     bus.write16(kSourceAt + 2, rgb555(0, 31, 0));
-    bus.write16(kSourceAt + 4, rgb555(0, 0, 31));
-    bus.write16(kSourceAt + 6, rgb555(31, 31, 31));
+    bus.write16(kSourceAt + row_bytes(2, 16) + 0, rgb555(0, 0, 31));
+    bus.write16(kSourceAt + row_bytes(2, 16) + 2, rgb555(31, 31, 31));
 
     write_ccb(bus, kCcbAt, 0, kSourceAt, 0, fixed(10), fixed(20),
               fixed(1), 0, 0, fixed(1),
@@ -169,8 +183,11 @@ TEST(a_cel_is_clipped_rather_than_writing_out_of_bounds) {
     madam.set_clip(4, 4);
     madam.set_target(kVramBase, 4 * 2);
 
-    for (u32 i = 0; i < 16; ++i) {
-        bus.write16(kSourceAt + i * 2, rgb555(31, 31, 31));
+    for (u32 y = 0; y < 4; ++y) {
+        for (u32 x = 0; x < 4; ++x) {
+            bus.write16(kSourceAt + y * row_bytes(4, 16) + x * 2,
+                        rgb555(31, 31, 31));
+        }
     }
 
     // Placed so that most of it falls off the right and bottom edges.
@@ -235,7 +252,7 @@ TEST(a_vertical_delta_can_place_rows_diagonally) {
     madam.set_target(kVramBase, 320 * 2);
 
     bus.write16(kSourceAt + 0, rgb555(31, 0, 0));
-    bus.write16(kSourceAt + 2, rgb555(0, 0, 31));
+    bus.write16(kSourceAt + row_bytes(1, 16), rgb555(0, 0, 31));
 
     // One pixel per row, with each row stepping right as well as down. This is
     // a shear, and it is the thing a plain blitter cannot do.
@@ -256,8 +273,11 @@ TEST(the_horizontal_step_bends_as_rows_advance) {
     madam.set_clip(320, 240);
     madam.set_target(kVramBase, 320 * 2);
 
-    for (u32 i = 0; i < 4; ++i) {
-        bus.write16(kSourceAt + i * 2, rgb555(31, 31, 31));
+    for (u32 y = 0; y < 2; ++y) {
+        for (u32 x = 0; x < 2; ++x) {
+            bus.write16(kSourceAt + y * row_bytes(2, 16) + x * 2,
+                        rgb555(31, 31, 31));
+        }
     }
 
     write_ccb(bus, kCcbAt, 0, kSourceAt, 0, 0, 0,
@@ -387,22 +407,29 @@ TEST(the_largest_expressible_cel_is_still_bounded) {
     madam.set_clip(4, 4);
     madam.set_target(kVramBase, 4 * 2);
 
-    // Source pixels for the only part that can be visible. The cel claims to be
-    // 1024 wide, so its rows are 1024 pixels apart.
+    // Source pixels for the only part that can be visible. The rows are as
+    // far apart as the cel's own stride field claims, which with every bit set
+    // is a very long way indeed.
+    const u32 huge_row = (0x3ffu + 2u) * 4u;
     for (u32 y = 0; y < 4; ++y) {
         for (u32 x = 0; x < 4; ++x) {
-            bus.write16(kSourceAt + (y * 1024u + x) * 2u, rgb555(31, 31, 31));
+            bus.write16(kSourceAt + y * huge_row + x * 2u, rgb555(31, 31, 31));
         }
     }
 
     // Every bit set in both size fields.
     write_ccb(bus, kCcbAt, 0, kSourceAt, 0, 0, 0, fixed(1), 0, 0, fixed(1),
               pre0_for(kFormatDirect16, 1), pre1_for(1));
-    bus.write32(kCcbAt + 52, kFormatDirect16 | 0xffffffc0u);
+    // Every bit of the size fields, but no skip: the point here is the size
+    // handling, and a skip of fifteen would quietly move which source pixels
+    // are the visible ones.
+    bus.write32(kCcbAt + 52, kFormatDirect16 | 0x0000ffc0u);
     bus.write32(kCcbAt + 56, 0xffffffffu);
 
     const Ccb ccb = madam.read_ccb(kCcbAt);
-    CHECK(ccb.width <= 1024u);
+    // Eleven bits of width and ten of height, so these are the largest values
+    // the fields can hold rather than round numbers.
+    CHECK(ccb.width <= 2048u);
     CHECK(ccb.height <= 1024u);
 
     madam.render_cel_list(kCcbAt);
@@ -453,7 +480,11 @@ TEST(a_cel_drawn_into_vram_appears_in_the_frame) {
     Bus& bus = console.bus();
 
     bus.write16(kSourceAt + 0, rgb555(31, 0, 0));
-    write_ccb(bus, kCcbAt, 0, kSourceAt, 0, fixed(3), fixed(7),
+    // Drawn far enough down the buffer to land on the visible part of the
+    // screen: the display list runs through the vertical blank first, so the
+    // top of the screen is some way into the buffer.
+    const int cel_row = 7 + 16;
+    write_ccb(bus, kCcbAt, 0, kSourceAt, 0, fixed(3), fixed(cel_row),
               fixed(1), 0, 0, fixed(1),
               pre0_for(kFormatDirect16, 1), pre1_for(1));
     // The list head goes in NEXTCCB; the start port only says "go".
@@ -461,7 +492,7 @@ TEST(a_cel_drawn_into_vram_appears_in_the_frame) {
     bus.write32(kMadamBase + kMadamCelStart, 0);
 
     const u32 list = 0x8000u;
-    bus.write32(list + 0, kVdlCurrOverride | 239u);
+    bus.write32(list + 0, kVdlCurrOverride | 261u);
     bus.write32(list + 4, kVramBase);
     bus.write32(list + 8, kVramBase);
     bus.write32(list + 12, 0);
@@ -471,8 +502,13 @@ TEST(a_cel_drawn_into_vram_appears_in_the_frame) {
 
     console.run_frame();
 
+    // The screen starts some way down the buffer - the display list runs
+    // through the vertical blank first - so a cel drawn at row seven appears
+    // that many rows higher on screen.
     const Frame frame = console.framebuffer();
-    CHECK_EQ(frame.pixels[7 * frame.width + 3], 0xffff0000u);
+    const int row = cel_row - static_cast<int>(console.vdlp().buffer_start_line());
+    CHECK(row >= 0);
+    CHECK_EQ(frame.pixels[row * frame.width + 3], 0xffff0000u);
 }
 
 // ---------------------------------------------------------------------------
@@ -491,8 +527,11 @@ TEST(a_magnified_cel_is_solid_rather_than_a_grid_of_dots) {
     madam.set_clip(320, 240);
     madam.set_target(kVramBase, 320 * 2);
 
-    for (u32 i = 0; i < 4; ++i) {
-        bus.write16(kSourceAt + i * 2, rgb555(31, 31, 31));
+    for (u32 y = 0; y < 2; ++y) {
+        for (u32 x = 0; x < 2; ++x) {
+            bus.write16(kSourceAt + y * row_bytes(2, 16) + x * 2,
+                        rgb555(31, 31, 31));
+        }
     }
 
     // A 2x2 cel blown up four times in each direction: an 8x8 solid block.
@@ -516,8 +555,11 @@ TEST(a_one_to_one_cel_still_writes_exactly_one_pixel_each) {
     madam.set_clip(320, 240);
     madam.set_target(kVramBase, 320 * 2);
 
-    for (u32 i = 0; i < 16; ++i) {
-        bus.write16(kSourceAt + i * 2, rgb555(31, 31, 31));
+    for (u32 y = 0; y < 4; ++y) {
+        for (u32 x = 0; x < 4; ++x) {
+            bus.write16(kSourceAt + y * row_bytes(4, 16) + x * 2,
+                        rgb555(31, 31, 31));
+        }
     }
 
     write_ccb(bus, kCcbAt, 0, kSourceAt, 0, 0, 0, fixed(1), 0, 0, fixed(1),
@@ -535,8 +577,11 @@ TEST(a_rotated_magnified_cel_has_no_holes_along_its_diagonal) {
     madam.set_clip(320, 240);
     madam.set_target(kVramBase, 320 * 2);
 
-    for (u32 i = 0; i < 16; ++i) {
-        bus.write16(kSourceAt + i * 2, rgb555(31, 31, 31));
+    for (u32 y = 0; y < 4; ++y) {
+        for (u32 x = 0; x < 4; ++x) {
+            bus.write16(kSourceAt + y * row_bytes(4, 16) + x * 2,
+                        rgb555(31, 31, 31));
+        }
     }
 
     // Roughly 45 degrees, scaled by three.

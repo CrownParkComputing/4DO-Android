@@ -91,7 +91,7 @@ enum : u32 {
 constexpr u32 kPre0FormatMask  = 0x00000007u;
 constexpr u32 kPre0HeightShift = 6;
 constexpr u32 kPre0HeightMask  = 0x000003ffu;
-constexpr u32 kPre1WidthMask   = 0x000003ffu;
+constexpr u32 kPre1WidthMask   = 0x000007ffu;
 
 u32 cel_height_from_pre0(u32 pre0) {
     // The stored value is one less than the real height, as is usual for a
@@ -120,6 +120,8 @@ public:
         }
         return value;
     }
+
+    void skip(unsigned bits) { bit_ += bits; }
 
     // Where the reader has reached, as an address. Rounded down, which is what
     // the end-of-row test wants: a packet that starts past the end is past it.
@@ -1023,10 +1025,74 @@ void Madam::draw_packed_cel(const Ccb& ccb) {
     ++stats_.cels_drawn;
 }
 
+// An unpacked cel, read a row at a time.
+//
+// Its rows are NOT tightly packed. Each starts a fixed number of WORDS after
+// the last, and that stride is carried in PRE1 rather than derived from the
+// width - so a cel narrower than its stride has slack at the end of every row
+// that belongs to nobody. Deriving the stride from the width instead walks
+// diagonally into the picture, one row further out of step each line, which
+// looks like a palette fault rather than an addressing one.
+//
+// A row may also begin with pixels to be skipped, and those come off the
+// width as well as off the front.
+void Madam::draw_unpacked_cel(const Ccb& ccb) {
+    const unsigned bpp = bits_per_pixel(ccb.format);
+    if (bpp == 0 || ccb.height == 0 || ccb.height > kMaxCelDimension) {
+        return;
+    }
+
+    // The stride field is eight bits at low colour depths and ten above,
+    // because a deeper row needs a longer reach.
+    const u32 stride_words = bpp < 8 ? ((ccb.pre1 >> 24) & 0xffu)
+                                     : ((ccb.pre1 >> 16) & 0x3ffu);
+    const u32 row_bytes = (stride_words + 2u) << 2;
+
+    const u32 skip = (ccb.pre0 >> 24) & 0x0fu;
+    if (skip >= ccb.width) {
+        return;
+    }
+    const u32 width = ccb.width - skip;
+
+    s32 row_x = ccb.x;
+    s32 row_y = ccb.y;
+    s32 step_x = ccb.hdx;
+    s32 step_y = ccb.hdy;
+    const u32 vertical_span = footprint_steps(ccb.vdx, ccb.vdy);
+
+    for (u32 row = 0; row < ccb.height; ++row) {
+        BitReader reader(bus_, ccb.source_address + row * row_bytes);
+        reader.skip(bpp * skip);
+
+        s32 px = row_x;
+        s32 py = row_y;
+        const u32 horizontal_span = footprint_steps(step_x, step_y);
+
+        for (u32 column = 0; column < width; ++column) {
+            const u16 pixel = decode_pixel(ccb, reader.read(bpp));
+            plot_footprint(ccb, px, py, step_x, step_y, horizontal_span,
+                           vertical_span, pixel);
+            px += step_x;
+            py += step_y;
+        }
+
+        row_x += ccb.vdx;
+        row_y += ccb.vdy;
+        step_x += ccb.hddx;
+        step_y += ccb.hddy;
+    }
+
+    ++stats_.cels_drawn;
+}
+
 void Madam::draw_cel(const Ccb& ccb) {
     begin_cel(ccb);
     if ((ccb.flags & kCcbPacked) != 0) {
         draw_packed_cel(ccb);
+        return;
+    }
+    if (ccb.format != CelFormat::Unknown && ccb.width != 0) {
+        draw_unpacked_cel(ccb);
         return;
     }
     if (ccb.format == CelFormat::Unknown) {

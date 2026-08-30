@@ -196,6 +196,11 @@ void Console::set_region(Region region) {
     madam_.set_clip(static_cast<u32>(frame_width_),
                     static_cast<u32>(frame_height_));
     madam_.set_target(kVramBase, static_cast<u32>(frame_width_) * 2u);
+    // Where the visible window sits inside the field. The display list runs
+    // from well before it, and the framebuffer address advances the whole
+    // time, so the picture that reaches the screen starts some way into the
+    // buffer rather than at the top of it.
+    vdlp_.set_field_shape(21, region == Region::Pal ? 312u : 262u);
     framebuffer_.assign(static_cast<size_t>(frame_width_) * frame_height_, 0xff000000u);
 }
 

@@ -148,11 +148,14 @@ TEST(the_list_is_followed_to_a_second_entry) {
     const u32 first  = 0x1000u;
     const u32 second = 0x1100u;
 
-    bus.write32(first + 0, kVdlCurrOverride | 0);   // one line
+    // A persist count of one covers exactly one line. Zero covers NO lines -
+    // the next entry is taken on the same line - which is a real thing lists
+    // do, but not what this test is about.
+    bus.write32(first + 0, kVdlCurrOverride | 1u);
     bus.write32(first + 4, kVramBase);
     bus.write32(first + 12, second);
 
-    bus.write32(second + 0, kVdlCurrOverride | 0);  // one line, further into VRAM
+    bus.write32(second + 0, kVdlCurrOverride | 1u);
     bus.write32(second + 4, kVramBase + 0x100);
     bus.write32(second + 12, 0);
 
@@ -225,18 +228,23 @@ TEST(a_pattern_written_through_the_bus_comes_back_out_of_the_frame) {
     const Frame shape = console.framebuffer();
     Bus& bus = console.bus();
 
-    for (int y = 0; y < shape.height; ++y) {
+    // Fill the whole FIELD, not just the visible part: the screen starts some
+    // way down the buffer, so a pattern that stops at the visible height runs
+    // out before the bottom of the screen does.
+    for (int y = 0; y < 262; ++y) {
         for (int x = 0; x < shape.width; ++x) {
             const unsigned r = static_cast<unsigned>(x * 31 / (shape.width - 1));
-            const unsigned g = static_cast<unsigned>(y * 31 / (shape.height - 1));
+            const unsigned g = static_cast<unsigned>(y * 31 / 261);
             const unsigned b = 31u - r;
             bus.write16(kVramBase + framebuffer_offset(x, y, shape.width),
                         static_cast<u16>((r << 10) | (g << 5) | b));
         }
     }
 
+    // One entry for the whole FIELD, not just the visible part of it - the
+    // list runs through the vertical blank too.
     const u32 list = 0x1000u;
-    bus.write32(list + 0, kVdlCurrOverride | static_cast<u32>(shape.height - 1));
+    bus.write32(list + 0, kVdlCurrOverride | 261u);
     bus.write32(list + 4, kVramBase);
     bus.write32(list + 8, kVramBase);
     bus.write32(list + 12, 0);
@@ -250,12 +258,14 @@ TEST(a_pattern_written_through_the_bus_comes_back_out_of_the_frame) {
     CHECK_EQ(frame.width, 320);
     CHECK_EQ(frame.height, 240);
 
-    // Top-left is red-free and full blue; top-right is full red and no blue.
-    CHECK_EQ(frame.pixels[0], 0xff0000ffu);
-    CHECK_EQ(frame.pixels[frame.width - 1], 0xffff0000u);
+    // Red and blue depend only on x, so the ends of the top row are exact
+    // whichever line of the buffer the visible window happens to start on.
+    CHECK_EQ(frame.pixels[0] & 0x00ff00ffu, 0x000000ffu);
+    CHECK_EQ(frame.pixels[frame.width - 1] & 0x00ff00ffu, 0x00ff0000u);
 
     // Green rises down the screen, so the bottom row must be brighter in green
-    // than the top. This is the assertion that catches a flipped image.
+    // than the top. This is the assertion that catches a flipped image, and it
+    // holds wherever in the buffer the visible window starts.
     const u32 top_green = (frame.pixels[0] >> 8) & 0xffu;
     const u32 bottom_green =
         (frame.pixels[static_cast<size_t>(frame.height - 1) * frame.width] >> 8) & 0xffu;
@@ -324,16 +334,22 @@ TEST(madam_and_the_display_agree_about_where_a_pixel_goes) {
     console.reset();
     Bus& bus = console.bus();
 
+    // The screen does not start at the top of the buffer: the list runs
+    // through the vertical blank first, advancing the address as it goes.
+    const u32 top = console.vdlp().buffer_start_line();
+
     const Frame shape = console.framebuffer();
     for (int y = 0; y < 4; ++y) {
         for (int x = 0; x < 4; ++x) {
-            bus.write16(kVramBase + framebuffer_offset(x, y, shape.width),
+            bus.write16(kVramBase +
+                            framebuffer_offset(x, static_cast<int>(top) + y,
+                                               shape.width),
                         rgb555(31, 31, 31));
         }
     }
 
     const u32 list = 0x2000u;
-    bus.write32(list + 0, kVdlCurrOverride | static_cast<u32>(shape.height - 1));
+    bus.write32(list + 0, kVdlCurrOverride | 261u);
     bus.write32(list + 4, kVramBase);
     bus.write32(list + 12, 0);
     bus.write32(kMadamBase + kMadamVdlAddress, list);

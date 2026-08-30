@@ -29,6 +29,12 @@ Console::Console() : cpu_(bus_), clio_(cpu_), vdlp_(bus_), madam_(bus_), sport_(
     bus_.attach_clio(&clio_);
     bus_.attach_madam(&madam_);
     bus_.attach_sport(&sport_);
+    // The expansion transfer runs inside the store that triggers it.
+    clio_.set_xbus_dma_handler(
+        [](void* context) {
+            static_cast<Console*>(context)->service_expansion_dma();
+        },
+        this);
     set_region(Region::Ntsc);
     reset();
 }
@@ -252,7 +258,6 @@ u32 Console::run_frame() {
         const u32 ran = cpu_.run(slice);
         spent += ran;
         clio_.tick(ran);
-        service_expansion_dma();
         apply_write_watch();
 
         // A field boundary ends the frame even if the cycle budget has not run

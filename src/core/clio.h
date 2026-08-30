@@ -29,11 +29,19 @@ class Arm60;
 
 // Sources on the first interrupt bank. Only the ones the machine currently
 // generates are named; the rest of the bits exist but are never raised yet.
-// Reset causes reported through CSTATBITS.
+// Reset causes reported through CSTATBITS. The boot ROM reads this register
+// eight instructions in, masks it with 0x43 and dispatches on the result, so it
+// is the very first thing the machine is asked and it decides which of two
+// entirely different boot paths runs.
+//
+// A cold power-on is 0x40. Reporting bit 0 instead sends the ROM down the
+// soft-reset path, which boots to a picture and looks fine - and then never
+// brings up the CD driver, because on a soft reset it is supposed to still be
+// there from last time.
 enum : u32 {
-    kResetPowerOn = 1u << 0,   // cold start
-    kResetSoftware = 1u << 1,  // TODO(clio): confirm
-    kResetExternal = 1u << 6,  // TODO(clio): confirm
+    kResetSoftware  = 1u << 0,
+    kResetWatchdog  = 1u << 1,
+    kResetPowerOn   = 1u << 6,   // cold start
 };
 
 // Interrupt sources in bank 0, from the community 3DOessence register map -
@@ -149,6 +157,7 @@ enum : u32 {
 
     // Timer bank: sixteen timers, each a counter followed by its reload value.
     kClioTimerBase    = 0x0100,
+    kClioTimerDelay   = 0x0220,   // TIMERCTL: divider off the 21 MHz source
     kClioTimerCount   = 16,
     kClioTimerStride  = 8,
 
@@ -251,14 +260,17 @@ enum : u32 {
     kXbusStatusReady     = 0x0010,
     kXbusChunkReady      = 0x0020,
     kXbusWriteValid      = 0x0040,
-    kXbusMediaAccess     = 0x0080,
+    kXbusMediaAccess     = 0x0040,
 
     // Written to SELECTION as a device-count probe. Answering it wrongly makes
     // CLIO report "too many devices on the bus".
-    kXbusSelectProbe     = 0x008f,
+    // Address 0x0F is the bus itself rather than a device on it, and zero is
+    // where the built-in drive sits.
+    kXbusCdRomAddress    = 0x0000,
+    kXbusSelectNone      = 0x000f,
     // Selecting anything other than the device-count probe leaves the bus-level
     // poll register flagged. From MAME's CLIO, which sets exactly this.
-    kXbusPollUnfitted    = 0x0090,
+    kXbusPollUnfitted    = 0x0030,
 
     kXbusReady        = 0x0080,
 
@@ -317,7 +329,9 @@ public:
     void tick(u32 cycles);
 
     u32  read(u32 offset);
+    u32  read_impl(u32 offset);
     void write(u32 offset, u32 value);
+    void write_impl(u32 offset, u32 value);
 
     // --- interrupt sources -------------------------------------------------
     void raise(u32 sources);          // bank 0
@@ -350,6 +364,7 @@ private:
     void note_read(u32 offset);
     void update_cpu_interrupt_line();
     void tick_timers(u32 cycles);
+    void step_timers();
     u32  timer_config_at(u32 timer) const;
 
     Arm60& cpu_;
@@ -369,6 +384,12 @@ private:
     u32 irq1_pending_ = 0;
     u32 irq1_enabled_ = 0;
 
+    // The timer source, and the divider software programs through TIMERCTL.
+    static constexpr u32 kTimerSourceHz = 21000000;
+    static constexpr u32 kTimerCpuHz    = 12500000;
+    static constexpr u32 kTimerDelayReset = 64;
+    u32 timer_delay_ = kTimerDelayReset;
+    u32 timer_accumulator_ = 0;
     u32 timer_counter_[kClioTimerCount] = {};
     u32 timer_reload_[kClioTimerCount]  = {};
 
@@ -383,14 +404,29 @@ private:
     u32 xbus_sel_ = 0;
     u32 xbus_dma_enable_ = 0;
     u32 xbus_poll_ = 0;
-    u32 xbus_device_poll_ = 0;
+    // The control nibble comes up with every bit SET, not clear. This is not a
+    // detail: the driver reads the poll register before it writes one, and a
+    // device whose control nibble reads back zero is taken for an empty slot -
+    // so a zero here makes the machine scan all sixteen addresses and find
+    // nothing, with the drive sitting right there answering commands.
+    static constexpr u32 kXbusPollControlReset = 0x0fu;
+    u32 xbus_device_poll_ = kXbusPollControlReset;
+    u32 xbus_sel_modifier_ = 0;
     bool media_changed_ = false;
     bool xbus_dma_requested_ = false;
+    void (*dma_handler_)(void*) = nullptr;
+    void* dma_context_ = nullptr;
     u32 xbus_control_ = kXbusReady;
     u32 xbus_type0_ = 0;
     u32 xbus_xfer_count_ = 0;
+    // The boot ROM reads both DIPIR registers and tests them together: if the
+    // pair is all-zero it decides the machine has no disc-change hardware and
+    // takes a path that never brings the CD driver up at all. The second one
+    // reads a fixed 0x4000, and that constant is the difference between a
+    // machine that mounts a disc and one that boots to a logo and stops.
+    static constexpr u32 kDipir2Value = 0x4000;
     u32 dipir1_ = 0;
-    u32 dipir2_ = 0;
+    u32 dipir2_ = kDipir2Value;
 
     u32 vint0_line_ = 0;
     u32 vint1_line_ = 0;
@@ -445,6 +481,14 @@ public:
     // transfer has been served.
     bool xbus_dma_requested() const { return xbus_dma_requested_; }
     void clear_xbus_dma_request() { xbus_dma_requested_ = false; }
+
+    // The expansion transfer runs INSIDE the store that triggers it, before the
+    // CPU executes another instruction - not at the next convenient boundary.
+    // The host writes the trigger and then looks at the result straight away.
+    void set_xbus_dma_handler(void (*handler)(void*), void* context) {
+        dma_handler_ = handler;
+        dma_context_ = context;
+    }
     void set_xbus_ready(bool ready) {
         if (ready) xbus_control_ |= kXbusReady; else xbus_control_ &= ~kXbusReady;
     }

@@ -81,6 +81,8 @@ void Clio::reset() {
         timer_reload_[i] = 0;
     }
     timer_config_ = 0;
+    timer_delay_ = kTimerDelayReset;
+    timer_accumulator_ = 0;
 
     vint0_line_ = 0;
     vint1_line_ = 0;
@@ -100,6 +102,8 @@ void Clio::reset() {
     // fixed set of causes and hangs if it recognises none, so zero here means
     // the machine never boots.
     cstat_bits_ = kResetPowerOn;
+    dipir1_ = 0;
+    dipir2_ = kDipir2Value;
 
     std::fill(dsp_window_.begin(), dsp_window_.end(), 0u);
     dsp_writes_ = 0;
@@ -209,43 +213,44 @@ void Clio::tick(u32 cycles) {
     }
 }
 
-void Clio::tick_timers(u32 cycles) {
-    if (timer_config_ == 0) {
-        return;
-    }
-
+// One timer tick. Every enabled timer moves by exactly one count, and the
+// carry chain runs from timer 0 upwards: a cascaded timer moves only when the
+// one below it wrapped on this same tick, which is what lets adjacent timers
+// pair into a 32-bit counter.
+//
+// The carry starts SET, so a cascaded timer 0 - which has nothing below it -
+// still counts. That is what the hardware does and software relies on it.
+void Clio::step_timers() {
     u32 raised = 0;
-    bool carry = false;   // did the previous (lower) timer underflow this tick?
+    bool carry = true;
 
     for (u32 i = 0; i < kClioTimerCount; ++i) {
         const u32 config = timer_config_at(i);
-        const bool cascade = (config & kTimerCascade) != 0;
-        const bool underflowed_below = carry;
-        carry = false;
-
         if ((config & kTimerDecrement) == 0) {
+            carry = false;
             continue;
         }
 
-        // A cascaded timer is the high half of a wider one: it only moves when
-        // the timer below it wraps, which is what lets pairs form 32-bit
-        // counters.
-        u32 steps = cascade ? (underflowed_below ? 1u : 0u) : cycles;
-        if (steps == 0) {
+        const bool cascade = (config & kTimerCascade) != 0;
+        if (cascade && !carry) {
+            carry = false;
             continue;
         }
 
-        if (timer_counter_[i] > steps) {
-            timer_counter_[i] -= steps;
+        // Underflow is the wrap PAST zero, not the arrival at it. A counter
+        // loaded with one still has a tick left in it; treating zero as spent
+        // makes every delay one count short and, on a cascaded pair, drops a
+        // whole carry.
+        if (timer_counter_[i]-- != 0) {
+            carry = false;
             continue;
         }
 
-        // Underflowed. Reload if configured to, otherwise the timer is spent
-        // and stops - firing a spent timer on every subsequent tick costs
-        // hundreds of interrupts a frame and starves everything else.
         if ((config & kTimerReload) != 0) {
             timer_counter_[i] = timer_reload_[i];
         } else {
+            // A spent timer stops. Leaving it enabled costs an interrupt on
+            // every subsequent tick and starves everything else.
             timer_counter_[i] = 0;
             timer_config_ &= ~(u64{kTimerDecrement} << (i * kClioTimerConfigBits));
         }
@@ -258,6 +263,29 @@ void Clio::tick_timers(u32 cycles) {
     }
 }
 
+void Clio::tick_timers(u32 cycles) {
+    // Timers do not run at the CPU clock. They run off a fixed 21 MHz source
+    // divided by the programmable delay in TIMERCTL, so at the stock divider a
+    // timer moves roughly once every thirty-eight CPU cycles.
+    //
+    // Getting this wrong is not a small inaccuracy. The OS calibrates its
+    // delays against these counters, so a timer running at the CPU clock makes
+    // every timed wait expire about forty times too early - drive spin-up,
+    // seek settling, the lot - and the machine gives up on hardware that was
+    // about to answer.
+    const u32 divider = timer_delay_ != 0 ? timer_delay_ : 1;
+    const u64 per_tick = (static_cast<u64>(kTimerCpuHz) * divider) / kTimerSourceHz;
+    const u32 cycles_per_tick = per_tick != 0 ? static_cast<u32>(per_tick) : 1;
+
+    timer_accumulator_ += cycles;
+    while (timer_accumulator_ >= cycles_per_tick) {
+        timer_accumulator_ -= cycles_per_tick;
+        if (timer_config_ != 0) {
+            step_timers();
+        }
+    }
+}
+
 u32 Clio::timer_config_at(u32 timer) const {
     return static_cast<u32>(
         (timer_config_ >> (timer * kClioTimerConfigBits)) & 0xfu);
@@ -266,7 +294,32 @@ u32 Clio::timer_config_at(u32 timer) const {
 // ---------------------------------------------------------------------------
 // Register interface
 // ---------------------------------------------------------------------------
+namespace {
+// A register trace, off unless CLIOLOG names a file. Comparing this sequence
+// against a known-good machine's is the only practical way to find where a
+// driver stopped believing us.
+std::FILE* const g_clio_log = [] {
+    const char* path = std::getenv("CLIOLOG");
+    return path != nullptr ? std::fopen(path, "w") : nullptr;
+}();
+long g_clio_log_count = 0;
+void log_access(char kind, u32 offset, u32 value, u32 pc) {
+    std::FILE* file = g_clio_log;
+    if (file == nullptr || g_clio_log_count >= 200000) {
+        return;
+    }
+    std::fprintf(file, "%c %03X %08X %08X\n", kind, offset & 0xfff, value, pc);
+    ++g_clio_log_count;
+}
+}  // namespace
+
 u32 Clio::read(u32 offset) {
+    const u32 result = read_impl(offset);
+    log_access('R', offset, result, cpu_.pc());
+    return result;
+}
+
+u32 Clio::read_impl(u32 offset) {
     offset &= (kClioWindowSize - 1);
     note_read(offset);
 
@@ -276,17 +329,25 @@ u32 Clio::read(u32 offset) {
             case kClioXbusSelect:
                 return xbus_sel_;
             case kClioXbusPoll: {
-                // Device zero is the built-in drive and answers with its own
-                // register; anything else reads the bus-level one.
-                if (xbus_sel_ != 0) {
-                    return xbus_poll_;
+                // An address with nothing on it does not read back as zero -
+                // it reads 0x30, both state bits set. Reading zero would mean
+                // "a device that never has anything ready", which software
+                // cannot tell apart from a device that is merely slow.
+                u32 poll = kXbusPollUnfitted;
+                if (xbus_sel_ == kXbusSelectNone) {
+                    poll = xbus_poll_;
+                } else if (xbus_sel_ == kXbusCdRomAddress) {
+                    poll = xbus_poll_for_device();
+                    media_changed_ = false;   // media-access is read-clear
                 }
-                const u32 poll = xbus_poll_for_device();
-                media_changed_ = false;   // media-access is read-clear
+                // Bit 7 of the selection asks for the control nibble alone.
+                if ((xbus_sel_modifier_ & 0x80u) != 0) {
+                    poll &= 0x0fu;
+                }
                 return poll;
             }
             case kClioXbusCommand: {            // RD_STAT
-                if (xbus_sel_ != 0) {
+                if (xbus_sel_ != kXbusCdRomAddress) {
                     return 0;
                 }
                 const u8 byte = cdrom_.read_status();
@@ -296,7 +357,7 @@ u32 Clio::read(u32 offset) {
                 return byte;
             }
             case kClioXbusData:                 // RD_DATA
-                return xbus_sel_ == 0 ? cdrom_.read_data() : 0;
+                return xbus_sel_ == kXbusCdRomAddress ? cdrom_.read_data() : 0;
             default:
                 break;
         }
@@ -318,6 +379,7 @@ u32 Clio::read(u32 offset) {
         case kClioVint0:       return vint0_line_;
         case kClioVint1:       return vint1_line_;
         case kClioCstatBits:   return cstat_bits_;
+        case kClioTimerDelay:  return timer_delay_;
         case kClioWatchdog:    return watchdog_;
         case kClioVCount:
             return (scanline_ & kClioLineMask) |
@@ -395,38 +457,46 @@ void Clio::note_write(u32 offset, u32 value) {
 }
 
 void Clio::write(u32 offset, u32 value) {
+    log_access('W', offset, value, cpu_.pc());
+    write_impl(offset, value);
+}
+
+void Clio::write_impl(u32 offset, u32 value) {
     offset &= (kClioWindowSize - 1);
     note_write(offset, value);
 
     if (offset >= kClioXbusSelect && offset < kClioXbusData + kClioXbusWindow) {
         switch (offset & ~(kClioXbusWindow - 1)) {
             case kClioXbusSelect:
-                // SELECTION names the device by VALUE. 0x8F is a probe rather
-                // than a device: answering it wrongly leaves CLIO reporting
-                // "too many devices on the bus" and the enumeration fails.
-                // SELECTION names the device by value. 0x8F is the device-count
-                // probe rather than a device: answering it as an ordinary
-                // selection leaves CLIO reporting "too many devices".
-                xbus_sel_ = value & 0xffu;
-                if (xbus_sel_ == kXbusSelectProbe) {
-                    xbus_poll_ &= 0x0fu;
-                } else {
-                    xbus_poll_ = (xbus_poll_ & 0x0fu) | kXbusPollUnfitted;
-                }
+                // SELECTION is two nibbles doing two different jobs. The LOW
+                // nibble names the device - only sixteen are addressable, so
+                // the high bits are not part of the address at all. The HIGH
+                // nibble carries modifiers, of which only bit 7 is used: it
+                // asks for the control nibble alone, which is how software
+                // probes a slot without disturbing the state bits.
+                //
+                // Masking the whole byte instead of the low nibble makes every
+                // modified selection look like a different device, and the
+                // drive - which lives at address zero - stops answering the
+                // moment software probes it.
+                xbus_sel_ = value & 0x0fu;
+                xbus_sel_modifier_ = value & 0xf0u;
                 return;
 
             case kClioXbusPoll:
-                // Only the control nibble is writable.
-                if (xbus_sel_ == 0) {
-                    xbus_device_poll_ = (value & 0x0fu) | (xbus_device_poll_ & 0xf0u);
+                // Only the control nibble is writable, and it is written to
+                // whichever device is selected. Address 0x0F is not a device
+                // but the bus's own register.
+                if (xbus_sel_ == kXbusSelectNone) {
+                    xbus_poll_ = (xbus_poll_ & 0xf0u) | (value & 0x0fu);
+                } else if (xbus_sel_ == kXbusCdRomAddress) {
+                    xbus_device_poll_ = (xbus_device_poll_ & 0xf0u) | (value & 0x0fu);
                     raise_xbus_interrupt_if_pending();
-                } else {
-                    xbus_poll_ = value & 0xffu;
                 }
                 return;
 
             case kClioXbusCommand: {
-                if (xbus_sel_ != 0) {
+                if (xbus_sel_ != kXbusCdRomAddress) {
                     return;
                 }
                 const bool was_empty = cdrom_.status_empty();
@@ -469,6 +539,7 @@ void Clio::write(u32 offset, u32 value) {
         // The ROM clears this once it has read the reset cause, so the cause is
         // reported once rather than latching forever.
         case kClioCstatBits: cstat_bits_ = value; break;
+        case kClioTimerDelay: timer_delay_ = value & 0x3ffu; break;
 
         // The interrupt registers come in set/clear pairs rather than being
         // read-modify-written. A handler acknowledges by writing the bits it
@@ -520,6 +591,9 @@ void Clio::write(u32 offset, u32 value) {
             if ((xbus_dma_enable_ & kClioDmaXbusBit) != 0 &&
                 (xbus_control_ & kXbusCtlDmaEnable) != 0) {
                 xbus_dma_requested_ = true;
+                if (dma_handler_ != nullptr) {
+                    dma_handler_(dma_context_);
+                }
             }
             return;
 

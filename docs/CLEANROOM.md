@@ -40,6 +40,29 @@ worth anything if its failures are visible.
 The practical guard: if a fact came out of a debugger or a log, it is fine. If
 it came out of an editor, it is not.
 
+## Current position: the reference core is the project owner's own
+
+As of this work, the project owner has directed that the C++ core in their own
+`4DO-Android` repository (`app/cpp/native_core/`) be used as the reference for
+finishing this emulator, and has taken the licensing decision on themselves.
+
+That is a deliberate change of method and it is recorded here rather than left
+implicit. What it means in practice:
+
+- Facts in `src/core/` may now derive from reading that core. Several already
+  do, and they are the ones that made the machine work: the reset-cause value
+  in CSTATBITS, the DIPIR register pair, the expansion-bus poll register layout
+  and selection model, and the timer clock rate and underflow semantics.
+- That core is itself descended from Opera, and therefore from FreeDO. The
+  clause quoted above still attaches to it. Nothing here changes that; the
+  decision about it sits with the project owner.
+- Anything below this section describes the method used before that direction,
+  which is why the earlier breach is still recorded: the history is the point.
+
+If the project later needs a clean derivation again, the honest route is to
+re-derive these specific facts from permitted sources, not to delete this
+section.
+
 ## Rules for contributors
 
 1. **Do not read FreeDO, 4DO, Opera or `opera-libretro` source while working on

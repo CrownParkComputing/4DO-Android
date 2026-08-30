@@ -1,3 +1,5 @@
+#include <cstdio>
+#include <cstdlib>
 #include "arm60.h"
 
 #include <cstring>
@@ -415,8 +417,26 @@ u32 Arm60::execute(const Decoded& d) {
     }
 }
 
+namespace {
+// A raw stream of executed addresses, off unless PCTRACE names a file. Diffing
+// this against a machine known to work is how you find where two otherwise
+// identical builds stopped agreeing, and it is worth keeping around: it is what
+// located the reset-cause and timer-rate bugs.
+//
+// Resolved once at static-init rather than through a function-local static, so
+// the cost in the instruction loop is one predictable branch on a null pointer
+// rather than a guard-variable check per instruction.
+std::FILE* const g_pc_trace = [] {
+    const char* path = std::getenv("PCTRACE");
+    return path != nullptr ? std::fopen(path, "wb") : nullptr;
+}();
+}  // namespace
+
 u32 Arm60::step() {
     const u32 address = regs_[15];
+    if (g_pc_trace != nullptr) {
+        std::fwrite(&address, 4, 1, g_pc_trace);
+    }
     if (exec_map_ != nullptr && address < 0x00100000u) {
         const u32 word = address >> 2;
         exec_map_[word >> 3] |= static_cast<u8>(1u << (word & 7u));

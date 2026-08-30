@@ -196,13 +196,6 @@ private:
     std::deque<u8> pending_;   // bytes of the command still being assembled
     std::vector<u8> pending_reply_;  // reply waiting for the drive to answer
 
-    // A command has been acknowledged but has not yet reported completion.
-    // Work in flight, and how long until the drive reports it. The exact figure
-    // is not critical - it only has to be long enough that the driver finishes
-    // reading the acknowledgement first.
-    static constexpr u32 kCompletionDelay = 20000;
-    u32  completion_delay_ = 0;
-    bool completion_pending_ = false;
     bool interrupt_request_  = false;
     bool disc_present_ = false;
     bool media_changed_ = false;

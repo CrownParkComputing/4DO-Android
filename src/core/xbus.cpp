@@ -42,24 +42,6 @@ void CdRomDevice::tick(u32 cycles) {
         }
     }
 
-    if (!completion_pending_) {
-        return;
-    }
-    if (completion_delay_ > cycles) {
-        completion_delay_ -= cycles;
-        return;
-    }
-    completion_delay_ = 0;
-    completion_pending_ = false;
-
-    // The reply becomes readable now, not when the command was written. The
-    // drive does not answer instantly, and the delay is load bearing: the
-    // driver reads the bytes it expects and then checks the FIFO is EMPTY,
-    // treating anything still waiting as an error. Publishing the reply and a
-    // separate completion byte therefore fails every command.
-    status_.assign(pending_reply_.begin(), pending_reply_.end());
-    pending_reply_.clear();
-    interrupt_request_ = true;
 }
 
 // Build the reply for one command.
@@ -330,8 +312,6 @@ u8 CdRomDevice::drive_status() const {
 void CdRomDevice::reset() {
     status_.clear();
     pending_.clear();
-    completion_pending_ = false;
-    completion_delay_ = 0;
     media_changed_ = false;
     interrupt_request_ = false;
     motor_on_ = false;
@@ -376,10 +356,14 @@ void CdRomDevice::write_command(u8 byte) {
         fprintf(stderr, "\n");
     }
 
+    // The reply is readable the moment the last command byte lands. The driver
+    // writes seven bytes and then polls for status-ready, and it does not tick
+    // the machine on while it polls - it spins. Any delay here is a hang, not
+    // a slower drive.
     build_reply(last_command_);
-
-    completion_pending_ = true;
-    completion_delay_ = kCompletionDelay;
+    status_.assign(pending_reply_.begin(), pending_reply_.end());
+    pending_reply_.clear();
+    interrupt_request_ = true;
 }
 
 u8 CdRomDevice::read_status() {

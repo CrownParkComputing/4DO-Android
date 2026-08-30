@@ -223,6 +223,13 @@ TEST(the_region_sets_the_field_length) {
 // not one bit - so the config ports cover eight timers each. Only odd-numbered
 // timers can interrupt, because timers chain in pairs and the high half of a
 // pair is what signals.
+//
+// Timers run off a 21 MHz source divided by TIMERCTL, not off the CPU clock,
+// so a count is worth many CPU cycles. These tests deal in counts and convert.
+namespace {
+// CPU cycles that advance a timer by n counts at the reset divider.
+u32 counts(u32 n) { return n * ((12500000u * 64u) / 21000000u); }
+}  // namespace
 
 TEST(a_timer_reloads_and_raises_an_interrupt_when_it_expires) {
     Chip c;
@@ -232,11 +239,13 @@ TEST(a_timer_reloads_and_raises_an_interrupt_when_it_expires) {
     c.clio.write(kClioTimerConfigSet0,
                  timer_config(3, kTimerDecrement | kTimerReload));
 
-    c.clio.tick(50);
+    c.clio.tick(counts(50));
     CHECK_EQ(c.clio.read(kTimer3Counter), 50u);
     CHECK_EQ(c.clio.read(kClioIrq0Pending) & kTimer3Irq, 0u);
 
-    c.clio.tick(60);  // past zero
+    // A counter of fifty has fifty-one counts left in it: the wrap is the step
+    // PAST zero, not the arrival at it.
+    c.clio.tick(counts(51));
     CHECK_EQ(c.clio.read(kClioIrq0Pending) & kTimer3Irq, kTimer3Irq);
     CHECK_EQ(c.clio.read(kTimer3Counter), 500u);
 }
@@ -250,11 +259,11 @@ TEST(a_timer_with_no_reload_bit_fires_once_and_then_stops) {
     c.clio.write(kClioIrq0Enable, kTimer3Irq);
     c.clio.write(kClioTimerConfigSet0, timer_config(3, kTimerDecrement));
 
-    c.clio.tick(20);
+    c.clio.tick(counts(20));
     CHECK_EQ(c.clio.read(kClioIrq0Pending) & kTimer3Irq, kTimer3Irq);
 
     c.clio.write(kClioIrq0Clear, kTimer3Irq);
-    c.clio.tick(1000);
+    c.clio.tick(counts(1000));
     CHECK_EQ(c.clio.read(kClioIrq0Pending) & kTimer3Irq, 0u);
 }
 
@@ -264,7 +273,7 @@ TEST(an_unconfigured_timer_does_not_count) {
     c.clio.write(kClioTimerConfigSet0, timer_config(3, kTimerDecrement));
     c.clio.write(kClioTimerConfigClear0, timer_config(3, kTimerDecrement));
 
-    c.clio.tick(500);
+    c.clio.tick(counts(500));
     CHECK_EQ(c.clio.read(kTimer3Counter), 100u);
 }
 
@@ -276,7 +285,7 @@ TEST(timers_are_independent) {
                  timer_config(0, kTimerDecrement) |
                  timer_config(3, kTimerDecrement));
 
-    c.clio.tick(50);
+    c.clio.tick(counts(50));
     CHECK_EQ(c.clio.read(kClioTimerBase), 50u);
     CHECK_EQ(c.clio.read(kTimer3Counter), 850u);
 }
@@ -302,11 +311,11 @@ TEST(a_cascaded_timer_only_moves_when_the_one_below_it_wraps) {
                  timer_config(3, kTimerDecrement | kTimerCascade));
 
     // Timer 2 has not wrapped yet, so timer 3 must not have moved.
-    c.clio.tick(3);
+    c.clio.tick(counts(5));
     CHECK_EQ(c.clio.read(kTimer3Counter), 4u);
 
-    // Now push timer 2 past zero; timer 3 takes exactly one step.
-    c.clio.tick(3);
+    // The sixth count takes timer 2 past zero; timer 3 takes exactly one step.
+    c.clio.tick(counts(1));
     CHECK_EQ(c.clio.read(kTimer3Counter), 3u);
 }
 
@@ -362,9 +371,9 @@ TEST(a_multi_byte_cd_command_completes_once_not_once_per_byte) {
     }
     c.clio.write(kClioXbusCommand, 0x00u);          // the seventh byte
     CHECK_EQ(c.clio.cdrom().commands_received(), 1u);
-    // The drive answers after a delay, not instantly.
-    CHECK(c.clio.cdrom().status_empty());
-    c.clio.tick(100000);
+    // The reply is there the moment the seventh byte lands. The driver spins
+    // on the poll register without running the machine on, so a drive that
+    // answers "later" never answers at all.
     CHECK(!c.clio.cdrom().status_empty());
     CHECK_EQ(c.clio.cdrom().last_command(), 0x83u);
 }
@@ -394,10 +403,6 @@ TEST(inserting_a_disc_is_visible_to_the_drive) {
     for (int i = 0; i < 7; ++i) {
         c.clio.write(kClioXbusCommand, i == 0 ? kCmdVersion : 0x00u);
     }
-    // The drive does not answer instantly, and that delay is load bearing: the
-    // driver reads the bytes it expects and then requires the FIFO to be empty.
-    CHECK(c.clio.cdrom().status_empty());
-    c.clio.tick(100000);
     CHECK(!c.clio.cdrom().status_empty());
 
     // A version reply opens by echoing the command and ends with drive status.
@@ -451,16 +456,38 @@ TEST(selection_names_a_device_by_value_not_by_address) {
     CHECK_EQ(c.clio.cdrom().commands_received(), before);
 }
 
-TEST(the_device_count_probe_must_be_answered_cleanly) {
-    // 0x8F written to SELECTION is a probe rather than a device. Treating it as
-    // an ordinary selection leaves CLIO reporting "too many devices on the bus"
-    // and enumeration fails before the drive is ever reached.
+TEST(an_empty_address_reads_back_as_unfitted) {
+    // Nothing at address seven, so both state bits read set. Zero would be
+    // indistinguishable from a device that simply has nothing ready yet.
     Chip c;
     c.clio.write(kClioXbusSelect, 7);
-    CHECK_EQ(c.clio.read(kClioXbusPoll) & kXbusPollUnfitted, kXbusPollUnfitted);
+    CHECK_EQ(c.clio.read(kClioXbusPoll), kXbusPollUnfitted);
+}
 
-    c.clio.write(kClioXbusSelect, kXbusSelectProbe);
-    CHECK_EQ(c.clio.read(kClioXbusPoll) & kXbusPollUnfitted, 0u);
+TEST(selection_addresses_a_device_with_the_low_nibble_only) {
+    // Only sixteen devices are addressable, so the high nibble cannot be part
+    // of the address. Masking the whole byte makes every modified selection
+    // look like a different device and the drive stops answering.
+    Chip c;
+    c.clio.write(kClioXbusSelect, 0x30u | kXbusCdRomAddress);
+    for (int i = 0; i < 7; ++i) {
+        c.clio.write(kClioXbusCommand, i == 0 ? 0x83u : 0x00u);
+    }
+    CHECK_EQ(c.clio.cdrom().commands_received(), 1u);
+}
+
+TEST(selection_bit_seven_asks_for_the_control_nibble_alone) {
+    // This is how software probes a slot without disturbing the state bits.
+    Chip c;
+    c.clio.write(kClioXbusSelect, kXbusCdRomAddress);
+    for (int i = 0; i < 7; ++i) {
+        c.clio.write(kClioXbusCommand, i == 0 ? 0x83u : 0x00u);
+    }
+    c.clio.tick(100000);
+    CHECK_EQ(c.clio.read(kClioXbusPoll) & kXbusStatusReady, kXbusStatusReady);
+
+    c.clio.write(kClioXbusSelect, 0x80u | kXbusCdRomAddress);
+    CHECK_EQ(c.clio.read(kClioXbusPoll) & 0xf0u, 0u);
 }
 
 TEST(only_the_control_nibble_of_the_poll_register_is_writable) {

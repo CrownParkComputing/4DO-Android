@@ -67,6 +67,22 @@ void Vdlp::render_linear(u32* out, int width, int height, u32 vram_offset) {
     }
 }
 
+u32 Vdlp::advance_line(u32 address) const {
+    const u32 modulo = kVdlLineModulo[modulo_index_ & 7];
+    return address + ((address & 2) != 0 ? ((modulo << 2) - 2) : 2);
+}
+
+// Walk the display list a LINE at a time rather than an entry at a time.
+//
+// An entry says how many lines it persists for, and the framebuffer address
+// advances every line whether or not a new entry arrives. That is the whole
+// mechanism, and it is why a persist count of zero is ordinary rather than
+// degenerate: it means the next entry arrives on the very next line. A list
+// with one entry per line is normal.
+//
+// Treating a zero as "the rest of the field" renders the whole screen out of
+// the first entry's buffer, which for a title that puts a blank buffer first
+// is a black screen - and looks for all the world like nothing was drawn.
 void Vdlp::render_field(u32* out, int width, int height) {
     entries_walked_ = 0;
 
@@ -81,43 +97,56 @@ void Vdlp::render_field(u32* out, int width, int height) {
     }
 
     u32 entry = list_address_;
-    int line = 0;
+    u32 buffer = 0;
+    u32 persist = 0;
+    bool have_buffer = false;
+    bool list_ended = false;
 
-    while (line < height && entries_walked_ < kMaxVdlEntries) {
-        const u32 control  = bus_.read32(entry + kVdlControlWord * 4);
-        const u32 buffer   = bus_.read32(entry + kVdlCurrentBuffer * 4);
-        const u32 next     = bus_.read32(entry + kVdlNextEntry * 4);
+    for (int line = 0; line < height; ++line) {
+        while (persist == 0 && !list_ended && entries_walked_ < kMaxVdlEntries) {
+            const u32 control = bus_.read32(entry);
+            if (control == 0) {
+                list_ended = true;
+                break;
+            }
+            ++entries_walked_;
 
-        u32 lines = (control & kVdlLineCountMask) >> kVdlLineCountShift;
-        if (lines == 0) {
-            // An entry covering no lines would spin forever. Treat it as
-            // covering the rest of the field, which at least produces a picture.
-            lines = static_cast<u32>(height - line);
+            // The buffer only changes when the entry says so; otherwise it
+            // carries on from where the previous entry left it.
+            if ((control & kVdlCurrOverride) != 0) {
+                buffer = bus_.read32(entry + 4);
+                have_buffer = true;
+            }
+
+            modulo_index_ = (control >> kVdlModuloShift) & kVdlModuloMask;
+            persist = (control & kVdlPersistMask) + 1;
+
+            u32 next = bus_.read32(entry + 12);
+            if ((control & kVdlNextRelative) != 0) {
+                next += entry + 16;
+            }
+            if (next == entry || next == 0) {
+                list_ended = true;
+                break;
+            }
+            entry = next;
         }
 
-        const int last = line + static_cast<int>(lines) > height
-                             ? height
-                             : line + static_cast<int>(lines);
-        for (int y = line; y < last; ++y) {
-            render_line(out + static_cast<size_t>(y) * width, width, buffer,
-                        y - line);
+        u32* row = out + static_cast<size_t>(line) * width;
+        if (!have_buffer) {
+            for (int x = 0; x < width; ++x) {
+                row[x] = 0xff000000u;
+            }
+            continue;
         }
-        line = last;
 
-        ++entries_walked_;
-        if (next == 0 || next == entry) {
-            break;
-        }
-        entry = next;
-    }
-
-    // Anything the list did not cover stays black.
-    for (int y = line; y < height; ++y) {
-        u32* row = out + static_cast<size_t>(y) * width;
-        for (int x = 0; x < width; ++x) {
-            row[x] = 0xff000000u;
+        render_line(row, width, buffer, 0);
+        buffer = advance_line(buffer);
+        if (persist > 0) {
+            --persist;
         }
     }
 }
+
 
 }  // namespace retro3do

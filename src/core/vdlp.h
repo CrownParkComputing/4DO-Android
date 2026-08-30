@@ -22,14 +22,29 @@ namespace retro3do {
 
 class Bus;
 
-// A VDL control word packs the line count and a set of enables. Only the fields
-// this implementation acts on are named.
+// A VDL control word.
+//
+// The line count is how many lines this entry PERSISTS for, and zero is a
+// perfectly ordinary value: it means the next entry is picked up on the very
+// next line. A list with one entry per line is normal, and treating a zero as
+// "the rest of the field" renders the whole screen out of the first entry's
+// buffer - which for a title that puts a blank buffer first is a black screen.
 enum : u32 {
-    // TODO(vdl): confirm. The line count is believed to sit in the low bits of
-    // the control word, with the upper bits carrying DMA and CLUT enables.
-    kVdlLineCountMask   = 0x000001ffu,
-    kVdlLineCountShift  = 0,
+    kVdlPersistMask     = 0x000001ffu,
+    kVdlControlCountShift = 9,
+    kVdlControlCountMask  = 0x3fu,
+    kVdlPrevOverride    = 1u << 15,
+    kVdlCurrOverride    = 1u << 16,
+    kVdlPrevTick        = 1u << 17,
+    kVdlNextRelative    = 1u << 18,
+    kVdlVerticalMode    = 1u << 19,
+    kVdlEnableDma       = 1u << 21,
+    kVdlModuloShift     = 23,
+    kVdlModuloMask      = 0x7u,
 };
+
+// How far apart the lines of a framebuffer are, selected by the control word.
+constexpr u32 kVdlLineModulo[8] = {320, 384, 512, 640, 1024, 320, 320, 320};
 
 class Vdlp {
 public:
@@ -59,10 +74,16 @@ public:
 
 private:
     // One scanline's worth of pixels, from a framebuffer address in VRAM.
+    // Step a framebuffer address on by one line. The layout interleaves rows
+    // in pairs, so the step alternates between two bytes and the rest of the
+    // pair - it is not a constant stride.
+    u32 advance_line(u32 address) const;
+
     void render_line(u32* out, int width, u32 framebuffer_address, int line);
 
     Bus& bus_;
     u32 list_address_ = 0;
+    u32 modulo_index_ = 0;
     u32 entries_walked_ = 0;
 };
 

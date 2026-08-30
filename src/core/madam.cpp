@@ -8,6 +8,20 @@
 namespace retro3do {
 namespace {
 
+// The stride is not a plain number of bytes. Three separate fields of the
+// control register contribute, at three different weights, and the result is
+// the distance between one PAIR of rows and the next.
+u32 decode_stride(u32 value) {
+    return ((value & 0x01u) << 7) + ((value & 0x0cu) << 8) + ((value & 0x70u) << 4);
+}
+
+// Where a pixel sits, given a stride. Rows are interleaved in pairs, so the
+// vertical step covers two rows and the odd row is two bytes along from the
+// even one.
+u32 pixel_offset(s32 x, s32 y, s32 stride) {
+    return static_cast<u32>(((y >> 1) * stride) + ((y & 1) << 1) + (x << 2));
+}
+
 // A cel list that does not terminate would hang the emulator on a bad pointer.
 // Real lists are far shorter than this; the limit exists so that garbage in
 // memory produces a dropped frame rather than a freeze.
@@ -170,6 +184,9 @@ void Madam::reset() {
     clip_width_ = 320;
     clip_height_ = 240;
     target_address_ = kVramBase;
+    framebuffer_configured_ = false;
+    read_base_ = 0;
+    write_base_ = 0;
     target_stride_bytes_ = 320 * 2;
     stats_ = MadamStats{};
 }
@@ -216,6 +233,10 @@ u32 Madam::read(u32 offset) {
         case kMadamPbusAddress: return pbus_address_;
         case kMadamPbusLength:  return pbus_length_;
         case kMadamPbusPointer: return pbus_pointer_;
+        case kMadamRegCtl0:    return reg_ctl0_;
+        case kMadamRegCtl1:    return reg_ctl1_;
+        case kMadamRegCtl2:    return read_base_;
+        case kMadamRegCtl3:    return write_base_;
         case kMadamCurrentCcb: return current_ccb_;
         case kMadamNextCcb:    return next_ccb_;
         default:
@@ -456,6 +477,28 @@ void Madam::write(u32 offset, u32 value) {
         case kMadamCelPause:
             break;
 
+        case kMadamRegCtl0:
+            reg_ctl0_ = value;
+            read_stride_ = static_cast<s32>(decode_stride(value));
+            write_stride_ = static_cast<s32>(decode_stride(value >> 8));
+            framebuffer_configured_ = true;
+            break;
+        case kMadamRegCtl1:
+            reg_ctl1_ = value;
+            // Inclusive: the clip values are the last pixel drawn, not the
+            // first one dropped.
+            clip_width_ = ((value >> 0) & 0x3ffu) + 1u;
+            clip_height_ = ((value >> 16) & 0x3ffu) + 1u;
+            break;
+        case kMadamRegCtl2:
+            read_base_ = value;
+            framebuffer_configured_ = true;
+            break;
+        case kMadamRegCtl3:
+            write_base_ = value;
+            framebuffer_configured_ = true;
+            break;
+
         case kMadamCurrentCcb:
             current_ccb_ = value;
             break;
@@ -603,8 +646,14 @@ void Madam::put_pixel(s32 x, s32 y, u16 pixel) {
     // The same layout the display reads. MADAM writing linearly while the VDLP
     // read interleaved produced a picture that was wrong in both chips' favour
     // depending on which you suspected, so the offset is computed in one place.
+    // Once software has programmed the framebuffer registers they are the
+    // truth. Before that - which is only ever a test, since the OS programs
+    // them long before it draws anything - fall back to where the console
+    // pointed us.
     const u32 address =
-        target_address_ + framebuffer_offset(x, y, static_cast<int>(clip_width_));
+        framebuffer_configured_
+            ? write_base_ + pixel_offset(x, y, write_stride_)
+            : target_address_ + framebuffer_offset(x, y, static_cast<int>(clip_width_));
     bus_.write16(address, pixel);
     ++stats_.pixels_written;
 }

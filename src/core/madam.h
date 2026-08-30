@@ -122,6 +122,22 @@ enum : u32 {
 
     // Where the walk is, and where it goes next. Software both reads and
     // writes these, so they are real state rather than loop variables.
+    // Where the cel engine draws, and how wide the buffer is.
+    //
+    //   0x130  the row stride, encoded, separately for reads and writes
+    //   0x134  the clip rectangle
+    //   0x138  the buffer cels are read FROM
+    //   0x13C  the buffer cels are drawn INTO
+    //
+    // These are not optional. A machine that assumes the framebuffer is at the
+    // base of VRAM draws every cel of every title into one buffer, which is
+    // right for whichever title happens to use that one and invisible for the
+    // rest.
+    kMadamRegCtl0    = 0x0130,
+    kMadamRegCtl1    = 0x0134,
+    kMadamRegCtl2    = 0x0138,
+    kMadamRegCtl3    = 0x013c,
+
     kMadamCurrentCcb = 0x05a0,
     kMadamNextCcb    = 0x05a4,
 
@@ -399,6 +415,16 @@ private:
     u32 dma_length_[kMadamDmaChannels] = {};
     u32 clip_width_ = 320;
     u32 clip_height_ = 240;
+
+    // The framebuffer control registers, and what they decode to. Both stride
+    // fields sit in one register, the write one eight bits up.
+    u32 reg_ctl0_ = 0;
+    u32 reg_ctl1_ = 0;
+    u32 read_base_ = 0;
+    u32 write_base_ = 0;
+    s32 read_stride_ = 320 * 4;
+    s32 write_stride_ = 320 * 4;
+    bool framebuffer_configured_ = false;
 
     u32 target_address_ = 0;
     u32 target_stride_bytes_ = 320 * 2;

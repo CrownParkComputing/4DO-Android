@@ -119,7 +119,7 @@ TEST(a_single_entry_covers_the_whole_field) {
     const u32 list = 0x1000u;              // the VDL lives in DRAM
     const u32 framebuffer = kVramBase;     // and points at the start of VRAM
 
-    bus.write32(list + 0, 2);              // control: two lines
+    bus.write32(list + 0, kVdlCurrOverride | 1);   // sets the buffer, two lines
     bus.write32(list + 4, framebuffer);    // current buffer
     bus.write32(list + 8, framebuffer);    // previous buffer
     bus.write32(list + 12, 0);             // no next entry
@@ -148,11 +148,11 @@ TEST(the_list_is_followed_to_a_second_entry) {
     const u32 first  = 0x1000u;
     const u32 second = 0x1100u;
 
-    bus.write32(first + 0, 1);            // one line
+    bus.write32(first + 0, kVdlCurrOverride | 0);   // one line
     bus.write32(first + 4, kVramBase);
     bus.write32(first + 12, second);
 
-    bus.write32(second + 0, 1);           // one line, from further into VRAM
+    bus.write32(second + 0, kVdlCurrOverride | 0);  // one line, further into VRAM
     bus.write32(second + 4, kVramBase + 0x100);
     bus.write32(second + 12, 0);
 
@@ -175,7 +175,7 @@ TEST(a_list_that_points_at_itself_terminates) {
     Vdlp vdlp(bus);
 
     const u32 list = 0x1000u;
-    bus.write32(list + 0, 1);
+    bus.write32(list + 0, kVdlCurrOverride | 0);
     bus.write32(list + 4, kVramBase);
     bus.write32(list + 12, list);   // next points back at itself
 
@@ -190,7 +190,7 @@ TEST(an_entry_claiming_no_lines_does_not_spin) {
     Vdlp vdlp(bus);
 
     const u32 list = 0x1000u;
-    bus.write32(list + 0, 0);        // zero lines
+    bus.write32(list + 0, kVdlCurrOverride | 0);   // one line, then the next entry
     bus.write32(list + 4, kVramBase);
     bus.write32(list + 12, list);    // and loops
 
@@ -236,7 +236,7 @@ TEST(a_pattern_written_through_the_bus_comes_back_out_of_the_frame) {
     }
 
     const u32 list = 0x1000u;
-    bus.write32(list + 0, static_cast<u32>(shape.height));
+    bus.write32(list + 0, kVdlCurrOverride | static_cast<u32>(shape.height - 1));
     bus.write32(list + 4, kVramBase);
     bus.write32(list + 8, kVramBase);
     bus.write32(list + 12, 0);
@@ -299,7 +299,7 @@ TEST(reading_the_framebuffer_linearly_is_the_bug_that_looks_like_a_stride_error)
     put_pixel(bus, framebuffer_offset(2, 1, width), rgb555(31, 0, 0));
 
     const u32 list = 0x1000u;
-    bus.write32(list + 0, static_cast<u32>(height));
+    bus.write32(list + 0, kVdlCurrOverride | static_cast<u32>(height - 1));
     bus.write32(list + 4, kVramBase);
     bus.write32(list + 12, 0);
     vdlp.set_list_address(list);
@@ -333,7 +333,7 @@ TEST(madam_and_the_display_agree_about_where_a_pixel_goes) {
     }
 
     const u32 list = 0x2000u;
-    bus.write32(list + 0, static_cast<u32>(shape.height));
+    bus.write32(list + 0, kVdlCurrOverride | static_cast<u32>(shape.height - 1));
     bus.write32(list + 4, kVramBase);
     bus.write32(list + 12, 0);
     bus.write32(kMadamBase + kMadamVdlAddress, list);

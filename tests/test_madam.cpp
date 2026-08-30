@@ -461,7 +461,7 @@ TEST(a_cel_drawn_into_vram_appears_in_the_frame) {
     bus.write32(kMadamBase + kMadamCelStart, 0);
 
     const u32 list = 0x8000u;
-    bus.write32(list + 0, 240);
+    bus.write32(list + 0, kVdlCurrOverride | 239u);
     bus.write32(list + 4, kVramBase);
     bus.write32(list + 8, kVramBase);
     bus.write32(list + 12, 0);

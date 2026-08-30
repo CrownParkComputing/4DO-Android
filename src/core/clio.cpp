@@ -417,11 +417,10 @@ u32 Clio::read_impl(u32 offset) {
         // that uses it to choose between equally valid paths - it makes the
         // machine take the same branch for ever.
         case kClioSeed: {
-            random_state_ += 0x9e3779b9u;
-            u32 z = random_state_;
-            z = (z ^ (z >> 16)) * 0x21f0aaadu;
-            z = (z ^ (z >> 15)) * 0x735a2d97u;
-            return z ^ (z >> 15);
+            u32 z = (random_state_ += 0x9e3779b9u);
+            z = (z ^ (z >> 16)) * 0x85ebca6bu;
+            z = (z ^ (z >> 13)) * 0xc2b2ae35u;
+            return z ^ (z >> 16);
         }
 
         // Both ports of each pair read back the same value; they differ only in
@@ -429,8 +428,13 @@ u32 Clio::read_impl(u32 offset) {
         // that reads back its own mask through one of them sees nothing set.
         case kClioIrq0Pending:
         case kClioIrq0Clear:    return irq0_pending_;
+        // Bit 31 of the first bank's enable mask always reads SET. It is not
+        // an enable at all - it is the chip saying the second bank exists and
+        // is worth reading. Returning only what software wrote leaves the OS
+        // believing there is no second bank, so every source that lives there
+        // is silently never serviced.
         case kClioIrq0Enable:
-        case kClioIrq0Disable:  return irq0_enabled_;
+        case kClioIrq0Disable:  return irq0_enabled_ | kIrqSecondaryBank;
         case kClioIrq1Pending:
         case kClioIrq1Clear:    return irq1_pending_;
         case kClioIrq1Enable:

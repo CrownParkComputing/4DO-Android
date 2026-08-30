@@ -49,7 +49,7 @@ TEST(a_pending_interrupt_does_nothing_until_it_is_enabled) {
     // Enabling it is what actually reaches the CPU. Until then the source is
     // latched but silent.
     c.clio.write(kClioIrq0Enable, kIrqVerticalBlank0);
-    CHECK_EQ(c.clio.read(kClioIrq0Enable), kIrqVerticalBlank0);
+    CHECK_EQ(c.clio.read(kClioIrq0Enable) & ~kIrqSecondaryBank, kIrqVerticalBlank0);
 }
 
 TEST(acknowledging_writes_the_bits_to_the_clear_port) {
@@ -70,7 +70,7 @@ TEST(the_disable_port_clears_enables_without_touching_pending) {
     c.clio.raise(kIrqVerticalBlank0);
 
     c.clio.write(kClioIrq0Disable, kIrqVerticalBlank0);
-    CHECK_EQ(c.clio.read(kClioIrq0Enable), kTimer3Irq);
+    CHECK_EQ(c.clio.read(kClioIrq0Enable) & ~kIrqSecondaryBank, kTimer3Irq);
     // Still pending: disabling a source masks it, it does not acknowledge it.
     CHECK_EQ(c.clio.read(kClioIrq0Pending), kIrqVerticalBlank0);
 }
@@ -160,7 +160,7 @@ TEST(a_second_edge_interrupts_again) {
 TEST(clio_registers_are_reachable_through_the_bus) {
     Chip c;
     c.bus.write32(kClioBase + kClioIrq0Enable, kTimer3Irq);
-    CHECK_EQ(c.bus.read32(kClioBase + kClioIrq0Enable), kTimer3Irq);
+    CHECK_EQ(c.bus.read32(kClioBase + kClioIrq0Enable) & ~kIrqSecondaryBank, kTimer3Irq);
 
     c.clio.raise(kTimer3Irq);
     CHECK_EQ(c.bus.read32(kClioBase + kClioIrq0Pending), kTimer3Irq);
@@ -332,7 +332,7 @@ TEST(a_reset_silences_everything) {
     c.clio.reset();
 
     CHECK_EQ(c.clio.read(kClioIrq0Pending), 0u);
-    CHECK_EQ(c.clio.read(kClioIrq0Enable), 0u);
+    CHECK_EQ(c.clio.read(kClioIrq0Enable) & ~kIrqSecondaryBank, 0u);
     CHECK_EQ(c.clio.read(kClioTimerConfigSet0), 0u);
     CHECK_EQ(c.clio.scanline(), 0u);
 }
@@ -534,8 +534,8 @@ TEST(both_ports_of_an_interrupt_pair_read_the_same_mask) {
     // the clear ports means software reading back its own mask sees nothing.
     Chip c;
     c.clio.write(kClioIrq0Enable, kIrqVerticalBlank1);
-    CHECK_EQ(c.clio.read(kClioIrq0Enable), kIrqVerticalBlank1);
-    CHECK_EQ(c.clio.read(kClioIrq0Disable), kIrqVerticalBlank1);
+    CHECK_EQ(c.clio.read(kClioIrq0Enable) & ~kIrqSecondaryBank, kIrqVerticalBlank1);
+    CHECK_EQ(c.clio.read(kClioIrq0Disable) & ~kIrqSecondaryBank, kIrqVerticalBlank1);
 
     c.clio.raise(kIrqVerticalBlank1);
     CHECK_EQ(c.clio.read(kClioIrq0Pending), kIrqVerticalBlank1);
@@ -638,4 +638,14 @@ TEST(the_memory_configuration_cannot_be_written) {
     CHECK_EQ(kMadamMemConfigStock & 0x07u, 1u);          // 1 MB VRAM
     CHECK_EQ((kMadamMemConfigStock >> 3) & 0x03u, 1u);   // 1 MB DRAM1
     CHECK_EQ((kMadamMemConfigStock >> 5) & 0x03u, 1u);   // 1 MB DRAM2
+}
+
+TEST(the_secondary_bank_bit_always_reads_set_in_the_first_banks_enable) {
+    // It is not an enable. It is the chip saying a second bank exists and is
+    // worth reading, and software that never sees it never services anything
+    // that lives there.
+    Chip c;
+    CHECK_EQ(c.clio.read(kClioIrq0Enable) & kIrqSecondaryBank, kIrqSecondaryBank);
+    c.clio.write(kClioIrq0Disable, 0xffffffffu);
+    CHECK_EQ(c.clio.read(kClioIrq0Enable) & kIrqSecondaryBank, kIrqSecondaryBank);
 }

@@ -69,6 +69,7 @@ enum : u8 {
     kCmdReadCapacity  = 0x85,
     kCmdReadDiscInfo  = 0x8b,
     kCmdReadToc       = 0x8c,
+    kCmdReadSessionInfo = 0x8d,
 };
 
 // Drive status byte, from The 3DO Company's own SDK header <cdrom.h>. The bus
@@ -89,6 +90,10 @@ enum : u32 {
 // The bus supports sixteen devices, addressed 0..15. A device takes its address
 // at power-up by counting strobes, so an address reflects position on the chain
 // rather than anything fixed in the device.
+// A CD counts time from two seconds in, so an MSF address is always 150 frames
+// ahead of the block number it names.
+constexpr u32 kMsfBiasFrames = 150;
+
 constexpr u32 kXbusMaxDevices = 16;
 
 // One device on the bus. Only as much as the boot ROM exercises: accept command

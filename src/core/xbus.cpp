@@ -91,9 +91,13 @@ void CdRomDevice::build_reply(u8 command) {
             // byte reporting whether there is media. Per MAME's cr560b, which
             // notes it is unsure whether that last byte should instead be the
             // status - so this is a place to revisit if the boot turns on it.
+            // The opcode, the last error repeated eight times, and the drive
+            // status. The final byte is the STATUS, not a media-present flag:
+            // the driver compares it against the status it got from the
+            // command that failed, and a bare 1 never matches.
             pending_reply_.push_back(kCmdReadError);
-            for (int i = 0; i < 8; ++i) pending_reply_.push_back(0x00);
-            pending_reply_.push_back(disc_present_ ? 1 : 0);
+            for (int i = 0; i < 8; ++i) pending_reply_.push_back(last_error_);
+            pending_reply_.push_back(drive_status());
             break;
 
         case kCmdSetMode:
@@ -130,7 +134,10 @@ void CdRomDevice::build_reply(u8 command) {
                 break;
             }
             motor_on_ = true;
-            const u32 lead_out = lba_to_msf(disc_sectors());
+            // The lead-out carries the two-second pre-gap on TOP of the one
+            // already in the MSF conversion. Report it without and the driver
+            // computes a disc two seconds short of the one it is holding.
+            const u32 lead_out = lba_to_msf(disc_sectors() + kMsfBiasFrames);
             pending_reply_.push_back(0x00);              // disc type: CD-ROM
             pending_reply_.push_back(0x01);              // first track
             pending_reply_.push_back(u8(last_track()));
@@ -142,36 +149,63 @@ void CdRomDevice::build_reply(u8 command) {
         }
 
         case kCmdReadToc: {
-            // Byte 2 names the track; zero asks about the lead-out.
+            // Byte 2 names the track. The reply is one entry out of the table
+            // of contents, and the table is indexed by track NUMBER - entry
+            // zero is not the lead-out, it is simply absent, and reads back as
+            // zeroes.
             const u8 track = last_command_bytes_.size() >= 3
                                  ? last_command_bytes_[2] : 0u;
             pending_reply_.push_back(kCmdReadToc);
-            if (disc_ == nullptr || !disc_present_ || track > last_track()) {
+            if (disc_ == nullptr || !disc_present_) {
                 pending_reply_.push_back(u8((drive_status() & ~kStatusReady) |
                                             kStatusError));
                 break;
             }
             motor_on_ = true;
-            u32 start = 0;
-            u8  adr   = 0x14;    // data track, TOC entry
-            if (track == 0) {
-                start = disc_sectors();
-            } else {
-                const auto& list = disc_->tracks();
-                const size_t index = track - 1;
-                if (index < list.size()) {
-                    start = list[index].start_lba;
-                    adr = list[index].is_audio ? 0x10 : 0x14;
-                }
+
+            u8 control = 0;
+            u8 number  = 0;
+            u32 msf    = 0;
+            const auto& list = disc_->tracks();
+            const size_t index = track >= 1 ? size_t(track - 1) : list.size();
+            if (index < list.size()) {
+                // The control nibble says what kind of track this is. A data
+                // track is 0x04; audio is zero. The 0x10 "address" nibble
+                // belongs to a subchannel Q reply, not to this one, and adding
+                // it here makes every track look like the wrong kind.
+                control = list[index].is_audio ? 0x00 : 0x04;
+                number  = track;
+                msf     = lba_to_msf(list[index].start_lba);
             }
-            const u32 msf = lba_to_msf(start);
+
             pending_reply_.push_back(0x00);
-            pending_reply_.push_back(adr);
-            pending_reply_.push_back(track == 0 ? 0x01 : track);
-            pending_reply_.push_back(track == 0 ? u8(last_track()) : 0x00);
+            pending_reply_.push_back(control);
+            pending_reply_.push_back(number);
+            pending_reply_.push_back(0x00);
             pending_reply_.push_back(u8(msf >> 16));
             pending_reply_.push_back(u8(msf >> 8));
             pending_reply_.push_back(u8(msf));
+            pending_reply_.push_back(0x00);
+            pending_reply_.push_back(u8(drive_status() | kStatusReady));
+            break;
+        }
+
+        case kCmdReadSessionInfo: {
+            // Where the session ends, in MSF. Eight bytes; answering with a
+            // bare acknowledgement makes the driver read two bytes where it
+            // expects eight, and it treats the short reply as a failure.
+            pending_reply_.push_back(kCmdReadSessionInfo);
+            if (disc_ == nullptr || !disc_present_) {
+                pending_reply_.push_back(u8((drive_status() & ~kStatusReady) |
+                                            kStatusError));
+                break;
+            }
+            const u32 session = lba_to_msf(disc_sectors());
+            pending_reply_.push_back(0x00);
+            pending_reply_.push_back(u8(session >> 16));
+            pending_reply_.push_back(u8(session >> 8));
+            pending_reply_.push_back(u8(session));
+            pending_reply_.push_back(0x00);
             pending_reply_.push_back(0x00);
             pending_reply_.push_back(u8(drive_status() | kStatusReady));
             break;

@@ -1,6 +1,7 @@
 #include "clio.h"
 #include <cstdlib>
 #include <cstdio>
+#include <cstring>
 
 #include <algorithm>
 
@@ -302,10 +303,25 @@ std::FILE* const g_clio_log = [] {
     const char* path = std::getenv("CLIOLOG");
     return path != nullptr ? std::fopen(path, "w") : nullptr;
 }();
+// A busy delay loop can fill the whole log with one register, so the range of
+// interest can be narrowed: CLIOLOGRANGE=400-600 keeps only the expansion bus.
+const u32 g_clio_log_low = [] {
+    const char* range = std::getenv("CLIOLOGRANGE");
+    return range != nullptr ? static_cast<u32>(std::strtoul(range, nullptr, 16)) : 0u;
+}();
+const u32 g_clio_log_high = [] {
+    const char* range = std::getenv("CLIOLOGRANGE");
+    const char* dash = range != nullptr ? std::strchr(range, '-') : nullptr;
+    return dash != nullptr ? static_cast<u32>(std::strtoul(dash + 1, nullptr, 16)) : 0x1000u;
+}();
 long g_clio_log_count = 0;
 void log_access(char kind, u32 offset, u32 value, u32 pc) {
     std::FILE* file = g_clio_log;
     if (file == nullptr || g_clio_log_count >= 200000) {
+        return;
+    }
+    const u32 window = offset & 0xfffu;
+    if (window < g_clio_log_low || window >= g_clio_log_high) {
         return;
     }
     std::fprintf(file, "%c %03X %08X %08X\n", kind, offset & 0xfff, value, pc);
@@ -402,13 +418,8 @@ u32 Clio::read_impl(u32 offset) {
         case kClioControl:     return control_;
         case kClioMode:        return mode_;
 
-        // Bit 7 is a hardware completion flag, not a software one. The boot ROM
-        // clears it and then spins until it comes back set, so honouring the
-        // clear literally hangs the machine on its own bus setup - a million
-        // reads of this one register and no further progress. Our bus finishes
-        // a transaction the moment it starts, so it is always ready.
-        case kClioXbusCtlSet:
-        case kClioXbusCtlClear:  return xbus_control_ | kXbusReady;
+        case kClioXbusCtl:       return xbus_control_;
+        case kClioXbusDirection: return xbus_direction_;
         case kClioXbusXferCount: return xbus_xfer_count_;
         case kClioDipir1:        return dipir1_;
         case kClioDipir2:        return dipir2_;
@@ -586,10 +597,10 @@ void Clio::write_impl(u32 offset, u32 value) {
             } else {
                 xbus_dma_enable_ &= ~value;
             }
-            // The expansion transfer runs when the request bit and the bus
-            // control's own enable are BOTH set.
-            if ((xbus_dma_enable_ & kClioDmaXbusBit) != 0 &&
-                (xbus_control_ & kXbusCtlDmaEnable) != 0) {
+            // The request bit alone starts the transfer. There is no second
+            // enable to check - gating on one in the bus-control register
+            // throws away transfers the driver has already committed to.
+            if ((xbus_dma_enable_ & kClioDmaXbusBit) != 0) {
                 xbus_dma_requested_ = true;
                 if (dma_handler_ != nullptr) {
                     dma_handler_(dma_context_);
@@ -597,11 +608,14 @@ void Clio::write_impl(u32 offset, u32 value) {
             }
             return;
 
-        case kClioXbusCtlSet:
-            xbus_control_ |= (value & kClioXbusCtlMask);
+        case kClioXbusCtl:
+            // A write carrying bit 11 is refused, value and all.
+            if ((value & kXbusCtlWriteVeto) == 0) {
+                xbus_control_ = value;
+            }
             return;
-        case kClioXbusCtlClear:
-            xbus_control_ &= ~(value & kClioXbusCtlMask);
+        case kClioXbusDirection:
+            xbus_direction_ = value;
             return;
         case kClioXbusType0:
             xbus_type0_ = value;

@@ -538,25 +538,27 @@ TEST(both_ports_of_an_interrupt_pair_read_the_same_mask) {
     CHECK_EQ(c.clio.read(kClioIrq0Clear), kIrqVerticalBlank1);
 }
 
-TEST(the_expansion_bus_always_reports_ready) {
-    // The boot ROM clears the ready bit and then spins until hardware sets it
-    // again. Honouring that clear literally hangs the machine on its own bus
-    // setup, so the bit reads set however software writes it.
+TEST(the_two_expansion_bus_control_registers_are_independent) {
+    // 0x400 and 0x404 look like a set/clear pair and are not one. Treating
+    // them as a pair makes a write to either silently modify the other, and
+    // the driver reads back a value it never wrote.
     Chip c;
-    CHECK_EQ(c.clio.read(kClioXbusCtlSet) & kXbusReady, kXbusReady);
+    c.clio.write(kClioXbusCtl, 0x4000);
+    c.clio.write(kClioXbusDirection, 0x0280);
+    CHECK_EQ(c.clio.read(kClioXbusCtl), 0x4000u);
+    CHECK_EQ(c.clio.read(kClioXbusDirection), 0x0280u);
 
-    c.clio.write(kClioXbusCtlClear, kXbusReady);
-    CHECK_EQ(c.clio.read(kClioXbusCtlSet) & kXbusReady, kXbusReady);
+    // A plain store, not an OR: the second write replaces the first.
+    c.clio.write(kClioXbusCtl, 0x0040);
+    CHECK_EQ(c.clio.read(kClioXbusCtl), 0x0040u);
+}
 
-    // The writable control bits still behave as a set/clear pair.
-    c.clio.write(kClioXbusCtlSet, 0x0800);
-    CHECK_EQ(c.clio.read(kClioXbusCtlSet) & 0x0800u, 0x0800u);
-    c.clio.write(kClioXbusCtlClear, 0x0800);
-    CHECK_EQ(c.clio.read(kClioXbusCtlSet) & 0x0800u, 0u);
-
-    // Bits outside the writable mask are ignored.
-    c.clio.write(kClioXbusCtlSet, 0x0001);
-    CHECK_EQ(c.clio.read(kClioXbusCtlSet) & 0x0001u, 0u);
+TEST(a_bus_control_write_carrying_bit_eleven_is_refused) {
+    // Value and all - the register keeps what it had.
+    Chip c;
+    c.clio.write(kClioXbusCtl, 0x4000);
+    c.clio.write(kClioXbusCtl, kXbusCtlWriteVeto);
+    CHECK_EQ(c.clio.read(kClioXbusCtl), 0x4000u);
 }
 
 TEST(a_read_command_streams_sectors_from_the_disc) {

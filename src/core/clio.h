@@ -274,11 +274,13 @@ enum : u32 {
 
     kXbusReady        = 0x0080,
 
-    // Expansion-bus control, as a set/clear pair like the interrupt registers.
-    // Only these bits are writable.
-    kClioXbusCtlSet   = 0x0400,
-    kClioXbusCtlClear = 0x0404,
-    kClioXbusCtlMask  = 0xca80,
+    // Expansion-bus control. These are two INDEPENDENT registers, not a
+    // set/clear pair - treating them as a pair makes every write to one of them
+    // silently modify the other, and the driver reads back a value it never
+    // wrote. 0x400 has one quirk: a write with bit 11 set is refused outright.
+    kClioXbusCtl      = 0x0400,
+    kClioXbusDirection = 0x0404,
+    kXbusCtlWriteVeto = 0x0800,
     kClioXbusType0    = 0x0408,
     kClioXbusXferCount= 0x040c,
 
@@ -417,6 +419,7 @@ private:
     void (*dma_handler_)(void*) = nullptr;
     void* dma_context_ = nullptr;
     u32 xbus_control_ = kXbusReady;
+    u32 xbus_direction_ = 0;
     u32 xbus_type0_ = 0;
     u32 xbus_xfer_count_ = 0;
     // The boot ROM reads both DIPIR registers and tests them together: if the

@@ -300,8 +300,18 @@ public:
     void draw_packed_cel(const Ccb& ccb);
     void draw_unpacked_cel(const Ccb& ccb);
     void plot_footprint(const Ccb& ccb, s32 px, s32 py, s32 step_x, s32 step_y,
-                        u32 horizontal_span, u32 vertical_span, u16 pixel);
-    u16  decode_pixel(const Ccb& ccb, u32 value) const;
+                        u32 horizontal_span, u32 vertical_span, u16 pixel,
+                        u16 shade);
+    // Turn one source value into a colour, and say what multiplier it carries
+    // and whether it is transparent.
+    //
+    // A coded pixel is NOT an index. Only its low five bits select a palette
+    // entry; the bits above carry a per-channel multiplier the pixel processor
+    // uses for shading. Treating all eight bits of an eight-bit pixel as an
+    // index reads two hundred and fifty-six entries out of a palette that has
+    // thirty-two, which is most of a cel's colours coming from whatever
+    // follows it in memory.
+    u16  decode_pixel(u32 value, u16* multiplier, bool* transparent) const;
 
     // The pixel processor. Every pixel the engine writes goes through it: it
     // scales the source, optionally mixes it with what is already in the
@@ -405,7 +415,7 @@ private:
     // formats via the PLUT and the direct format without it.
     u16 sample(const Ccb& ccb, u32 sx, u32 sy) const;
 
-    void put_pixel(s32 x, s32 y, u16 pixel);
+    void put_pixel(s32 x, s32 y, u16 pixel, u16 shade = 0);
 
     Bus& bus_;
 
@@ -467,6 +477,16 @@ private:
     u32 cel_pmode_or_ = 0;
     u32 cel_pmode_and_ = 0xffffu;
     u32 cel_origin_vh_ = 0;
+    u32 cel_bpp_ = 0;
+    bool cel_linear_ = false;
+    u32 cel_pluta_ = 0;
+    u32 cel_pixel_mask_ = 0;
+    bool cel_transparent_mask_ = true;
+
+    // The cel engine's own palette, loaded from a cel that says to and kept
+    // for the ones that do not.
+    static constexpr u32 kPlutEntries = 32;
+    u16 plut_[kPlutEntries] = {};
 
     u32 target_address_ = 0;
     u32 target_stride_bytes_ = 320 * 2;

@@ -37,7 +37,10 @@ void write_ccb(Bus& bus, u32 at, u32 flags, u32 source, u32 plut,
     hdy  <<= 4;
     hddx <<= 4;
     hddy <<= 4;
-    bus.write32(at + 0,  flags | kCcbLast | kCcbNpAbs | kCcbSpAbs | kCcbPpAbs);
+    // A cel that wants a palette has to say so; one that does not draws with
+    // whatever the last cel left loaded.
+    bus.write32(at + 0,  flags | kCcbLast | kCcbNpAbs | kCcbSpAbs | kCcbPpAbs |
+                             kCcbLdPlut);
     bus.write32(at + 4,  0);
     bus.write32(at + 8,  source);
     bus.write32(at + 12, plut);
@@ -56,8 +59,14 @@ void write_ccb(Bus& bus, u32 at, u32 flags, u32 source, u32 plut,
 
 // PRE0 carries the format in the low bits and (height - 1) above it; PRE1
 // carries (width - 1).
+// A cel whose pixels carry their colour directly rather than an index has to
+// say so: that is the LINEAR bit, and without it even a sixteen-bit pixel goes
+// through the palette.
+constexpr u32 kPre0Linear = 0x00000010u;
+
 u32 pre0_for(u32 format_code, u32 height) {
-    return format_code | ((height - 1u) << 6);
+    const u32 linear = format_code == 6 ? kPre0Linear : 0u;
+    return format_code | linear | ((height - 1u) << 6);
 }
 // A cel's rows are strided by a word count carried in PRE1, and the smallest
 // stride the field can express is two words. So a row is never shorter than
@@ -309,7 +318,7 @@ TEST(an_eight_bit_indexed_cel_goes_through_the_palette) {
     bus.write8(kSourceAt + 1, 2);
 
     write_ccb(bus, kCcbAt, 0, kSourceAt, kPlutAt, 0, 0, fixed(1), 0, 0, fixed(1),
-              pre0_for(kFormatIndexed8, 1), pre1_for(2));
+              pre0_for(kFormatIndexed8, 1), pre1_for(2, 8));
     madam.render_cel_list(kCcbAt);
 
     CHECK_EQ(read_target(bus, 0, 0), rgb555(31, 0, 0));
@@ -329,7 +338,7 @@ TEST(a_four_bit_indexed_cel_unpacks_two_pixels_per_byte) {
     bus.write8(kSourceAt + 0, 0x12);
 
     write_ccb(bus, kCcbAt, 0, kSourceAt, kPlutAt, 0, 0, fixed(1), 0, 0, fixed(1),
-              pre0_for(kFormatIndexed4, 1), pre1_for(2));
+              pre0_for(kFormatIndexed4, 1), pre1_for(2, 4));
     madam.render_cel_list(kCcbAt);
 
     CHECK_EQ(read_target(bus, 0, 0), rgb555(31, 0, 0));
@@ -423,7 +432,7 @@ TEST(the_largest_expressible_cel_is_still_bounded) {
     // Every bit of the size fields, but no skip: the point here is the size
     // handling, and a skip of fifteen would quietly move which source pixels
     // are the visible ones.
-    bus.write32(kCcbAt + 52, kFormatDirect16 | 0x0000ffc0u);
+    bus.write32(kCcbAt + 52, kFormatDirect16 | kPre0Linear | 0x0000ffc0u);
     bus.write32(kCcbAt + 56, 0xffffffffu);
 
     const Ccb ccb = madam.read_ccb(kCcbAt);

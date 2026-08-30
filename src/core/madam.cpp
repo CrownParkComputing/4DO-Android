@@ -89,6 +89,9 @@ enum : u32 {
 // isolated in these two functions precisely so that correcting them is a local
 // change rather than a hunt through the renderer.
 constexpr u32 kPre0FormatMask  = 0x00000007u;
+// Set when a pixel carries its colour directly instead of an index into the
+// palette. Bit FOUR, not the top bit - the top bit is something else entirely.
+constexpr u32 kPre0Linear      = 0x00000010u;
 constexpr u32 kPre0HeightShift = 6;
 constexpr u32 kPre0HeightMask  = 0x000003ffu;
 constexpr u32 kPre1WidthMask   = 0x000007ffu;
@@ -630,16 +633,76 @@ Ccb Madam::read_ccb(u32 address) const {
 // ---------------------------------------------------------------------------
 // Sampling source pixels
 // ---------------------------------------------------------------------------
-// Turn one source value into a colour. Direct cels carry the colour already;
-// everything else is an index into the cel's own palette.
-u16 Madam::decode_pixel(const Ccb& ccb, u32 value) const {
-    if (ccb.format == CelFormat::Direct16) {
-        return static_cast<u16>(value);
+// Turn one source value into a colour.
+//
+// A coded pixel is not an index. Only its low five bits select a palette
+// entry; the bits above carry a per-channel multiplier that the pixel
+// processor uses for shading. Treating all eight bits of an eight-bit pixel as
+// an index reads two hundred and fifty-six entries out of a palette that holds
+// thirty-two - so most of a cel's colours come from whatever happens to follow
+// the palette in memory.
+u16 Madam::decode_pixel(u32 value, u16* multiplier, bool* transparent) const {
+    // The default multiplier is one in each of three channels, which is what
+    // an uncoded pixel wants.
+    u16 amv = 0x49;
+    u16 result = 0;
+
+    switch (cel_bpp_) {
+        case 1: case 2: case 4:
+            // The low nibble of the CCB's flags picks which block of the
+            // palette a shallow cel draws from, so several cels can share one
+            // loaded palette.
+            result = plut_[((cel_pluta_ + (value & cel_pixel_mask_) * 2) >> 1) &
+                           (kPlutEntries - 1)];
+            break;
+
+        case 6:
+            result = plut_[value & 0x1f];
+            result = static_cast<u16>((result & 0x7fffu) |
+                                      ((value & 0x20u) != 0 ? 0x8000u : 0u));
+            break;
+
+        case 8:
+            if (cel_linear_) {
+                // Not coded at all: the byte IS the colour, two bits of blue
+                // and three each of green and red, widened to five.
+                const u32 blue  = value & 3u;
+                const u32 green = (value >> 2) & 7u;
+                const u32 red   = (value >> 5) & 7u;
+                result = static_cast<u16>(
+                    ((((red << 2) + (red >> 1)) & 0x1fu) << 10) |
+                    ((((green << 2) + (green >> 1)) & 0x1fu) << 5) |
+                    (((blue << 3) + (blue << 1) + (blue >> 1)) & 0x1fu));
+            } else {
+                result = plut_[value & 0x1f];
+                // Three bits of multiplier, replicated across all three
+                // channels.
+                const u32 shade = ((value >> 6) & 3u) * 2u + ((value >> 5) & 1u);
+                amv = static_cast<u16>((shade << 6) + (shade << 3) + shade);
+            }
+            break;
+
+        default:
+            if (cel_linear_) {
+                result = static_cast<u16>(value);
+            } else {
+                result = plut_[value & 0x1f];
+                result = static_cast<u16>((result & 0x7fffu) | (value & 0x8000u));
+                // A separate three-bit multiplier per channel.
+                amv = static_cast<u16>((((value >> 11) & 7u) << 6) |
+                                       (((value >> 8) & 7u) << 3) |
+                                       ((value >> 5) & 7u));
+            }
+            break;
     }
-    Bus& bus = const_cast<Bus&>(bus_);
-    const u32 entry = ccb.plut_address + value * 2u;
-    return static_cast<u16>((static_cast<u16>(bus.read8(entry)) << 8) |
-                            bus.read8(entry + 1));
+
+    if (multiplier != nullptr) {
+        *multiplier = amv;
+    }
+    if (transparent != nullptr) {
+        *transparent = ((result & 0x7fffu) == 0) && cel_transparent_mask_;
+    }
+    return result;
 }
 
 u16 Madam::sample(const Ccb& ccb, u32 sx, u32 sy) const {
@@ -701,6 +764,50 @@ void Madam::begin_cel(const Ccb& ccb) {
 
     cel_origin_vh_ = (static_cast<u32>(ccb.x) & 1u) |
                      ((static_cast<u32>(ccb.y) & 1u) << 15);
+
+    cel_bpp_ = bits_per_pixel(ccb.format);
+    cel_linear_ = (ccb.pre0 & kPre0Linear) != 0;
+
+    // A cel with the background flag clear treats colour zero as transparent.
+    cel_transparent_mask_ = (ccb.flags & kCcbBgnd) == 0;
+
+    switch (cel_bpp_) {
+        case 1:
+            cel_pluta_ = (ccb.flags & 0x0fu) * 4u;
+            cel_pixel_mask_ = 1;
+            break;
+        case 2:
+            cel_pluta_ = (ccb.flags & 0x0eu) * 4u;
+            cel_pixel_mask_ = 3;
+            break;
+        case 4:
+            cel_pluta_ = (ccb.flags & 0x08u) * 4u;
+            cel_pixel_mask_ = 15;
+            break;
+        default:
+            cel_pluta_ = 0;
+            cel_pixel_mask_ = 0x1f;
+            break;
+    }
+
+    // The palette is loaded only by a cel that asks for it. One that does not
+    // draws with whatever the last cel left behind, which is how a run of
+    // cels shares a palette without reloading it every time.
+    if ((ccb.flags & kCcbLdPlut) != 0) {
+        u32 entries = kPlutEntries;
+        switch (cel_bpp_) {
+            case 1: entries = 2; break;
+            case 2: entries = 4; break;
+            case 4: entries = 16; break;
+            default: break;
+        }
+        const u32 base = ccb.plut_address & ~1u;
+        for (u32 i = 0; i < entries; ++i) {
+            plut_[i] = static_cast<u16>(
+                (static_cast<u16>(bus_.read8(base + i * 2)) << 8) |
+                bus_.read8(base + i * 2 + 1));
+        }
+    }
 }
 
 // One pixel, through the processor and into the framebuffer.
@@ -867,12 +974,15 @@ void Madam::process_pixel(s32 x, s32 y, u16 source, u16 amv) {
     ++stats_.pixels_written;
 }
 
-void Madam::put_pixel(s32 x, s32 y, u16 pixel) {
+void Madam::put_pixel(s32 x, s32 y, u16 pixel, u16 shade) {
     // Once software has programmed the framebuffer registers, every pixel goes
     // through the processor. Before that - which is only ever a test - fall
     // back to a plain store so the pixel conversion can be checked alone.
     if (framebuffer_configured_) {
-        process_pixel(x, y, pixel, 0);
+        process_pixel(x, y, pixel, shade);
+        return;
+    }
+    if (pixel == 0) {
         return;
     }
     if (x < 0 || y < 0 || static_cast<u32>(x) >= clip_width_ ||
@@ -908,14 +1018,11 @@ void Madam::put_pixel(s32 x, s32 y, u16 pixel) {
 // that actually has to happen.
 void Madam::plot_footprint(const Ccb& ccb, s32 px, s32 py, s32 step_x,
                            s32 step_y, u32 horizontal_span, u32 vertical_span,
-                           u16 pixel) {
-    // Colour zero is transparent unless the cel says otherwise. This is why
-    // sprites have holes in them rather than black boxes.
-    if (pixel == 0) {
-        return;
-    }
+                           u16 pixel, u16 shade) {
+    // Transparency is decided by the decoder, which knows whether this cel
+    // treats colour zero as a hole or as black.
     if (horizontal_span == 1 && vertical_span == 1) {
-        put_pixel(px >> 16, py >> 16, pixel);
+        put_pixel(px >> 16, py >> 16, pixel, shade);
         return;
     }
     for (u32 j = 0; j < vertical_span; ++j) {
@@ -928,7 +1035,7 @@ void Madam::plot_footprint(const Ccb& ccb, s32 px, s32 py, s32 step_x,
                 (static_cast<s64>(step_x) * i) / horizontal_span);
             const s32 iy = static_cast<s32>(
                 (static_cast<s64>(step_y) * i) / horizontal_span);
-            put_pixel((px + ix + ox) >> 16, (py + iy + oy) >> 16, pixel);
+            put_pixel((px + ix + ox) >> 16, (py + iy + oy) >> 16, pixel, shade);
         }
     }
 }
@@ -997,19 +1104,27 @@ void Madam::draw_packed_cel(const Ccb& ccb) {
                 continue;
             }
             if (type == 3) {
-                const u16 pixel = decode_pixel(ccb, reader.read(bpp));
+                u16 shade = 0;
+                bool clear = false;
+                const u16 pixel = decode_pixel(reader.read(bpp), &shade, &clear);
                 for (u32 i = 0; i < count; ++i) {
-                    plot_footprint(ccb, px, py, step_x, step_y,
-                                   horizontal_span, vertical_span, pixel);
+                    if (!clear) {
+                        plot_footprint(ccb, px, py, step_x, step_y,
+                                       horizontal_span, vertical_span, pixel, shade);
+                    }
                     px += step_x;
                     py += step_y;
                 }
                 continue;
             }
             for (u32 i = 0; i < count; ++i) {
-                const u16 pixel = decode_pixel(ccb, reader.read(bpp));
-                plot_footprint(ccb, px, py, step_x, step_y,
-                               horizontal_span, vertical_span, pixel);
+                u16 shade = 0;
+                bool clear = false;
+                const u16 pixel = decode_pixel(reader.read(bpp), &shade, &clear);
+                if (!clear) {
+                    plot_footprint(ccb, px, py, step_x, step_y,
+                                   horizontal_span, vertical_span, pixel, shade);
+                }
                 px += step_x;
                 py += step_y;
             }
@@ -1069,9 +1184,13 @@ void Madam::draw_unpacked_cel(const Ccb& ccb) {
         const u32 horizontal_span = footprint_steps(step_x, step_y);
 
         for (u32 column = 0; column < width; ++column) {
-            const u16 pixel = decode_pixel(ccb, reader.read(bpp));
-            plot_footprint(ccb, px, py, step_x, step_y, horizontal_span,
-                           vertical_span, pixel);
+            u16 shade = 0;
+            bool clear = false;
+            const u16 pixel = decode_pixel(reader.read(bpp), &shade, &clear);
+            if (!clear) {
+                plot_footprint(ccb, px, py, step_x, step_y, horizontal_span,
+                               vertical_span, pixel, shade);
+            }
             px += step_x;
             py += step_y;
         }
@@ -1085,79 +1204,21 @@ void Madam::draw_unpacked_cel(const Ccb& ccb) {
     ++stats_.cels_drawn;
 }
 
+// One cel. Which of the two source formats it is decides everything else, so
+// the choice is made once here rather than threaded through the drawing.
 void Madam::draw_cel(const Ccb& ccb) {
-    begin_cel(ccb);
-    if ((ccb.flags & kCcbPacked) != 0) {
-        draw_packed_cel(ccb);
-        return;
-    }
-    if (ccb.format != CelFormat::Unknown && ccb.width != 0) {
-        draw_unpacked_cel(ccb);
-        return;
-    }
-    if (ccb.format == CelFormat::Unknown) {
-        return;
-    }
-    if (ccb.width == 0 || ccb.height == 0) {
+    if (ccb.format == CelFormat::Unknown || ccb.width == 0 || ccb.height == 0) {
         return;
     }
     if (ccb.width > kMaxCelDimension || ccb.height > kMaxCelDimension) {
         return;
     }
-
-    // Row origin, 16.16. Everything below is incremental: the source position
-    // advances by adding deltas, never by multiplying per pixel. That is what
-    // keeps the inner loop a straight walk the compiler can vectorise, and it
-    // is the single most important difference from the interpreter-style
-    // rasteriser this core replaces.
-    s32 row_x = ccb.x;
-    s32 row_y = ccb.y;
-
-    // The horizontal step itself changes as rows advance, which is what turns
-    // the mapped rectangle into a general quad.
-    s32 step_x = ccb.hdx;
-    s32 step_y = ccb.hdy;
-
-    // How far one source row advances the destination. Constant for the whole
-    // cel, so it is computed once.
-    const u32 vertical_span = footprint_steps(ccb.vdx, ccb.vdy);
-
-    for (u32 sy = 0; sy < ccb.height; ++sy) {
-        s32 px = row_x;
-        s32 py = row_y;
-
-        // Each source pixel covers a parallelogram of destination pixels, given
-        // by the horizontal and vertical step vectors. When a cel is magnified
-        // that area is larger than one pixel, and writing a single destination
-        // pixel per source pixel leaves the picture full of holes — a magnified
-        // sprite comes out as a grid of dots rather than a solid shape.
-        //
-        // So the footprint is filled. The step counts are derived from the step
-        // vectors, which means a 1:1 cel costs exactly one write per pixel and
-        // only magnified cels pay more — and what they pay is proportional to
-        // the destination area, which is the work that actually has to happen.
-        const u32 horizontal_span = footprint_steps(step_x, step_y);
-
-        for (u32 sx = 0; sx < ccb.width; ++sx) {
-            const u16 pixel = sample(ccb, sx, sy);
-
-            // Colour zero is transparent unless the cel says otherwise. This is
-            // why sprites have holes in them rather than black boxes.
-            // TODO(madam): confirm which flag overrides this.
-            plot_footprint(ccb, px, py, step_x, step_y,
-                           horizontal_span, vertical_span, pixel);
-
-            px += step_x;
-            py += step_y;
-        }
-
-        row_x += ccb.vdx;
-        row_y += ccb.vdy;
-        step_x += ccb.hddx;
-        step_y += ccb.hddy;
+    begin_cel(ccb);
+    if ((ccb.flags & kCcbPacked) != 0) {
+        draw_packed_cel(ccb);
+    } else {
+        draw_unpacked_cel(ccb);
     }
-
-    ++stats_.cels_drawn;
 }
 
 // Walk from NEXTCCB, which is where the hardware starts and where it leaves

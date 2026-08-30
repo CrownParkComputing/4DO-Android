@@ -85,6 +85,7 @@ private:
     u32 bit_ = 0;
 };
 
+#if RETRO3DO_TRACING
 // A register trace, off unless MADAMLOG names a file. Same idea as the CLIO
 // one: comparing the sequence against a machine known to work is the quickest
 // way to find a register nobody is driving.
@@ -97,6 +98,7 @@ const long g_madam_log_limit = [] {
     const char* limit = std::getenv("MADAMLOGMAX");
     return limit != nullptr ? std::strtol(limit, nullptr, 10) : 200000L;
 }();
+#endif
 
 unsigned bits_per_pixel(CelFormat format) {
     switch (format) {
@@ -226,10 +228,12 @@ void Madam::note_write(u32 offset, u32 value) {
 
 void Madam::write(u32 offset, u32 value) {
     offset &= (kMadamWindowSize - 1);
+#if RETRO3DO_TRACING
     if (g_madam_log != nullptr && g_madam_log_count < g_madam_log_limit) {
         std::fprintf(g_madam_log, "W %04X %08X\n", offset, value);
         ++g_madam_log_count;
     }
+#endif
     note_write(offset, value);
     u32 channel = 0;
     bool is_length = false;
@@ -666,7 +670,9 @@ void Madam::run_cel_engine() {
 
 namespace {
 
-// The walk, one line per cel, off unless CELLOG names a file. A list that
+// The walk, one line per cel, off unless CELLOG names a file.
+// Cheap enough to leave in: a cel is thousands of pixels, so one branch per
+// cel does not show up next to the drawing. A list that
 // stops one cel in looks identical from the outside to a list that only had
 // one cel in it, and only the flags tell them apart.
 std::FILE* const g_cel_log = [] {

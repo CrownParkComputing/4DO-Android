@@ -10,6 +10,27 @@ if(NOT CMAKE_BUILD_TYPE AND NOT CMAKE_CONFIGURATION_TYPES)
 endif()
 
 option(RETRO3DO_BUILD_TESTS "Build the host test suite" ON)
+
+# Instruction and register traces. These are how the hardware faults in this
+# core were found and they are worth keeping, but the PC trace sits in the
+# instruction loop, so it is compiled out unless asked for rather than left as
+# a branch every instruction executes.
+option(RETRO3DO_TRACING "Compile in the PCTRACE/CLIOLOG/MADAMLOG hooks" OFF)
+
+# Link-time optimisation. Worth about thirteen per cent on the emulator loop,
+# which matters because the handheld this targets has nothing like the headroom
+# a desktop does. Checked rather than assumed: some toolchains report support
+# and then fail at link.
+option(RETRO3DO_LTO "Link-time optimisation in optimised builds" ON)
+if(RETRO3DO_LTO AND NOT CMAKE_BUILD_TYPE STREQUAL "Debug")
+    include(CheckIPOSupported)
+    check_ipo_supported(RESULT RETRO3DO_IPO_OK OUTPUT RETRO3DO_IPO_WHY)
+    if(RETRO3DO_IPO_OK)
+        set(CMAKE_INTERPROCEDURAL_OPTIMIZATION ON)
+    else()
+        message(STATUS "Link-time optimisation unavailable: ${RETRO3DO_IPO_WHY}")
+    endif()
+endif()
 option(RETRO3DO_USE_SYSTEM_SDL "Link the system SDL3 instead of the vendored one" OFF)
 
 # ---------------------------------------------------------------------------
@@ -58,6 +79,10 @@ add_library(retro3do_core STATIC
     src/core/vdlp.cpp
     src/core/xbus.cpp
 )
+if(RETRO3DO_TRACING)
+    target_compile_definitions(retro3do_core PUBLIC RETRO3DO_TRACING=1)
+endif()
+
 target_include_directories(retro3do_core PUBLIC src)
 target_link_libraries(retro3do_core PRIVATE chdr-static)
 

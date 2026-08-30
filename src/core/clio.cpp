@@ -306,6 +306,7 @@ namespace {
 // A register trace, off unless CLIOLOG names a file. Comparing this sequence
 // against a known-good machine's is the only practical way to find where a
 // driver stopped believing us.
+#if RETRO3DO_TRACING
 std::FILE* const g_clio_log = [] {
     const char* path = std::getenv("CLIOLOG");
     return path != nullptr ? std::fopen(path, "w") : nullptr;
@@ -326,7 +327,11 @@ const long g_clio_log_limit = [] {
     return limit != nullptr ? std::strtol(limit, nullptr, 10) : 200000L;
 }();
 long g_clio_log_count = 0;
+#endif
 void log_access(char kind, u32 offset, u32 value, u32 pc) {
+#if !RETRO3DO_TRACING
+    (void)kind; (void)offset; (void)value; (void)pc;
+#else
     std::FILE* file = g_clio_log;
     if (file == nullptr || g_clio_log_count >= g_clio_log_limit) {
         return;
@@ -337,6 +342,7 @@ void log_access(char kind, u32 offset, u32 value, u32 pc) {
     }
     std::fprintf(file, "%c %04X %08X %08X\n", kind, offset & 0xffffu, value, pc);
     ++g_clio_log_count;
+#endif
 }
 }  // namespace
 

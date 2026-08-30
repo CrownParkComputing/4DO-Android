@@ -5,6 +5,7 @@
 // show up as an occasional flickering band, which is easy to blame on a display
 // driver and hard to trace back.
 #include <atomic>
+#include <chrono>
 #include <thread>
 
 #include "core/frame_mailbox.h"
@@ -152,9 +153,19 @@ TEST(a_frame_is_never_seen_half_written) {
         }
     });
 
-    for (int i = 0; i < 20000; ++i) {
+    // Wait for frames rather than for iterations. A fixed spin count can
+    // finish before the producer thread is ever scheduled, which leaves the
+    // test passing vacuously on a slow machine and failing outright on a fast
+    // one - the deadline is a safety net, not the exit condition.
+    constexpr int kWantFrames = 200;
+    const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(10);
+    while (seen.load() < kWantFrames &&
+           std::chrono::steady_clock::now() < deadline) {
         const u32* frame = mailbox.acquire();
-        if (frame == nullptr) continue;
+        if (frame == nullptr) {
+            std::this_thread::yield();
+            continue;
+        }
         u32 value = 0;
         if (!uniform(frame, kPixels, &value)) {
             torn.fetch_add(1);
@@ -167,7 +178,7 @@ TEST(a_frame_is_never_seen_half_written) {
 
     CHECK_EQ(torn.load(), 0);
     // The test is only meaningful if frames actually got through.
-    CHECK(seen.load() > 0);
+    CHECK_EQ(seen.load(), kWantFrames);
 }
 
 TEST(frames_only_ever_go_forwards) {

@@ -417,6 +417,7 @@ u32 Arm60::execute(const Decoded& d) {
     }
 }
 
+#if RETRO3DO_TRACING
 namespace {
 // A raw stream of executed addresses, off unless PCTRACE names a file. Diffing
 // this against a machine known to work is how you find where two otherwise
@@ -439,14 +440,17 @@ const u64 g_pc_trace_skip = [] {
 }();
 u64 g_pc_trace_seen = 0;
 }  // namespace
+#endif
 
 u32 Arm60::step() {
     const u32 address = regs_[15];
+#if RETRO3DO_TRACING
     if (g_pc_trace != nullptr) {
         if (g_pc_trace_seen++ >= g_pc_trace_skip) {
             std::fwrite(&address, 4, 1, g_pc_trace);
         }
     }
+#endif
     if (exec_map_ != nullptr && address < 0x00100000u) {
         const u32 word = address >> 2;
         exec_map_[word >> 3] |= static_cast<u8>(1u << (word & 7u));

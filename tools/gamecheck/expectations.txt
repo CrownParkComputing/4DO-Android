@@ -22,34 +22,32 @@
 # Status, honestly. "Matches reference" means the machine this was ported from
 # does the same thing with the same dump, so the shortfall is not ours alone.
 #
-#   Battle Chess          gameplay - board, pieces, the lot
+#   Alone in the Dark     its animated intro, over a million cels
+#   Flashback             gameplay, though the palette is not right yet
+#   Killing Time          its title menu, all but pixel-identical to the
+#                         reference bar some artefacts on the menu text
+#   PGA Tour 96           credits, clean
+#   Alone in the Dark 2   drawing, mid-transition
+#   Wing Commander III    drawing
+#   Battle Chess          its publisher splash. Cel count matches the
+#                         reference to within two per cent, so this is where
+#                         the title gets to in five minutes, not where we
+#                         stop it - it reaches its board given longer.
 #   BattleSport           BIOS shell, "Insert CD". MATCHES REFERENCE.
 #   Road Rash             BIOS shell, "Insert CD". MATCHES REFERENCE.
 #   Doom                  BIOS shell - the dump is bad, chdman rejects it too
-#   Flashback             title screen
-#   Alone in the Dark     a drawn screen
-#   Need for Speed        draws, but stops early
-#   Alone in the Dark 2   mounts and reads, draws nothing
-#   Killing Time          mounts and reads heavily, draws nothing
-#   PGA Tour 96           mounts and reads, draws nothing
-#   Wing Commander III    mounts and reads, draws nothing
+#   Need for Speed        barely draws, stops early. Still to diagnose.
 #   Wing Commander III d2 will not open at all - suspect a bad dump
 #
-# The titles that mount but never draw are the ones expected to move when the
-# DSP lands. Several will need their own work besides.
+# Eleven of twelve draw. The one that does not is a bad file.
 
-Battle Chess                  |  55000 | 1200 | 55000
-BattleSport                   | 150000 |  600 | 65000
-Road Rash                     | 150000 |  600 | 65000
-Doom                          | 150000 |  600 | 65000
-Flashback                     |      2 |    6 | 12000
-Alone in the Dark (USA)       |      1 |    4 | 15000
-Road & Track Presents         |     30 |    3 |   200
-
-# Titles that mount but draw nothing yet. The floor records that they still
-# reach the disc, which is worth protecting on its own - it is the difference
-# between a mount bug and a rendering one.
-Alone in the Dark 2           |      0 |    2 |     0
-Killing Time                  |      0 |    2 |     0
-PGA Tour 96                   |      0 |    2 |     0
-Wing Commander III            |      0 |    2 |     0
+Alone in the Dark (USA)       | 1200000 |  600 | 55000
+Alone in the Dark 2           |    7000 | 1400 | 55000
+Battle Chess                  |    4500 |  700 | 35000
+BattleSport                   |  150000 |  700 | 65000
+Doom                          |  150000 |  700 | 65000
+Flashback                     |   95000 | 1400 | 65000
+Killing Time                  |  110000 |  700 | 65000
+PGA Tour 96                   |  100000 | 1700 | 65000
+Road & Track Presents         |      30 |    4 |  8000
+Wing Commander III            |     240 |  400 | 45000

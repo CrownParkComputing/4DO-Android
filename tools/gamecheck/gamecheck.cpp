@@ -92,6 +92,9 @@ Result run(const fs::path& bios, const fs::path& disc, int frames,
     std::vector<u32> best_frame;
     int best_width = 0;
     int best_height = 0;
+    std::vector<u32> last_frame;
+    int last_width = 0;
+    int last_height = 0;
 
     const auto started = std::chrono::steady_clock::now();
     for (int frame = 0; frame < frames; ++frame) {
@@ -111,6 +114,17 @@ Result run(const fs::path& bios, const fs::path& disc, int frames,
         // run lands wherever the title happened to be, which for a
         // double-buffered game is as likely to be the blank half as the drawn
         // one.
+        //
+        // The final frame is kept as well, because "busiest" is not the same
+        // as "representative": a title fading in has more lit pixels early,
+        // when it is still dark, than it does once the fade finishes. Comparing
+        // the busiest frame against another machine's last one is a good way to
+        // convince yourself of a bug that is not there.
+        if (frame == frames - 1) {
+            last_width = image.width;
+            last_height = image.height;
+            last_frame.assign(image.pixels, image.pixels + count);
+        }
         if (lit > result.pixels) {
             result.pixels = lit;
             best_width = image.width;
@@ -126,19 +140,27 @@ Result run(const fs::path& bios, const fs::path& disc, int frames,
     result.cels = console.madam().total_cels_drawn();
     result.screens = screens.size();
 
-    if (!shot_dir.empty() && !best_frame.empty()) {
+    if (!shot_dir.empty()) {
         std::error_code ignored;
         fs::create_directories(shot_dir, ignored);
-        const fs::path out = shot_dir / (result.name + ".ppm");
-        if (std::FILE* file = std::fopen(out.string().c_str(), "wb")) {
-            std::fprintf(file, "P6\n%d %d\n255\n", best_width, best_height);
-            for (u32 pixel : best_frame) {
-                std::fputc((pixel >> 16) & 0xff, file);
-                std::fputc((pixel >> 8) & 0xff, file);
-                std::fputc(pixel & 0xff, file);
+        const auto write = [&](const fs::path& out, const std::vector<u32>& pixels,
+                               int w, int h) {
+            if (pixels.empty()) {
+                return;
             }
-            std::fclose(file);
-        }
+            if (std::FILE* file = std::fopen(out.string().c_str(), "wb")) {
+                std::fprintf(file, "P6\n%d %d\n255\n", w, h);
+                for (u32 pixel : pixels) {
+                    std::fputc((pixel >> 16) & 0xff, file);
+                    std::fputc((pixel >> 8) & 0xff, file);
+                    std::fputc(pixel & 0xff, file);
+                }
+                std::fclose(file);
+            }
+        };
+        write(shot_dir / (result.name + ".ppm"), best_frame, best_width, best_height);
+        write(shot_dir / (result.name + " (final).ppm"), last_frame, last_width,
+              last_height);
     }
     return result;
 }

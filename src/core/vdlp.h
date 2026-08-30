@@ -119,6 +119,12 @@ public:
                    : 0u;
     }
 
+    // The output colour table as it stands. For diagnosis: a wrong table
+    // looks exactly like a wrong palette in the game data.
+    u8 clut_red(u32 slot) const { return clut_red_[slot & 31]; }
+    u8 clut_green(u32 slot) const { return clut_green_[slot & 31]; }
+    u8 clut_blue(u32 slot) const { return clut_blue_[slot & 31]; }
+
     // Number of VDL entries followed on the last field. Zero means the list was
     // empty or did not look like a list, which is the symptom to look for when
     // a game shows nothing.

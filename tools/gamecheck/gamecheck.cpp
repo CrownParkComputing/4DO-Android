@@ -156,31 +156,55 @@ std::map<std::string, Expectation> load_expectations(const fs::path& path) {
         if (line[0] == '#' || line[0] == '\n') {
             continue;
         }
-        char name[256] = {};
-        unsigned long long cels = 0;
-        unsigned long screens = 0;
-        unsigned long pixels = 0;
-        if (std::sscanf(line, "%255[^|]|%llu|%lu|%lu", name, &cels, &screens,
-                        &pixels) == 4) {
-            std::string key(name);
-            while (!key.empty() && key.back() == ' ') {
-                key.pop_back();
+        // Split on the separator rather than scanning a format. A format with
+        // literal pipes in it does not tolerate spaces around them, and a line
+        // that fails to parse is skipped in silence - which reads exactly like
+        // a title having no expectation at all, and quietly turns the whole
+        // file off.
+        std::vector<std::string> fields;
+        const std::string text(line);
+        size_t start = 0;
+        while (start <= text.size()) {
+            const size_t bar = text.find('|', start);
+            std::string field = text.substr(
+                start, bar == std::string::npos ? std::string::npos : bar - start);
+            const size_t first = field.find_first_not_of(" \t\r\n");
+            const size_t last = field.find_last_not_of(" \t\r\n");
+            fields.push_back(first == std::string::npos
+                                 ? std::string()
+                                 : field.substr(first, last - first + 1));
+            if (bar == std::string::npos) {
+                break;
             }
-            expectations[key] = Expectation{cels, screens, static_cast<int>(pixels)};
+            start = bar + 1;
         }
+        if (fields.size() != 4 || fields[0].empty()) {
+            std::fprintf(stderr, "gamecheck: ignoring malformed line: %s", line);
+            continue;
+        }
+        expectations[fields[0]] =
+            Expectation{std::strtoull(fields[1].c_str(), nullptr, 10),
+                        std::strtoul(fields[2].c_str(), nullptr, 10),
+                        static_cast<int>(std::strtol(fields[3].c_str(), nullptr, 10))};
     }
     std::fclose(file);
     return expectations;
 }
 
+// Longest prefix wins. "Alone in the Dark" is a prefix of "Alone in the Dark 2"
+// as well as of itself, and taking the first match in name order would give
+// the sequel the original's floor.
 const Expectation* find(const std::map<std::string, Expectation>& expectations,
                         const std::string& name) {
+    const Expectation* best = nullptr;
+    size_t best_length = 0;
     for (const auto& entry : expectations) {
-        if (name.rfind(entry.first, 0) == 0) {
-            return &entry.second;
+        if (name.rfind(entry.first, 0) == 0 && entry.first.size() >= best_length) {
+            best = &entry.second;
+            best_length = entry.first.size();
         }
     }
-    return nullptr;
+    return best;
 }
 
 int usage() {

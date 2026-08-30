@@ -1,0 +1,51 @@
+# What each title reaches today, as a floor.
+#
+# These are NOT targets. They are a record of where the emulator got to on a
+# twenty-thousand-frame headless run, written down so that losing ground is a
+# test failure rather than something someone notices by eye three weeks later.
+# A title that does better than its line is not a failure; a title that does
+# worse is a regression.
+#
+# Raise a line when a title genuinely improves. Never lower one to make a run
+# green - a lowered floor is a bug report deleted.
+#
+# Format:  name prefix | cels | distinct screens | busiest frame's lit pixels
+#
+# These numbers are for a TWENTY THOUSAND frame run. A shorter run will fail
+# them, which is correct rather than a bug in the file: several titles take
+# well over a minute of emulated time to reach anything.
+#
+# Run with:
+#   gamecheck <bios> <library> --frames 20000 \
+#             --expect tools/gamecheck/expectations.txt
+#
+# Status, honestly:
+#
+#   Battle Chess          reaches gameplay - board, pieces, the lot
+#   Flashback             reaches its title screen
+#   Alone in the Dark     reaches a drawn screen
+#   Need for Speed        draws, but barely - stops early
+#   Alone in the Dark 2   mounts and reads, draws nothing
+#   Killing Time          mounts and reads heavily, draws nothing
+#   PGA Tour 96           mounts and reads, draws nothing
+#   Wing Commander III    mounts and reads, draws nothing
+#   BattleSport           never gets a sector off the disc
+#   Road Rash             never gets a sector off the disc
+#   Doom                  the dump is bad - chdman rejects it too
+#
+# The four that draw are the ones the audio interrupt unblocked. The rest are
+# expected to move when the DSP lands, and several of them will need their own
+# work besides.
+
+Battle Chess                  | 55000 | 1200 | 55000
+Flashback                     |     2 |    6 | 12000
+Alone in the Dark (USA)       |     1 |    4 | 15000
+Road & Track Presents         |    30 |    3 |   200
+
+# Titles that mount but draw nothing yet. The floor records that they still
+# reach the disc, which is worth protecting on its own - it is the difference
+# between a mount bug and a rendering one.
+Alone in the Dark 2           |     0 |    2 |     0
+Killing Time                  |     0 |    2 |     0
+PGA Tour 96                   |     0 |    2 |     0
+Wing Commander III            |     0 |    2 |     0

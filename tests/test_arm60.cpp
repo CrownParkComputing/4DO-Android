@@ -388,3 +388,31 @@ TEST(nvram_stores_one_byte_per_word) {
     bus.write32(kNvramBase + kNvramWindow - 4, 0xCCu);
     CHECK_EQ(bus.read32(kNvramBase + kNvramWindow - 4), 0xCCu);
 }
+
+TEST(low_memory_reads_rom_until_the_first_write_to_it) {
+    // The machine comes up with ROM overlaid on the low memory: the ROM shadows
+    // itself down there, writes to it, and carries on from the DRAM underneath.
+    // It is the WRITE that removes the overlay, not any control register -
+    // driving it from a control bit instead kills the boot in 197 instructions.
+    Bus bus;
+    std::vector<u8> rom(kRomSize, 0);
+    rom[0] = 0xDE; rom[1] = 0xAD; rom[2] = 0xBE; rom[3] = 0xEF;
+    bus.load_bios(rom.data(), rom.size());
+
+    CHECK(bus.rom_overlay());
+    CHECK_EQ(bus.read32(0), 0xDEADBEEFu);
+
+    // Writing anywhere in the low range reveals DRAM from then on.
+    bus.write32(0x1000u, 0x12345678u);
+    CHECK(!bus.rom_overlay());
+    CHECK_EQ(bus.read32(0x1000u), 0x12345678u);
+    CHECK_EQ(bus.read32(0), 0u);          // DRAM, not the ROM's first word
+}
+
+TEST(nvram_answers_at_its_mirror_too) {
+    // A second copy sits 0x20000 higher.
+    Bus bus;
+    bus.write32(kNvramBase + 8, 0x5Au);
+    CHECK_EQ(bus.read32(kNvramBase + 8), 0x5Au);
+    CHECK_EQ(bus.read32(kNvramBase + kNvramMirror + 8), 0x5Au);
+}

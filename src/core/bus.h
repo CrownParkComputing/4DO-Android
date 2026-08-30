@@ -51,10 +51,14 @@ enum : u32 {
     // 32-bit word - byte n lives at base + n*4. Mapping it flat instead makes
     // the machine see four times as much NVRAM as exists, with every byte in
     // the wrong place.
+    // A second copy answers 0x20000 higher; the register map lists it as "a
+    // mirror of the above" and MAME maps it with .mirror(0x20000).
+    kNvramMirror = 0x00020000,
     kNvramBase   = 0x03140000,
     kNvramSize   = 32u * 1024,          // real storage
     kNvramStride = 4u,                  // bytes of address space per stored byte
     kNvramWindow = kNvramSize * kNvramStride,
+    kNvramSpan   = kNvramMirror + kNvramWindow,
 
     // SPORT: the VRAM serial port, which does fast page copies and clears.
     //
@@ -76,7 +80,7 @@ enum : u32 {
     // stray access anywhere in it is treated as a page copy - and the machine
     // does make them, repeatedly, near the top of the region. Under the real
     // memory map that turns into 142 million page copies and looks like a hang.
-    kSportSize = 0x00006000,
+    kSportSize = 0x00010000,
 
     kMadamBase = 0x03300000,        // confirmed by the boot ROM
     kMadamSize = 0x00100000,
@@ -182,7 +186,19 @@ public:
     // drop is the hardest kind of gap to find, so they are counted.
     u64 sport_accesses() const { return sport_accesses_; }
 
+    // Whether the low memory still reads ROM. Cleared by the first write there.
+    bool rom_overlay() const { return rom_overlay_; }
+
 private:
+    // At reset the low two megabytes read ROM rather than DRAM, and the FIRST
+    // WRITE anywhere in that range takes the overlay away for good - the ROM
+    // shadows itself down there, then writes to it and carries on running from
+    // the DRAM underneath.
+    //
+    // It is a write that removes it, not a register: guessing at a control bit
+    // instead kills the boot after 197 instructions.
+    bool rom_overlay_ = true;
+
     std::vector<u8> dram_;
     std::vector<u8> vram_;
     std::vector<u8> rom_;

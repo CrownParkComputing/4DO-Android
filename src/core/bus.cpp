@@ -46,6 +46,7 @@ void Bus::reset() {
     std::fill(vram_.begin(), vram_.end(), u8{0});
     write_watch_.clear();
     sport_accesses_ = 0;
+    rom_overlay_ = true;
     // ROM and NVRAM deliberately survive a reset, as they do in hardware.
 }
 
@@ -68,6 +69,9 @@ u32 Bus::read32(u32 address) {
     const u32 addr = address & ~u32{3};
 
     if (addr < kDramSize) {
+        if (rom_overlay_) {
+            return addr < kRomSize ? load_be32(&rom_[addr]) : 0u;
+        }
         return load_be32(&dram_[addr]);
     }
     if (addr >= kVramBase && addr < kVramBase + kVramSize) {
@@ -76,9 +80,9 @@ u32 Bus::read32(u32 address) {
     if (addr >= kRomBase && addr < kRomBase + kRomSize) {
         return load_be32(&rom_[addr - kRomBase]);
     }
-    if (addr >= kNvramBase && addr < kNvramBase + kNvramWindow) {
+    if (addr >= kNvramBase && addr < kNvramBase + kNvramSpan) {
         // One stored byte per word, on the low byte.
-        return nvram_[(addr - kNvramBase) / kNvramStride];
+        return nvram_[((addr - kNvramBase) % kNvramMirror) / kNvramStride];
     }
     if (clio_ != nullptr && addr >= kClioBase && addr < kClioBase + kClioSize) {
         return clio_->read(addr - kClioBase);
@@ -99,6 +103,9 @@ u32 Bus::read32(u32 address) {
 u16 Bus::read16(u32 address) {
     const u32 addr = address & ~u32{1};
     if (addr < kDramSize) {
+        if (rom_overlay_) {
+            return addr < kRomSize ? load_be16(&rom_[addr]) : u16{0};
+        }
         return load_be16(&dram_[addr]);
     }
     if (addr >= kVramBase && addr < kVramBase + kVramSize) {
@@ -121,6 +128,9 @@ u16 Bus::read16(u32 address) {
 
 u8 Bus::read8(u32 address) {
     if (address < kDramSize) {
+        if (rom_overlay_) {
+            return address < kRomSize ? rom_[address] : u8{0};
+        }
         return dram_[address];
     }
     if (address >= kVramBase && address < kVramBase + kVramSize) {
@@ -129,9 +139,9 @@ u8 Bus::read8(u32 address) {
     if (address >= kRomBase && address < kRomBase + kRomSize) {
         return rom_[address - kRomBase];
     }
-    if (address >= kNvramBase && address < kNvramBase + kNvramWindow) {
-        return ((address - kNvramBase) % kNvramStride) == kNvramStride - 1
-                   ? nvram_[(address - kNvramBase) / kNvramStride]
+    if (address >= kNvramBase && address < kNvramBase + kNvramSpan) {
+        return (((address - kNvramBase) % kNvramMirror) % kNvramStride) == kNvramStride - 1
+                   ? nvram_[((address - kNvramBase) % kNvramMirror) / kNvramStride]
                    : 0u;
     }
     if (is_device(address)) {
@@ -148,6 +158,9 @@ u32 Bus::fetch32(u32 address) {
         return load_be32(&rom_[addr - kRomBase]);
     }
     if (addr < kDramSize) {
+        if (rom_overlay_) {
+            return addr < kRomSize ? load_be32(&rom_[addr]) : 0u;
+        }
         return load_be32(&dram_[addr]);
     }
     if (addr >= kVramBase && addr < kVramBase + kVramSize) {
@@ -163,6 +176,7 @@ void Bus::write32(u32 address, u32 value) {
     const u32 addr = address & ~u32{3};
 
     if (addr < kDramSize) {
+        rom_overlay_ = false;
         store_be32(&dram_[addr], value);
         write_watch_.note(addr, 4);
         return;
@@ -171,8 +185,8 @@ void Bus::write32(u32 address, u32 value) {
         store_be32(&vram_[addr - kVramBase], value);
         return;
     }
-    if (addr >= kNvramBase && addr < kNvramBase + kNvramWindow) {
-        nvram_[(addr - kNvramBase) / kNvramStride] = static_cast<u8>(value & 0xffu);
+    if (addr >= kNvramBase && addr < kNvramBase + kNvramSpan) {
+        nvram_[((addr - kNvramBase) % kNvramMirror) / kNvramStride] = static_cast<u8>(value & 0xffu);
         return;
     }
     if (clio_ != nullptr && addr >= kClioBase && addr < kClioBase + kClioSize) {
@@ -194,6 +208,7 @@ void Bus::write32(u32 address, u32 value) {
 void Bus::write16(u32 address, u16 value) {
     const u32 addr = address & ~u32{1};
     if (addr < kDramSize) {
+        rom_overlay_ = false;
         store_be16(&dram_[addr], value);
         write_watch_.note(addr, 2);
         return;
@@ -215,6 +230,7 @@ void Bus::write16(u32 address, u16 value) {
 
 void Bus::write8(u32 address, u8 value) {
     if (address < kDramSize) {
+        rom_overlay_ = false;
         dram_[address] = value;
         write_watch_.note(address, 1);
         return;
@@ -223,9 +239,9 @@ void Bus::write8(u32 address, u8 value) {
         vram_[address - kVramBase] = value;
         return;
     }
-    if (address >= kNvramBase && address < kNvramBase + kNvramWindow) {
-        if (((address - kNvramBase) % kNvramStride) == kNvramStride - 1) {
-            nvram_[(address - kNvramBase) / kNvramStride] = value;
+    if (address >= kNvramBase && address < kNvramBase + kNvramSpan) {
+        if ((((address - kNvramBase) % kNvramMirror) % kNvramStride) == kNvramStride - 1) {
+            nvram_[((address - kNvramBase) % kNvramMirror) / kNvramStride] = value;
         }
         return;
     }

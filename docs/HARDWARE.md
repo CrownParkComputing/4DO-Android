@@ -1082,7 +1082,28 @@ takes a different path, because it never looks.
 **It is not an interrupt problem.** The machine takes about 126 FIQs a frame,
 and the real service routine reads the pending register thousands of times.
 
-## The low megabyte is banked, and this emulator does not bank it
+## The ROM overlay on low memory
+
+At reset the low two megabytes read ROM rather than DRAM. The ROM shadows itself
+down there, writes to it, and carries on running from the DRAM underneath.
+
+What removes the overlay is the FIRST WRITE anywhere in that range - not a
+control register. MAME models it as a view over the RAM whose write handler
+disables the view, and that detail matters: driving it from CLIO's ROM-bank bit
+instead killed the boot after 197 instructions and failed thirty-four tests.
+
+The same address map settles several other things, all now implemented:
+
+| Region | What it is |
+|---|---|
+| `0x00000000-0x001FFFFF` | DRAM, with the ROM overlay above it |
+| `0x00200000-0x003FFFFF` | VRAM |
+| `0x03140000-0x0315FFFF` | NVRAM, one byte per word, mirrored at +0x20000 |
+| `0x03200000-0x0320FFFF` | SPORT - 64 KiB, not the megabyte the region is listed as |
+| `0x03400000-0x03403FFF` | CLIO |
+| `0x0340C000-0x0340FFFF` | a separate device, which is what the reads at 0x0340C000 were |
+
+## Superseded: the low megabyte is banked
 
 Found by diffing execution maps. Both this emulator and a reference one run the
 SAME boot ROM, so the addresses they execute can be compared directly, and the

@@ -1082,6 +1082,28 @@ takes a different path, because it never looks.
 **It is not an interrupt problem.** The machine takes about 126 FIQs a frame,
 and the real service routine reads the pending register thousands of times.
 
+## The low megabyte is banked, and this emulator does not bank it
+
+Found by diffing execution maps. Both this emulator and a reference one run the
+SAME boot ROM, so the addresses they execute can be compared directly, and the
+first divergence is stark: this emulator executes 0x00000000-0x0000007C and the
+reference never does, while the reference executes 0x000001A0-0x000001DC and
+this one never does. Over four hundred frames the reference reaches 23,617
+distinct addresses to this emulator's 12,260.
+
+The cause is a feature that is simply absent here. MAME models address zero as a
+BANK DEVICE rather than plain memory, switched from CLIO, and the community
+register map names CLIO 0x84 bit 2 as the "ROM bank selector". So the low
+megabyte reads ROM at reset and the machine banks DRAM in there once it is
+ready - the ROM shadows itself into the addresses it is running from.
+
+A first attempt at implementing it made things much worse: the boot died at 197
+instructions and thirty-four tests failed, because everything here assumes DRAM
+is readable at zero from the start. So the polarity, or the moment the switch
+happens, or both, are not yet right. It is recorded rather than left in, because
+it is the clearest remaining structural difference between the two machines and
+it wants doing properly rather than quickly.
+
 ## What the CD conversation looks like
 
 The command set and reply shapes come from MAME's cr560b device

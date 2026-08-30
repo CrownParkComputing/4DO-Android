@@ -689,3 +689,24 @@ TEST(ejecting_reports_an_empty_drive_and_spinning_up_reloads_it) {
     // Spinning up closes the tray again - the other half of the handshake.
     CHECK_EQ(command(kCmdMotorOn), 0xe1u);
 }
+
+TEST(abort_is_one_byte_long_and_the_rest_are_seven) {
+    // ABORT interrupts a transfer that is already running, so a drive that
+    // waited for six more bytes before acting on it would never abort
+    // anything. And the six bytes that would have followed belong to the NEXT
+    // command: swallow them and every command after it is read one byte out of
+    // step, which looks like the drive answering the wrong questions.
+    Chip c;
+    c.clio.cdrom().set_disc_present(true);
+
+    c.clio.write(kClioXbusCommand, kCmdAbort);
+    CHECK_EQ(c.clio.cdrom().commands_received(), 1u);
+    CHECK_EQ(c.clio.cdrom().last_command(), kCmdAbort);
+
+    // The next command starts cleanly rather than continuing the abort.
+    for (int i = 0; i < 7; ++i) {
+        c.clio.write(kClioXbusCommand, i == 0 ? kCmdVersion : 0u);
+    }
+    CHECK_EQ(c.clio.cdrom().commands_received(), 2u);
+    CHECK_EQ(c.clio.cdrom().last_command(), kCmdVersion);
+}

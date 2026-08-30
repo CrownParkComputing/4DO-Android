@@ -429,8 +429,18 @@ void CdRomDevice::write_command(u8 byte) {
     // seven-byte command look like seven completed commands, so the reply FIFO
     // runs six bytes ahead of the conversation and every subsequent exchange
     // reads the previous command's answer.
+    // ABORT is the exception, and it is one byte long. It has to be: it is
+    // what the driver sends to interrupt a transfer that is already running,
+    // and a drive that waited for six more bytes before acting on it would
+    // never abort anything.
+    //
+    // Getting this wrong is not a lost abort. The six bytes that follow belong
+    // to the NEXT command, so they are swallowed as part of this one and every
+    // command after it is read one byte out of step - the machine goes on
+    // issuing perfectly good commands and the drive goes on answering
+    // perfectly good replies, to different questions.
     pending_.push_back(byte);
-    if (pending_.size() < kCommandBytes) {
+    if (pending_.size() < kCommandBytes && pending_.front() != kCmdAbort) {
         return;
     }
 

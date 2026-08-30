@@ -60,6 +60,7 @@ enum : u8 {
     kCmdMotorOff      = 0x03,
     kCmdEject         = 0x06,
     kCmdInject        = 0x07,
+    kCmdAbort         = 0x08,   // one byte, not seven
     kCmdReadStatus    = 0x05,
     kCmdSetMode       = 0x09,
     kCmdPlayMsf       = 0x0e,

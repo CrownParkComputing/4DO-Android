@@ -328,12 +328,21 @@ Ccb Madam::read_ccb(u32 address) const {
     ccb.x = static_cast<s32>(words[kCcbXWord]);
     ccb.y = static_cast<s32>(words[kCcbYWord]);
 
-    ccb.hdx  = static_cast<s32>(words[kCcbHdxWord]);
-    ccb.hdy  = static_cast<s32>(words[kCcbHdyWord]);
+    // The two step vectors are stored in DIFFERENT fixed-point formats, which
+    // is the sort of thing that reads as a scaling bug rather than a parsing
+    // one. The horizontal steps and their derivatives are 12.20; the vertical
+    // pair is already 16.16. Using the horizontal ones raw magnifies every cel
+    // sixteen times across, so a full-screen background lands as a smear a
+    // sixteenth of the way through its own artwork.
+    //
+    // The shift is arithmetic: these are signed, and a cel drawn right-to-left
+    // has a negative step.
+    ccb.hdx  = static_cast<s32>(words[kCcbHdxWord]) >> 4;
+    ccb.hdy  = static_cast<s32>(words[kCcbHdyWord]) >> 4;
     ccb.vdx  = static_cast<s32>(words[kCcbVdxWord]);
     ccb.vdy  = static_cast<s32>(words[kCcbVdyWord]);
-    ccb.hddx = static_cast<s32>(words[kCcbHddxWord]);
-    ccb.hddy = static_cast<s32>(words[kCcbHddyWord]);
+    ccb.hddx = static_cast<s32>(words[kCcbHddxWord]) >> 4;
+    ccb.hddy = static_cast<s32>(words[kCcbHddyWord]) >> 4;
 
     ccb.pixc = words[kCcbPixcWord];
     ccb.pre0 = words[kCcbPre0Word];

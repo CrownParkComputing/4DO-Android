@@ -27,9 +27,16 @@ constexpr u32 kPlutAt   = 0x3000;
 
 // Build a CCB with absolute pointers, which keeps the tests about the renderer
 // rather than about relative-pointer arithmetic (which has its own test).
+// The step vectors are given here in 16.16 throughout, because that is how it
+// is natural to think about them. The horizontal ones are stored as 12.20,
+// which is what the hardware reads, so this shifts them on the way in.
 void write_ccb(Bus& bus, u32 at, u32 flags, u32 source, u32 plut,
                s32 x, s32 y, s32 hdx, s32 hdy, s32 vdx, s32 vdy,
                u32 pre0, u32 pre1, s32 hddx = 0, s32 hddy = 0) {
+    hdx  <<= 4;
+    hdy  <<= 4;
+    hddx <<= 4;
+    hddy <<= 4;
     bus.write32(at + 0,  flags | kCcbLast | kCcbNpAbs | kCcbSpAbs | kCcbPpAbs);
     bus.write32(at + 4,  0);
     bus.write32(at + 8,  source);

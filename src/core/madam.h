@@ -240,6 +240,10 @@ public:
     // a register write; exposed directly so tests can drive it without going
     // through the register interface.
     void render_cel_list(u32 address);
+    void draw_packed_cel(const Ccb& ccb);
+    void plot_footprint(const Ccb& ccb, s32 px, s32 py, s32 step_x, s32 step_y,
+                        u32 horizontal_span, u32 vertical_span, u16 pixel);
+    u16  decode_pixel(const Ccb& ccb, u32 value) const;
     void run_cel_engine();
 
     // The rectangle cels are clipped to. Defaults to the whole visible field.

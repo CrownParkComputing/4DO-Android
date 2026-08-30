@@ -58,6 +58,33 @@ u32 cel_width_from_pre1(u32 pre1) {
 }
 
 // How many bits one source pixel occupies.
+// Reads a big-endian bitstream out of memory, most significant bit first,
+// which is the order the cel packer writes it in.
+class BitReader {
+public:
+    BitReader(Bus& bus, u32 base) : bus_(bus), base_(base) {}
+
+    u32 read(unsigned bits) {
+        u32 value = 0;
+        while (bits-- > 0) {
+            const u32 byte = bus_.read8(base_ + (bit_ >> 3));
+            const unsigned shift = 7u - (bit_ & 7u);
+            value = (value << 1) | ((byte >> shift) & 1u);
+            ++bit_;
+        }
+        return value;
+    }
+
+    // Where the reader has reached, as an address. Rounded down, which is what
+    // the end-of-row test wants: a packet that starts past the end is past it.
+    u32 address() const { return base_ + (bit_ >> 3); }
+
+private:
+    Bus& bus_;
+    u32 base_;
+    u32 bit_ = 0;
+};
+
 unsigned bits_per_pixel(CelFormat format) {
     switch (format) {
         case CelFormat::Indexed1: return 1;
@@ -322,6 +349,18 @@ Ccb Madam::read_ccb(u32 address) const {
 // ---------------------------------------------------------------------------
 // Sampling source pixels
 // ---------------------------------------------------------------------------
+// Turn one source value into a colour. Direct cels carry the colour already;
+// everything else is an index into the cel's own palette.
+u16 Madam::decode_pixel(const Ccb& ccb, u32 value) const {
+    if (ccb.format == CelFormat::Direct16) {
+        return static_cast<u16>(value);
+    }
+    Bus& bus = const_cast<Bus&>(bus_);
+    const u32 entry = ccb.plut_address + value * 2u;
+    return static_cast<u16>((static_cast<u16>(bus.read8(entry)) << 8) |
+                            bus.read8(entry + 1));
+}
+
 u16 Madam::sample(const Ccb& ccb, u32 sx, u32 sy) const {
     Bus& bus = const_cast<Bus&>(bus_);
     const unsigned bpp = bits_per_pixel(ccb.format);
@@ -373,7 +412,139 @@ void Madam::put_pixel(s32 x, s32 y, u16 pixel) {
 // ---------------------------------------------------------------------------
 // Drawing
 // ---------------------------------------------------------------------------
+// One source pixel covers a parallelogram of destination pixels, given by the
+// horizontal and vertical step vectors. When a cel is magnified that area is
+// larger than one pixel, and writing a single destination pixel per source
+// pixel leaves the picture full of holes - a magnified sprite comes out as a
+// grid of dots rather than a solid shape.
+//
+// A 1:1 cel costs exactly one write per pixel; only magnified cels pay more,
+// and what they pay is proportional to the destination area, which is the work
+// that actually has to happen.
+void Madam::plot_footprint(const Ccb& ccb, s32 px, s32 py, s32 step_x,
+                           s32 step_y, u32 horizontal_span, u32 vertical_span,
+                           u16 pixel) {
+    // Colour zero is transparent unless the cel says otherwise. This is why
+    // sprites have holes in them rather than black boxes.
+    if (pixel == 0) {
+        return;
+    }
+    if (horizontal_span == 1 && vertical_span == 1) {
+        put_pixel(px >> 16, py >> 16, pixel);
+        return;
+    }
+    for (u32 j = 0; j < vertical_span; ++j) {
+        const s32 oy = static_cast<s32>(
+            (static_cast<s64>(ccb.vdy) * j) / vertical_span);
+        const s32 ox = static_cast<s32>(
+            (static_cast<s64>(ccb.vdx) * j) / vertical_span);
+        for (u32 i = 0; i < horizontal_span; ++i) {
+            const s32 ix = static_cast<s32>(
+                (static_cast<s64>(step_x) * i) / horizontal_span);
+            const s32 iy = static_cast<s32>(
+                (static_cast<s64>(step_y) * i) / horizontal_span);
+            put_pixel((px + ix + ox) >> 16, (py + iy + oy) >> 16, pixel);
+        }
+    }
+}
+
+// A packed cel does not have a width. Its rows are a bitstream of packets and
+// each row ends where the packets say it does, so there is nothing to index
+// into and no rectangle to walk - which is why this cannot share the sampler.
+//
+// Each row opens with a length field giving the row's size in words, then runs
+// packets of a 2-bit type and a 6-bit count-less-one:
+//
+//   0  end of row
+//   1  literal    - `count` pixels follow, bpp bits each
+//   2  transparent- skip `count` pixels
+//   3  repeat     - one pixel follows and covers `count` positions
+//
+// Reading this as if it were raw pixels produces a screen of coloured noise
+// that looks like a palette fault rather than a format one.
+void Madam::draw_packed_cel(const Ccb& ccb) {
+    const unsigned bpp = bits_per_pixel(ccb.format);
+    if (bpp == 0 || ccb.height == 0 || ccb.height > kMaxCelDimension) {
+        return;
+    }
+
+    // The row-length field is one byte at low colour depths and two above,
+    // because a deeper row cannot describe its length in eight bits.
+    const unsigned length_bits = bpp < 8 ? 8u : 16u;
+
+    Bus& bus = bus_;
+    u32 row_data = ccb.source_address;
+
+    s32 row_x = ccb.x;
+    s32 row_y = ccb.y;
+    s32 step_x = ccb.hdx;
+    s32 step_y = ccb.hdy;
+    const u32 vertical_span = footprint_steps(ccb.vdx, ccb.vdy);
+
+    for (u32 row = 0; row < ccb.height; ++row) {
+        BitReader reader(bus, row_data);
+        const u32 length = reader.read(length_bits);
+
+        // The field counts words and excludes itself and one more, hence +2.
+        const u32 row_end = row_data + ((length + 2u) << 2);
+
+        s32 px = row_x;
+        s32 py = row_y;
+        const u32 horizontal_span = footprint_steps(step_x, step_y);
+
+        for (;;) {
+            u32 type = reader.read(2);
+
+            // Running past the row's declared end ends the row, whatever the
+            // bits happen to say. Without this a corrupt length runs the
+            // decoder through the whole of memory.
+            if (reader.address() >= row_end) {
+                type = 0;
+            }
+            const u32 count = reader.read(6) + 1u;
+
+            if (type == 0) {
+                break;
+            }
+            if (type == 2) {
+                px += step_x * static_cast<s32>(count);
+                py += step_y * static_cast<s32>(count);
+                continue;
+            }
+            if (type == 3) {
+                const u16 pixel = decode_pixel(ccb, reader.read(bpp));
+                for (u32 i = 0; i < count; ++i) {
+                    plot_footprint(ccb, px, py, step_x, step_y,
+                                   horizontal_span, vertical_span, pixel);
+                    px += step_x;
+                    py += step_y;
+                }
+                continue;
+            }
+            for (u32 i = 0; i < count; ++i) {
+                const u16 pixel = decode_pixel(ccb, reader.read(bpp));
+                plot_footprint(ccb, px, py, step_x, step_y,
+                               horizontal_span, vertical_span, pixel);
+                px += step_x;
+                py += step_y;
+            }
+        }
+
+        row_data = row_end;
+        row_x += ccb.vdx;
+        row_y += ccb.vdy;
+        step_x += ccb.hddx;
+        step_y += ccb.hddy;
+    }
+
+    ++stats_.cels_drawn;
+}
+
 void Madam::draw_cel(const Ccb& ccb) {
+    if ((ccb.flags & kCcbPacked) != 0) {
+        draw_packed_cel(ccb);
+        return;
+    }
     if (ccb.format == CelFormat::Unknown) {
         return;
     }
@@ -423,26 +594,8 @@ void Madam::draw_cel(const Ccb& ccb) {
             // Colour zero is transparent unless the cel says otherwise. This is
             // why sprites have holes in them rather than black boxes.
             // TODO(madam): confirm which flag overrides this.
-            if (pixel != 0) {
-                if (horizontal_span == 1 && vertical_span == 1) {
-                    put_pixel(px >> 16, py >> 16, pixel);
-                } else {
-                    for (u32 j = 0; j < vertical_span; ++j) {
-                        const s32 oy = static_cast<s32>(
-                            (static_cast<s64>(ccb.vdy) * j) / vertical_span);
-                        const s32 ox = static_cast<s32>(
-                            (static_cast<s64>(ccb.vdx) * j) / vertical_span);
-                        for (u32 i = 0; i < horizontal_span; ++i) {
-                            const s32 ix = static_cast<s32>(
-                                (static_cast<s64>(step_x) * i) / horizontal_span);
-                            const s32 iy = static_cast<s32>(
-                                (static_cast<s64>(step_y) * i) / horizontal_span);
-                            put_pixel((px + ix + ox) >> 16, (py + iy + oy) >> 16,
-                                      pixel);
-                        }
-                    }
-                }
-            }
+            plot_footprint(ccb, px, py, step_x, step_y,
+                           horizontal_span, vertical_span, pixel);
 
             px += step_x;
             py += step_y;
@@ -466,6 +619,7 @@ void Madam::run_cel_engine() {
 }
 
 namespace {
+
 // The walk, one line per cel, off unless CELLOG names a file. A list that
 // stops one cel in looks identical from the outside to a list that only had
 // one cel in it, and only the flags tell them apart.
@@ -501,8 +655,20 @@ void Madam::render_cel_list(u32 address) {
 
         if ((ccb.flags & kCcbSkip) == 0) {
             const u32 before = stats_.cels_drawn;
+            const u64 before_pixels = stats_.pixels_written;
             draw_cel(ccb);
             total_cels_drawn_ += stats_.cels_drawn - before;
+            if (g_cel_log != nullptr) {
+                std::fprintf(g_cel_log,
+                             "    drew=%u pixels=%llu packed=%d fmt=%d "
+                             "at=%d,%d hd=%d,%d vd=%d,%d\n",
+                             stats_.cels_drawn - before,
+                             (unsigned long long)(stats_.pixels_written - before_pixels),
+                             (ccb.flags & kCcbPacked) != 0 ? 1 : 0,
+                             static_cast<int>(ccb.format),
+                             ccb.x >> 16, ccb.y >> 16,
+                             ccb.hdx, ccb.hdy, ccb.vdx, ccb.vdy);
+            }
         }
 
         if (ccb.flags & kCcbLast) {

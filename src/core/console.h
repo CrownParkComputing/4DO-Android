@@ -80,6 +80,7 @@ public:
 private:
     void service_expansion_dma();
     void service_pbus_dma();
+    void tick_audio_interrupt(u32 cycles);
 
 public:
     // The controller state the machine will report on its next input scan.
@@ -114,6 +115,9 @@ private:
     Madam madam_;
     Pbus pbus_;
     Joypad joypad_;
+    // One interrupt per audio sample at 44.1 kHz, in CPU cycles.
+    static constexpr u32 kAudioInterruptPeriod = 12500000u / 44100u;
+    u32 audio_interrupt_accumulator_ = 0;
     Sport sport_;
     Disc  disc_;
     PadState  pads_;

@@ -649,3 +649,16 @@ TEST(the_secondary_bank_bit_always_reads_set_in_the_first_banks_enable) {
     c.clio.write(kClioIrq0Disable, 0xffffffffu);
     CHECK_EQ(c.clio.read(kClioIrq0Enable) & kIrqSecondaryBank, kIrqSecondaryBank);
 }
+
+TEST(the_audio_interrupt_arrives_without_a_dsp) {
+    // Standing in for the DSP until there is one. The interrupt matters more
+    // than the sound: the audio folio drives the frame clock everything else
+    // is sequenced against, and a machine that never raises it runs a title's
+    // opening logo and then stops.
+    Console console;
+    console.reset();
+    console.bus().write32(kClioBase + kClioIrq0Enable, kIrqAudioTimer);
+    console.run_frame();
+    CHECK_EQ(console.bus().read32(kClioBase + kClioIrq0Pending) & kIrqAudioTimer,
+             kIrqAudioTimer);
+}

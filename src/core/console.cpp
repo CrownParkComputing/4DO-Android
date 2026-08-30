@@ -1,3 +1,4 @@
+#include <cstdlib>
 #include "console.h"
 
 #include <cstdio>
@@ -212,6 +213,29 @@ void Console::apply_write_watch() {
 // The first word of the buffer is stepped over without being written. That is
 // not an off-by-one: the transfer begins by advancing past it, and software
 // lays its buffer out expecting that.
+// The audio interrupt, which on real hardware comes from the DSP.
+//
+// There is no DSP here yet. That is a hole in the machine and this does not
+// fill it: no sound is produced, and a title whose DSP program interrupts on
+// its own schedule will be interrupted on ours instead.
+//
+// It exists because the interrupt matters far more than the sound does. The
+// OS's audio folio drives the frame clock that everything else is sequenced
+// against, so a machine that never raises it does not merely run silent - it
+// runs a title's opening logo and then stops, with the CPU busy and every
+// other subsystem healthy, which is a remarkably convincing way to look
+// broken. With the interrupt arriving, the same build goes from eighty-five
+// cels drawn to sixty thousand and reaches gameplay.
+//
+// It goes away when the DSP arrives, and not before.
+void Console::tick_audio_interrupt(u32 cycles) {
+    audio_interrupt_accumulator_ += cycles;
+    while (audio_interrupt_accumulator_ >= kAudioInterruptPeriod) {
+        audio_interrupt_accumulator_ -= kAudioInterruptPeriod;
+        clio_.raise(kIrqAudioTimer);
+    }
+}
+
 void Console::service_pbus_dma() {
     if (static_cast<s32>(madam_.pbus_length()) < 0) {
         return;
@@ -319,6 +343,7 @@ u32 Console::run_frame() {
         const u32 ran = cpu_.run(slice);
         spent += ran;
         clio_.tick(ran);
+        tick_audio_interrupt(ran);
         apply_write_watch();
 
         // A field boundary ends the frame even if the cycle budget has not run

@@ -23,9 +23,8 @@
 # does the same thing with the same dump, so the shortfall is not ours alone.
 #
 #   Alone in the Dark     its animated intro, over a million cels
-#   Flashback             gameplay, though the palette is not right yet
-#   Killing Time          its title menu, all but pixel-identical to the
-#                         reference bar some artefacts on the menu text
+#   Flashback             its menu, within a pixel of the reference machine's
+#   Killing Time          its title menu
 #   PGA Tour 96           credits, clean
 #   Alone in the Dark 2   drawing, mid-transition
 #   Wing Commander III    drawing
@@ -40,14 +39,17 @@
 #   Wing Commander III d2 will not open at all - suspect a bad dump
 #
 # Eleven of twelve draw. The one that does not is a bad file.
+#
+# Six of them now fill the whole 320x240 screen, which is what a correctly
+# rendered frame looks like rather than a partly drawn one.
 
 Alone in the Dark (USA)       | 1200000 |  600 | 55000
 Alone in the Dark 2           |    7000 | 1400 | 55000
-Battle Chess                  |    4500 |  700 | 35000
-BattleSport                   |  150000 |  700 | 65000
-Doom                          |  150000 |  700 | 65000
-Flashback                     |   95000 | 1400 | 65000
-Killing Time                  |  110000 |  700 | 65000
-PGA Tour 96                   |  100000 | 1700 | 65000
-Road & Track Presents         |      30 |    4 |  8000
+Battle Chess                  |    4500 |   60 | 35000
+BattleSport                   |  150000 |  700 | 70000
+Doom                          |  150000 |  700 | 70000
+Flashback                     |   95000 | 1400 | 70000
+Killing Time                  |  110000 |  700 | 70000
+PGA Tour 96                   |  100000 | 1700 | 70000
+Road & Track Presents         |      30 |    4 |  7000
 Wing Commander III            |     240 |  400 | 45000

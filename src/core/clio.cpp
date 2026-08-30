@@ -329,11 +329,11 @@ void log_access(char kind, u32 offset, u32 value, u32 pc) {
     if (file == nullptr || g_clio_log_count >= g_clio_log_limit) {
         return;
     }
-    const u32 window = offset & 0xfffu;
+    const u32 window = offset & 0xffffu;
     if (window < g_clio_log_low || window >= g_clio_log_high) {
         return;
     }
-    std::fprintf(file, "%c %03X %08X %08X\n", kind, offset & 0xfff, value, pc);
+    std::fprintf(file, "%c %04X %08X %08X\n", kind, offset & 0xffffu, value, pc);
     ++g_clio_log_count;
 }
 }  // namespace
@@ -400,6 +400,8 @@ u32 Clio::read_impl(u32 offset) {
 
     switch (offset) {
         case kClioRevision:    return revision_;
+
+
         case kClioCsysBits:    return csys_bits_;
         case kClioVint0:       return vint0_line_;
         case kClioVint1:       return vint1_line_;
@@ -410,7 +412,17 @@ u32 Clio::read_impl(u32 offset) {
             return (scanline_ & kClioLineMask) |
                    (field_odd_ ? kClioFieldFlag : 0u);
         case kClioHCount:      return pixel_in_line_;
-        case kClioSeed:        return seed_;
+        // A hardware noise source, not a register that reads back what was
+        // written. Returning a constant is not a small inaccuracy to software
+        // that uses it to choose between equally valid paths - it makes the
+        // machine take the same branch for ever.
+        case kClioSeed: {
+            random_state_ += 0x9e3779b9u;
+            u32 z = random_state_;
+            z = (z ^ (z >> 16)) * 0x21f0aaadu;
+            z = (z ^ (z >> 15)) * 0x735a2d97u;
+            return z ^ (z >> 15);
+        }
 
         // Both ports of each pair read back the same value; they differ only in
         // what a WRITE does. Returning zero from the clear ports means software

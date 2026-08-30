@@ -596,9 +596,11 @@ TEST(read_capacity_reports_the_lead_out_in_msf) {
     const u32 m = c.clio.read(kClioXbusCommand);
     const u32 s = c.clio.read(kClioXbusCommand);
     c.clio.read(kClioXbusCommand);                       // frames
-    // An empty drive still answers, and lead-out sits at the lead-in offset.
+    // An empty drive still answers. Its lead-out is the two-second pre-gap
+    // twice over: once from the MSF conversion and once because the total
+    // carries the gap on top of it.
     CHECK_EQ(m, 0u);
-    CHECK_EQ(s, 2u);
+    CHECK_EQ(s, 4u);
 }
 
 TEST(a_read_transfers_sector_bytes_through_the_data_fifo) {

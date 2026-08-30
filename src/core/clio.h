@@ -82,6 +82,8 @@ constexpr u32 timer_interrupt_bit(unsigned timer) {
 // Register offsets from the base of the CLIO window. Everything the chip
 // decodes goes in this one place.
 enum : u32 {
+    // Reads a fixed hardware identifier - the OS asks what it is running on
+    // before it does anything else, and a zero here is not a valid answer.
     kClioRevision     = 0x0000,
     kClioCsysBits     = 0x0004,
     kClioVint0        = 0x0008,   // scanline that raises VBL0
@@ -443,7 +445,9 @@ private:
     bool field_odd_ = false;
     bool irq_asserted_ = false;  // retained for reset bookkeeping
 
-    u32 revision_ = 0;
+    static constexpr u32 kClioRevisionValue = 0x02020000;
+    u32 revision_ = kClioRevisionValue;
+    u32 random_state_ = 0xdeadbeefu;
     u32 mode_ = 0;
     u32 csys_bits_ = 0;
     u32 cstat_bits_ = 0;

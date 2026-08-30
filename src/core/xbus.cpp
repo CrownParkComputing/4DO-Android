@@ -112,8 +112,13 @@ void CdRomDevice::build_reply(u8 command) {
             break;
 
         case kCmdReadCapacity: {
+            // The same total the disc-info reply carries, and the same
+            // two-second pre-gap on top of the one already in the MSF
+            // conversion. Reporting the session end here instead makes the
+            // driver believe the disc is two seconds shorter than it is, and
+            // the mount it does next fails on the last extent.
             pending_reply_.push_back(kCmdReadCapacity);
-            const u32 lead_out = lba_to_msf(disc_sectors());
+            const u32 lead_out = lba_to_msf(disc_sectors() + kMsfBiasFrames);
             pending_reply_.push_back(0x00);
             pending_reply_.push_back(u8(lead_out >> 16));
             pending_reply_.push_back(u8(lead_out >> 8));

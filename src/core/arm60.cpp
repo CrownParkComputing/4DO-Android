@@ -430,12 +430,22 @@ std::FILE* const g_pc_trace = [] {
     const char* path = std::getenv("PCTRACE");
     return path != nullptr ? std::fopen(path, "wb") : nullptr;
 }();
+
+// A stall shows up long after boot, and the whole trace from reset is far too
+// large to keep. PCTRACESKIP discards that many instructions first.
+const u64 g_pc_trace_skip = [] {
+    const char* skip = std::getenv("PCTRACESKIP");
+    return skip != nullptr ? std::strtoull(skip, nullptr, 10) : 0ull;
+}();
+u64 g_pc_trace_seen = 0;
 }  // namespace
 
 u32 Arm60::step() {
     const u32 address = regs_[15];
     if (g_pc_trace != nullptr) {
-        std::fwrite(&address, 4, 1, g_pc_trace);
+        if (g_pc_trace_seen++ >= g_pc_trace_skip) {
+            std::fwrite(&address, 4, 1, g_pc_trace);
+        }
     }
     if (exec_map_ != nullptr && address < 0x00100000u) {
         const u32 word = address >> 2;

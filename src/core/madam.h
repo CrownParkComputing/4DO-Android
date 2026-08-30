@@ -107,14 +107,26 @@ enum : u32 {
     kMadamWindowSize = 0x10000,
 };
 
-// The stock configuration for a consumer machine.
+// The stock configuration for a consumer machine: 2 MB of DRAM and 1 MB of
+// VRAM.
 //
-// 0x21 was inferred here from the ROM's own decode; the community 3DOessence
-// register map states the value outright as 0x29, and describes the field: the
-// low two bits are VRAM size, the next two DRAM1, the next two DRAM2. The
-// difference is one bit of DRAM sizing, and it decides where the OS puts its
-// buffers - which is not cosmetic, because the boot reads the disc into them.
-constexpr u32 kMadamMemConfigStock = 0x21;
+// The encoding is not guesswork - the ROM decodes this register itself at
+// 0x00000124, and the shifts say what each field is:
+//
+//     and r1, r3, #7    ; bits 0-2  VRAM size in MB
+//     and r2, r3, #24   ; bits 3-4  DRAM1 size
+//     and r2, r3, #96   ; bits 5-6  DRAM2 size
+//
+// So VRAM 1 MB, DRAM1 1 MB, DRAM2 1 MB is 0x01 | 0x08 | 0x20 = 0x29, which is
+// also the value the community register map gives for consumer units.
+//
+// This register is READ ONLY. It reports how much memory is fitted, which
+// software cannot change, and the boot ROM writes zero to it during start-up.
+// Honouring that write made the machine tell itself it had no memory: the
+// sizing routine above read back zero, decoded no DRAM, and panicked with
+// error 7 before doing anything else. That one writable register is what kept
+// this emulator on a halved, wrong memory map.
+constexpr u32 kMadamMemConfigStock = 0x29;
 
 // Flags in the CCB's first word. Only the ones acted on are named.
 enum : u32 {

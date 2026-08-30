@@ -25,57 +25,20 @@ class Sport;
 // Memory map
 // ---------------------------------------------------------------------------
 enum : u32 {
-    // KNOWN WRONG, and deliberately so for now.
+    // The machine's real map: two megabytes of DRAM in one run - DRAM1 at
+    // 0x00000000, DRAM2 at 0x00100000 - with a megabyte of VRAM above at
+    // 0x00200000.
     //
-    // The real map, per the community 3DOessence register map, is two megabytes
-    // of DRAM in one contiguous run - DRAM1 at 0x00000000, DRAM2 at 0x00100000 -
-    // with a megabyte of VRAM above it at 0x00200000. That is not in doubt.
+    // This was halved for a long time, with VRAM moved down to 0x00100000,
+    // because the correct layout made the ROM panic. It turned out not to be
+    // the map at all: MADAM's memory-configuration register was writable, the
+    // ROM writes zero to it during start-up, and its own sizing routine then
+    // read back "no memory fitted" and gave up. See kMadamMemConfigStock.
     //
-    // Setting it correctly stops the machine booting: it hangs at 0x00000110,
-    // in the early start-up code, before it issues a single CD command. Four
-    // different MADAM memory-configuration values were tried against it and all
-    // four hang the same way, so the configuration byte is not the missing
-    // piece.
-    //
-    // Corrected, the ROM PANICS. It parks in its own crash handler at 0x00000174:
-    //
-    //     mov   r8, #0x03300000        ; MADAM's base
-    //     stmdb r8, {r0,r1,r2,r3,r4}   ; dump five registers just below it
-    //     b     -12                    ; and spin
-    //
-    // caught in Supervisor mode with interrupts masked, reporting r3 = 0xFFEEFFEE
-    // as a signature and r4 = 7 as the code. The routine at 0x00000A4C is called
-    // from 0x00000170 with lr pointing AT that handler, so it is not meant to
-    // return at all - and under the real map it runs its loop out and returns,
-    // which is the failure.
-    //
-    // That also explained an apparent hang: the register dump lands at
-    // 0x032FFFEC, which used to be decoded as SPORT, so the crash loop looked
-    // like 142 million page copies. Narrowing SPORT to the windows it really has
-    // fixed that, and the machine now fails honestly and quickly instead.
-    //
-    // Traced further: 0x00000A4C is not a self-test, it is the ERROR REPORT - a
-    // blink loop that pulses a register r5 times with delays between, then falls
-    // through to the panic. The real failure is earlier, at
-    //
-    //     0x00000044  mov r0, #0x10000
-    //     0x00000048  bl  0x00000270      ; test memory
-    //     0x0000004C  cmp r0, #0
-    //     0x00000050  bne 0x00000170      ; non-zero -> blink error 7, panic
-    //
-    // and 0x00000270 runs a walking-pattern test at 0x00000434: write a rotating
-    // value along a stride, then read it back. With the real map that test
-    // fails, so the fault is in how this bus answers somewhere in two megabytes
-    // rather than in anything to do with the disc or the video hardware.
-    //
-    // That is the whole remaining question for the memory map. With the map
-    // wrong, anything the machine places high in DRAM also lands in video
-    // memory, which is where the reference implementation puts the buffer it
-    // reads the disc into.
     kDramBase = 0x00000000,
-    kDramSize = 1u * 1024 * 1024,
+    kDramSize = 2u * 1024 * 1024,
 
-    kVramBase = 0x00100000,
+    kVramBase = 0x00200000,
     kVramSize = 1u * 1024 * 1024,
 
     kRomBase  = 0x03000000,         // BIOS. Also the reset vector.

@@ -8,6 +8,7 @@
 #include "core/arm60.h"
 #include "core/bus.h"
 #include "core/clio.h"
+#include "core/madam.h"
 #include "core/console.h"
 #include "test_harness.h"
 
@@ -583,4 +584,23 @@ TEST(a_read_transfers_sector_bytes_through_the_data_fifo) {
     // command is accepted and the drive reports the motor running.
     CHECK_EQ(c.clio.read(kClioXbusCommand), kCmdRead);
     CHECK_EQ(c.clio.read(kClioXbusCommand) & kStatusSpinUp, kStatusSpinUp);
+}
+
+TEST(the_memory_configuration_cannot_be_written) {
+    // It reports how much memory is FITTED, which software cannot change. The
+    // boot ROM writes zero to it during start-up; honouring that makes the
+    // machine tell itself it has no memory, and its own sizing routine then
+    // panics before doing anything else.
+    Bus bus;
+    Madam madam(bus);
+    CHECK_EQ(madam.read(kMadamMemConfig), kMadamMemConfigStock);
+
+    madam.write(kMadamMemConfig, 0);
+    CHECK_EQ(madam.read(kMadamMemConfig), kMadamMemConfigStock);
+
+    // And the value describes the machine the ROM expects: VRAM in bits 0-2,
+    // DRAM1 in bits 3-4, DRAM2 in bits 5-6, each in megabytes.
+    CHECK_EQ(kMadamMemConfigStock & 0x07u, 1u);          // 1 MB VRAM
+    CHECK_EQ((kMadamMemConfigStock >> 3) & 0x03u, 1u);   // 1 MB DRAM1
+    CHECK_EQ((kMadamMemConfigStock >> 5) & 0x03u, 1u);   // 1 MB DRAM2
 }

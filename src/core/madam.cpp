@@ -198,7 +198,11 @@ void Madam::write(u32 offset, u32 value) {
             revision_ = value;
             break;
         case kMadamMemConfig:
-            mem_config_ = value;
+            // Read-only: it reports how much memory is FITTED, which software
+            // cannot change. The boot ROM writes zero to it during start-up,
+            // and honouring that makes the machine tell itself it has no
+            // memory - its own sizing routine reads this register, decodes
+            // zero DRAM, and panics.
             break;
         case kMadamDmaEnable:
             dma_enable_ = value;

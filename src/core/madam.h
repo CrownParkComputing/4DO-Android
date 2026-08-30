@@ -133,6 +133,10 @@ enum : u32 {
     // base of VRAM draws every cel of every title into one buffer, which is
     // right for whichever title happens to use that one and invisible for the
     // rest.
+    // The engine's own control word: which bits of a written pixel carry the
+    // horizontal and vertical sub-position, and whether they are swapped.
+    kMadamCcbCtl0    = 0x0110,
+
     kMadamRegCtl0    = 0x0130,
     kMadamRegCtl1    = 0x0134,
     kMadamRegCtl2    = 0x0138,
@@ -204,9 +208,27 @@ enum : u32 {
     kCcbPxor     = 1u << 11,
     kCcbUseAv    = 1u << 10,
     kCcbPacked   = 1u << 9,   // source is run-length coded
+    kCcbPlutPos  = 1u << 6,
     kCcbBgnd     = 1u << 5,
     kCcbNoBlk    = 1u << 4,
+    kCcbPoverMask = 0x180u,
 };
+
+// CCBCTL0. Only the fields the projector acts on.
+enum : u32 {
+    kCtl0B15Mask = 0xc0000000u,
+    kCtl0B15Zero = 0x00000000u,
+    kCtl0B15One  = 0x40000000u,
+    kCtl0B15Pdc  = 0xc0000000u,
+    kCtl0B0Mask  = 0x30000000u,
+    kCtl0B0Zero  = 0x00000000u,
+    kCtl0B0One   = 0x10000000u,
+    kCtl0B0Ppmp  = 0x20000000u,
+    kCtl0B0Pdc   = 0x30000000u,
+    kCtl0SwapHv  = 0x08000000u,
+};
+
+constexpr u32 kPre1NoSwap = 0x00004000u;
 
 // A CCB pointer is a 24-bit address. The upper byte is not part of it and must
 // be dropped BEFORE any relative base is added, or a stray high bit turns a
@@ -279,6 +301,14 @@ public:
     void plot_footprint(const Ccb& ccb, s32 px, s32 py, s32 step_x, s32 step_y,
                         u32 horizontal_span, u32 vertical_span, u16 pixel);
     u16  decode_pixel(const Ccb& ccb, u32 value) const;
+
+    // The pixel processor. Every pixel the engine writes goes through it: it
+    // scales the source, optionally mixes it with what is already in the
+    // framebuffer, and decides the two sub-position bits. Writing the source
+    // straight out instead is not a subtle difference - it is the whole of a
+    // cel's brightness and all of its blending.
+    void process_pixel(s32 x, s32 y, u16 source, u16 amv);
+    void begin_cel(const Ccb& ccb);
     void run_cel_engine();
 
     // The rectangle cels are clipped to. Defaults to the whole visible field.
@@ -425,6 +455,17 @@ private:
     s32 read_stride_ = 320 * 4;
     s32 write_stride_ = 320 * 4;
     bool framebuffer_configured_ = false;
+
+    // Per-cel pixel-processor state, set up once when a cel starts.
+    u32 ccb_ctl0_ = 0;
+    u32 cel_flags_ = 0;
+    u32 cel_pixc_ = 0;
+    u32 cel_pre1_ = 0;
+    u32 cel_pxor1_ = 0xffffffffu;
+    u32 cel_pxor2_ = 0;
+    u32 cel_pmode_or_ = 0;
+    u32 cel_pmode_and_ = 0xffffu;
+    u32 cel_origin_vh_ = 0;
 
     u32 target_address_ = 0;
     u32 target_stride_bytes_ = 320 * 2;

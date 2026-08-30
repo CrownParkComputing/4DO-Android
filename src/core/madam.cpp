@@ -18,6 +18,38 @@ u32 decode_stride(u32 value) {
 // Where a pixel sits, given a stride. Rows are interleaved in pairs, so the
 // vertical step covers two rows and the odd row is two bytes along from the
 // even one.
+// The multiply/divide table the pixel processor scales a channel through. A
+// channel is multiplied by one of eight factors and divided by one of four,
+// and both are small enough that the whole thing is a lookup.
+u8 g_scale[8][4][32];
+bool g_scale_built = false;
+
+void build_scale_table() {
+    if (g_scale_built) {
+        return;
+    }
+    // The divider is not the field value. Zero means a shift of FOUR, not of
+    // none, so a cel asking for what looks like no division is asking for the
+    // largest one - and a processor that reads it as none makes every cel
+    // sixteen times too bright.
+    const auto divisor_shift = [](u32 field) { return ((field - 1u) & 3u) + 1u; };
+    for (u32 value = 0; value < 32; ++value) {
+        for (u32 multiplier = 0; multiplier < 8; ++multiplier) {
+            for (u32 divider = 0; divider < 4; ++divider) {
+                g_scale[multiplier][divider][value] = static_cast<u8>(
+                    (value * (multiplier + 1u)) >> divisor_shift(divider));
+            }
+        }
+    }
+    g_scale_built = true;
+}
+
+s32 clamp_channel(s32 value) {
+    if (value < 0) return 0;
+    if (value > 31) return 31;
+    return value;
+}
+
 u32 pixel_offset(s32 x, s32 y, s32 stride) {
     return static_cast<u32>(((y >> 1) * stride) + ((y & 1) << 1) + (x << 2));
 }
@@ -233,6 +265,7 @@ u32 Madam::read(u32 offset) {
         case kMadamPbusAddress: return pbus_address_;
         case kMadamPbusLength:  return pbus_length_;
         case kMadamPbusPointer: return pbus_pointer_;
+        case kMadamCcbCtl0:    return ccb_ctl0_;
         case kMadamRegCtl0:    return reg_ctl0_;
         case kMadamRegCtl1:    return reg_ctl1_;
         case kMadamRegCtl2:    return read_base_;
@@ -477,6 +510,9 @@ void Madam::write(u32 offset, u32 value) {
         case kMadamCelPause:
             break;
 
+        case kMadamCcbCtl0:
+            ccb_ctl0_ = value;
+            break;
         case kMadamRegCtl0:
             reg_ctl0_ = value;
             read_stride_ = static_cast<s32>(decode_stride(value));
@@ -638,7 +674,205 @@ u16 Madam::sample(const Ccb& ccb, u32 sx, u32 sy) const {
                             bus.read8(entry + 1));
 }
 
+// Set up the per-cel state the pixel processor needs. None of it changes while
+// a cel is being drawn, so it is done once rather than per pixel.
+void Madam::begin_cel(const Ccb& ccb) {
+    build_scale_table();
+    cel_flags_ = ccb.flags;
+    cel_pixc_ = ccb.pixc;
+    cel_pre1_ = ccb.pre1;
+
+    // PXOR chooses whether the first operand is carried through whole or the
+    // second is taken as a constant. Two masks rather than a branch, because
+    // they apply per channel.
+    if ((ccb.flags & kCcbPxor) != 0) {
+        cel_pxor1_ = 0;
+        cel_pxor2_ = 0x1f1f1f1fu;
+    } else {
+        cel_pxor1_ = 0xffffffffu;
+        cel_pxor2_ = 0;
+    }
+
+    const u32 pmode = ccb.flags & kCcbPoverMask;
+    cel_pmode_or_ = (pmode == 0x180u) ? 0x8000u : 0x0000u;
+    cel_pmode_and_ = (pmode != 0x100u) ? 0xffffu : 0x7fffu;
+
+    cel_origin_vh_ = (static_cast<u32>(ccb.x) & 1u) |
+                     ((static_cast<u32>(ccb.y) & 1u) << 15);
+}
+
+// One pixel, through the processor and into the framebuffer.
+//
+// This is the stage that decides what a cel actually looks like. It scales the
+// source, optionally mixes it with what is already in the framebuffer, and
+// sets the two sub-position bits. Writing the source straight out instead is
+// not a subtle difference: it is the whole of a cel's brightness and all of
+// its blending.
+void Madam::process_pixel(s32 x, s32 y, u16 source, u16 amv) {
+    if (x < 0 || y < 0 || static_cast<u32>(x) >= clip_width_ ||
+        static_cast<u32>(y) >= clip_height_) {
+        return;
+    }
+
+    const u32 read_at = read_base_ + pixel_offset(x, y, read_stride_);
+    const u32 write_at = write_base_ + pixel_offset(x, y, write_stride_);
+    const u16 frame = static_cast<u16>((static_cast<u16>(bus_.read8(read_at)) << 8) |
+                                       bus_.read8(read_at + 1));
+
+    const u32 pixel = (source | cel_pmode_or_) & cel_pmode_and_;
+
+    // Two independent control words, chosen by the pixel's top bit - which is
+    // how one cel gets two different blends without being two cels.
+    const u32 control = (pixel & 0x8000u) ? (cel_pixc_ >> 16) : (cel_pixc_ & 0xffffu);
+    const u32 dv2 = control & 1u;
+    const u32 av  = (control >> 1) & 0x1fu;
+    const u32 s2  = (control >> 6) & 3u;
+    const u32 dv1 = (control >> 8) & 3u;
+    const u32 mxf = (control >> 10) & 7u;
+    const u32 ms  = (control >> 13) & 3u;
+    const u32 s1  = (control >> 15) & 1u;
+
+    u32 negate = 0, extend = 0, no_clip = 0, dv3 = 0;
+    if ((cel_flags_ & kCcbUseAv) != 0) {
+        negate  = av & 1u;
+        extend  = (av >> 1) & 1u;
+        no_clip = (av >> 2) & 1u;
+        dv3     = (av >> 3) & 3u;
+    }
+
+    const u32 input = (s1 != 0) ? frame : pixel;
+    const auto red   = [](u32 p) { return (p >> 10) & 0x1fu; };
+    const auto green = [](u32 p) { return (p >> 5) & 0x1fu; };
+    const auto blue  = [](u32 p) { return p & 0x1fu; };
+
+    s32 second_r = 0, second_g = 0, second_b = 0;
+    switch (s2) {
+        case 0:
+            break;
+        case 1:
+            second_r = second_g = second_b = static_cast<s32>(av >> dv3);
+            break;
+        case 2:
+            second_r = static_cast<s32>(red(frame) >> dv3);
+            second_g = static_cast<s32>(green(frame) >> dv3);
+            second_b = static_cast<s32>(blue(frame) >> dv3);
+            break;
+        default:
+            second_r = static_cast<s32>(red(pixel) >> dv3);
+            second_g = static_cast<s32>(green(pixel) >> dv3);
+            second_b = static_cast<s32>(blue(pixel) >> dv3);
+            break;
+    }
+
+    s32 first_r = 0, first_g = 0, first_b = 0;
+    switch (ms) {
+        case 0:
+            first_r = g_scale[mxf][dv1][red(input)];
+            first_g = g_scale[mxf][dv1][green(input)];
+            first_b = g_scale[mxf][dv1][blue(input)];
+            break;
+        case 1:
+            // The multiplier comes from the pixel itself, three bits a
+            // channel, which is how an eight-bit coded cel carries shading.
+            first_r = g_scale[(amv >> 6) & 7][dv1][red(input)];
+            first_g = g_scale[(amv >> 3) & 7][dv1][green(input)];
+            first_b = g_scale[amv & 7][dv1][blue(input)];
+            break;
+        case 2: {
+            const u32 pr = red(pixel), pg = green(pixel), pb = blue(pixel);
+            first_r = g_scale[pr >> 2][pr & 3][red(input)];
+            first_g = g_scale[pg >> 2][pg & 3][green(input)];
+            first_b = g_scale[pb >> 2][pb & 3][blue(input)];
+            break;
+        }
+        default:
+            first_r = g_scale[4][dv1][red(input)];
+            first_g = g_scale[4][dv1][green(input)];
+            first_b = g_scale[4][dv1][blue(input)];
+            break;
+    }
+
+    // The masks are applied a byte at a time on the hardware, and every byte
+    // of each mask is the same, so one byte of it is enough here.
+    const s32 mask1 = static_cast<s32>(cel_pxor1_ & 0xffu);
+    const s32 mask2 = static_cast<s32>(cel_pxor2_ & 0xffu);
+    const s32 keep_r = first_r & mask1;
+    const s32 keep_g = first_g & mask1;
+    const s32 keep_b = first_b & mask1;
+    first_r &= mask2;
+    first_g &= mask2;
+    first_b &= mask2;
+
+    s32 other_r, other_g, other_b;
+    if (negate != 0) {
+        other_r = second_r ^ 0xff;
+        other_g = second_g ^ 0xff;
+        other_b = second_b ^ 0xff;
+    } else {
+        other_r = second_r ^ first_r;
+        other_g = second_g ^ first_g;
+        other_b = second_b ^ first_b;
+    }
+    if (extend != 0) {
+        // Sign-extend from five bits, so a difference can come out negative.
+        const auto sign5 = [](s32 v) {
+            return static_cast<s32>(static_cast<s8>(v << 3)) >> 3;
+        };
+        other_r = sign5(other_r);
+        other_g = sign5(other_g);
+        other_b = sign5(other_b);
+    }
+
+    s32 out_r = (keep_r + other_r + static_cast<s32>(negate)) >> dv2;
+    s32 out_g = (keep_g + other_g + static_cast<s32>(negate)) >> dv2;
+    s32 out_b = (keep_b + other_b + static_cast<s32>(negate)) >> dv2;
+    if (no_clip == 0) {
+        out_r = clamp_channel(out_r);
+        out_g = clamp_channel(out_g);
+        out_b = clamp_channel(out_b);
+    }
+
+    u32 result = (static_cast<u32>(out_r & 0x1f) << 10) |
+                 (static_cast<u32>(out_g & 0x1f) << 5) |
+                 static_cast<u32>(out_b & 0x1f);
+
+    // A cel not allowed to write pure black writes the darkest non-black
+    // instead, so it still covers what was underneath.
+    if ((cel_flags_ & kCcbNoBlk) == 0 && result == 0) {
+        result = 1u << 10;
+    }
+
+    // The projector decides the two sub-position bits.
+    u32 vh = ((cel_flags_ & kCcbPlutPos) != 0) ? (source & 0x8001u) : cel_origin_vh_;
+    if ((ccb_ctl0_ & kCtl0SwapHv) != 0 && (cel_pre1_ & kPre1NoSwap) == 0) {
+        vh = (vh >> 15) | ((vh & 1u) << 15);
+    }
+    switch (ccb_ctl0_ & kCtl0B15Mask) {
+        case kCtl0B15Zero: vh &= ~0x8000u; break;
+        case kCtl0B15One:  vh |= 0x8000u;  break;
+        default: break;
+    }
+    switch (ccb_ctl0_ & kCtl0B0Mask) {
+        case kCtl0B0Zero: vh &= ~1u; break;
+        case kCtl0B0One:  vh |= 1u;  break;
+        case kCtl0B0Ppmp: vh = (vh & ~1u) | (result & 1u); break;
+        default: break;
+    }
+
+    const u32 final_pixel = (result & 0x7ffeu) | vh;
+    bus_.write8(write_at, static_cast<u8>(final_pixel >> 8));
+    bus_.write8(write_at + 1, static_cast<u8>(final_pixel));
+    ++stats_.pixels_written;
+}
+
 void Madam::put_pixel(s32 x, s32 y, u16 pixel) {
+    // Once software has programmed the framebuffer registers, every pixel goes
+    // through the processor. Before that - which is only ever a test - fall
+    // back to a plain store so the pixel conversion can be checked alone.
+    if (framebuffer_configured_) {
+        process_pixel(x, y, pixel, 0);
+        return;
+    }
     if (x < 0 || y < 0 || static_cast<u32>(x) >= clip_width_ ||
         static_cast<u32>(y) >= clip_height_) {
         return;
@@ -790,6 +1024,7 @@ void Madam::draw_packed_cel(const Ccb& ccb) {
 }
 
 void Madam::draw_cel(const Ccb& ccb) {
+    begin_cel(ccb);
     if ((ccb.flags & kCcbPacked) != 0) {
         draw_packed_cel(ccb);
         return;

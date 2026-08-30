@@ -81,8 +81,17 @@ enum : u32 {
     kRomBase  = 0x03000000,         // BIOS. Also the reset vector.
     kRomSize  = 1u * 1024 * 1024,
 
-    kNvramBase = 0x03140000,        // TODO(map): confirm base and stride
-    kNvramSize = 32u * 1024,
+    // 32 KiB of storage occupying a 128 KiB window.
+    //
+    // The ARM60 has no bus address translator, so the NVRAM's data lines sit on
+    // the low byte of the word and each stored byte is addressed as a whole
+    // 32-bit word - byte n lives at base + n*4. Mapping it flat instead makes
+    // the machine see four times as much NVRAM as exists, with every byte in
+    // the wrong place.
+    kNvramBase   = 0x03140000,
+    kNvramSize   = 32u * 1024,          // real storage
+    kNvramStride = 4u,                  // bytes of address space per stored byte
+    kNvramWindow = kNvramSize * kNvramStride,
 
     // SPORT: the VRAM serial port, which does fast page copies and clears.
     //

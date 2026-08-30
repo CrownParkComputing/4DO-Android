@@ -76,8 +76,9 @@ u32 Bus::read32(u32 address) {
     if (addr >= kRomBase && addr < kRomBase + kRomSize) {
         return load_be32(&rom_[addr - kRomBase]);
     }
-    if (addr >= kNvramBase && addr < kNvramBase + kNvramSize) {
-        return load_be32(&nvram_[addr - kNvramBase]);
+    if (addr >= kNvramBase && addr < kNvramBase + kNvramWindow) {
+        // One stored byte per word, on the low byte.
+        return nvram_[(addr - kNvramBase) / kNvramStride];
     }
     if (clio_ != nullptr && addr >= kClioBase && addr < kClioBase + kClioSize) {
         return clio_->read(addr - kClioBase);
@@ -128,8 +129,10 @@ u8 Bus::read8(u32 address) {
     if (address >= kRomBase && address < kRomBase + kRomSize) {
         return rom_[address - kRomBase];
     }
-    if (address >= kNvramBase && address < kNvramBase + kNvramSize) {
-        return nvram_[address - kNvramBase];
+    if (address >= kNvramBase && address < kNvramBase + kNvramWindow) {
+        return ((address - kNvramBase) % kNvramStride) == kNvramStride - 1
+                   ? nvram_[(address - kNvramBase) / kNvramStride]
+                   : 0u;
     }
     if (is_device(address)) {
         const u32 word = read32(address & ~u32{3});
@@ -168,8 +171,8 @@ void Bus::write32(u32 address, u32 value) {
         store_be32(&vram_[addr - kVramBase], value);
         return;
     }
-    if (addr >= kNvramBase && addr < kNvramBase + kNvramSize) {
-        store_be32(&nvram_[addr - kNvramBase], value);
+    if (addr >= kNvramBase && addr < kNvramBase + kNvramWindow) {
+        nvram_[(addr - kNvramBase) / kNvramStride] = static_cast<u8>(value & 0xffu);
         return;
     }
     if (clio_ != nullptr && addr >= kClioBase && addr < kClioBase + kClioSize) {
@@ -220,8 +223,10 @@ void Bus::write8(u32 address, u8 value) {
         vram_[address - kVramBase] = value;
         return;
     }
-    if (address >= kNvramBase && address < kNvramBase + kNvramSize) {
-        nvram_[address - kNvramBase] = value;
+    if (address >= kNvramBase && address < kNvramBase + kNvramWindow) {
+        if (((address - kNvramBase) % kNvramStride) == kNvramStride - 1) {
+            nvram_[(address - kNvramBase) / kNvramStride] = value;
+        }
         return;
     }
     if (is_device(address)) {

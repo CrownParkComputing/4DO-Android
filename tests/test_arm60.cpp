@@ -369,3 +369,22 @@ TEST(distant_writes_do_not_dirty_everything_between_them) {
     // and nothing in between
     CHECK(!bus.write_watch().is_dirty(0x40000u / WriteWatch::kPageBytes));
 }
+
+TEST(nvram_stores_one_byte_per_word) {
+    // The ARM60 has no bus address translator, so the NVRAM's data lines sit on
+    // the low byte and each stored byte is addressed as a whole 32-bit word:
+    // byte n lives at base + n*4, and 32 KiB of storage occupies 128 KiB of
+    // address space. Mapping it flat shows the machine four times as much NVRAM
+    // as exists, with every byte in the wrong place.
+    Bus bus;
+    bus.write32(kNvramBase + 0, 0xAAu);
+    bus.write32(kNvramBase + 4, 0xBBu);
+
+    CHECK_EQ(bus.read32(kNvramBase + 0), 0xAAu);
+    CHECK_EQ(bus.read32(kNvramBase + 4), 0xBBu);
+
+    // The window is four times the storage, and the last word is still inside.
+    CHECK_EQ(kNvramWindow, kNvramSize * 4u);
+    bus.write32(kNvramBase + kNvramWindow - 4, 0xCCu);
+    CHECK_EQ(bus.read32(kNvramBase + kNvramWindow - 4), 0xCCu);
+}

@@ -21,10 +21,11 @@ constexpr u32 kVdlNextEntry        = 3;
 
 }  // namespace
 
-Vdlp::Vdlp(Bus& bus) : bus_(bus) {}
+Vdlp::Vdlp(Bus& bus) : bus_(bus) { reset_clut(); }
 
 void Vdlp::reset() {
     list_address_ = 0;
+    reset_clut();
     entries_walked_ = 0;
 }
 
@@ -44,7 +45,7 @@ void Vdlp::render_line(u32* out, int width, u32 framebuffer_address, int line) {
         }
         const u16 pixel =
             static_cast<u16>((static_cast<u16>(vram[at]) << 8) | vram[at + 1]);
-        out[x] = expand_rgb555(pixel);
+        out[x] = shade(pixel);
     }
 }
 
@@ -65,6 +66,79 @@ void Vdlp::render_linear(u32* out, int width, int height, u32 vram_offset) {
             offset += 2;
         }
     }
+}
+
+// The table software finds when it starts: a straight ramp from five bits to
+// eight. A title that never touches the table gets exactly the expansion a
+// naive implementation would do, which is why ignoring the table looks right
+// until something fades.
+void Vdlp::reset_clut() {
+    for (u32 i = 0; i < kClutEntries; ++i) {
+        const u8 value = static_cast<u8>((i * 255u + 15u) / 31u);
+        clut_red_[i] = value;
+        clut_green_[i] = value;
+        clut_blue_[i] = value;
+    }
+    background_ = 0;
+    clut_bypass_ = false;
+}
+
+// The words that follow an entry's header: palette entries, the background
+// colour, and display control.
+void Vdlp::process_control_words(u32 address, u32 count) {
+    bool colours_only = false;
+    for (u32 i = 0; i < count; ++i) {
+        const u32 word = bus_.read32(address + i * 4);
+        switch (word >> kVdlWordSelectorShift) {
+            case 0: case 1: case 2: case 3: {
+                const u32 slot = (word >> kVdlColourAddrShift) & kVdlColourAddrMask;
+                const u8 red   = static_cast<u8>(word >> kVdlColourRedShift);
+                const u8 green = static_cast<u8>(word >> kVdlColourGreenShift);
+                const u8 blue  = static_cast<u8>(word >> kVdlColourBlueShift);
+                // The two enable bits say which channels this word carries.
+                // Zero means all three, which is not what the numbering
+                // suggests and is the easy thing to get backwards.
+                switch ((word >> kVdlColourEnableShift) & kVdlColourEnableMask) {
+                    case 0:
+                        clut_red_[slot] = red;
+                        clut_green_[slot] = green;
+                        clut_blue_[slot] = blue;
+                        break;
+                    case 1: clut_blue_[slot] = blue; break;
+                    case 2: clut_green_[slot] = green; break;
+                    default: clut_red_[slot] = red; break;
+                }
+                break;
+            }
+            case kVdlWordAvControl:
+            case 5:
+                break;   // for the audio/video output stage, not for us
+            case kVdlWordDisplay:
+                if (colours_only) {
+                    continue;
+                }
+                clut_bypass_ = (word & kVdlDisplayClutBypass) != 0;
+                colours_only = (word & kVdlDisplayColoursOnly) != 0;
+                break;
+            default:
+                background_ = word;
+                break;
+        }
+    }
+}
+
+// One framebuffer pixel to one output pixel.
+u32 Vdlp::shade(u16 pixel) const {
+    if (pixel == 0) {
+        return 0xff000000u | (background_ & 0x00ffffffu);
+    }
+    if (clut_bypass_) {
+        return expand_rgb555(pixel);
+    }
+    return 0xff000000u |
+           (static_cast<u32>(clut_red_[(pixel >> 10) & 0x1f]) << 16) |
+           (static_cast<u32>(clut_green_[(pixel >> 5) & 0x1f]) << 8) |
+           static_cast<u32>(clut_blue_[pixel & 0x1f]);
 }
 
 u32 Vdlp::advance_line(u32 address) const {
@@ -154,6 +228,12 @@ void Vdlp::render_field(u32* out, int width, int height) {
         }
         modulo_index_ = (control >> kVdlModuloShift) & kVdlModuloMask;
         persist = static_cast<s32>(control & kVdlPersistMask);
+
+        // The palette and display control ride along behind the header.
+        const u32 words = (control >> kVdlControlCountShift) & kVdlControlCountMask;
+        if (words != 0) {
+            process_control_words(entry + 16, words);
+        }
 
         u32 next = bus_.read32(entry + 12);
         if ((control & kVdlNextRelative) != 0) {

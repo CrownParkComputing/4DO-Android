@@ -43,6 +43,33 @@ enum : u32 {
     kVdlModuloMask      = 0x7u,
 };
 
+// An optional control word that follows an entry's four-word header. The top
+// three bits say which kind it is.
+enum : u32 {
+    kVdlWordSelectorShift = 29,
+    kVdlWordColour        = 0,   // 0..3, with the low two bits enabling channels
+    kVdlWordAvControl     = 4,   // 4..5
+    kVdlWordDisplay       = 6,
+    kVdlWordBackground    = 7,
+};
+
+// Fields of a colour word.
+enum : u32 {
+    kVdlColourBlueShift  = 0,
+    kVdlColourGreenShift = 8,
+    kVdlColourRedShift   = 16,
+    kVdlColourAddrShift  = 24,
+    kVdlColourAddrMask   = 0x1fu,
+    kVdlColourEnableShift = 29,
+    kVdlColourEnableMask  = 3u,
+};
+
+// Fields of a display-control word.
+enum : u32 {
+    kVdlDisplayColoursOnly = 1u << 1,
+    kVdlDisplayClutBypass  = 1u << 25,
+};
+
 // How far apart the lines of a framebuffer are, selected by the control word.
 constexpr u32 kVdlLineModulo[8] = {320, 384, 512, 640, 1024, 320, 320, 320};
 
@@ -109,6 +136,25 @@ private:
     Bus& bus_;
     u32 list_address_ = 0;
     u32 modulo_index_ = 0;
+
+    // The output colour table. Not an indexed palette: each of the three
+    // five-bit channels is looked up separately to eight bits, so it is a per
+    // channel ramp. A title reprograms it to fade, tint, or flash without
+    // touching a single pixel of its framebuffer - so a machine that ignores
+    // it renders every fade as a hard cut.
+    static constexpr u32 kClutEntries = 32;
+    u8 clut_red_[kClutEntries] = {};
+    u8 clut_green_[kClutEntries] = {};
+    u8 clut_blue_[kClutEntries] = {};
+
+    // What a pixel of zero shows. Also programmable, and also not black by
+    // default in every title.
+    u32 background_ = 0;
+    bool clut_bypass_ = false;
+
+    void reset_clut();
+    void process_control_words(u32 address, u32 count);
+    u32  shade(u16 pixel) const;
 
     // Defaults to no blanking at all - the first line the list runs for is the
     // first line shown, and the field is however tall the output is. That is

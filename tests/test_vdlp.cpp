@@ -362,3 +362,56 @@ TEST(madam_and_the_display_agree_about_where_a_pixel_goes) {
         }
     }
 }
+
+TEST(the_display_list_can_reprogram_the_output_colour_table) {
+    // The table is not an indexed palette: each five-bit channel is looked up
+    // separately to eight bits, so it is a per-channel ramp. A title
+    // reprograms it to fade or tint without touching a pixel of its
+    // framebuffer - so a machine that ignores it renders every fade as a hard
+    // cut.
+    Bus bus;
+    Vdlp vdlp(bus);
+
+    put_fb(bus, 0, 0, 0, 1, rgb555(31, 0, 0));
+
+    const u32 list = 0x1000u;
+    // One entry, one line, carrying two colour words behind its header.
+    bus.write32(list + 0, kVdlCurrOverride | (2u << kVdlControlCountShift) | 0u);
+    bus.write32(list + 4, kVramBase);
+    bus.write32(list + 8, kVramBase);
+    bus.write32(list + 12, 0);
+    // Slot 31 of red becomes half brightness; the enable field of zero means
+    // all three channels, so green and blue go dark with it.
+    bus.write32(list + 16, (31u << kVdlColourAddrShift) | (0x80u << kVdlColourRedShift));
+    // And the same slot again, red only this time, at full.
+    bus.write32(list + 20, (3u << kVdlColourEnableShift) |
+                               (31u << kVdlColourAddrShift) |
+                               (0x40u << kVdlColourRedShift));
+
+    vdlp.set_list_address(list);
+    u32 out[1] = {};
+    vdlp.render_field(out, 1, 1);
+
+    // Red at full scale now reads slot 31, which the second word left at 0x40.
+    CHECK_EQ((out[0] >> 16) & 0xffu, 0x40u);
+}
+
+TEST(a_pixel_of_zero_shows_the_programmed_background) {
+    Bus bus;
+    Vdlp vdlp(bus);
+
+    put_fb(bus, 0, 0, 0, 1, 0);
+
+    const u32 list = 0x1000u;
+    bus.write32(list + 0, kVdlCurrOverride | (1u << kVdlControlCountShift) | 0u);
+    bus.write32(list + 4, kVramBase);
+    bus.write32(list + 8, kVramBase);
+    bus.write32(list + 12, 0);
+    bus.write32(list + 16, (static_cast<u32>(kVdlWordBackground) << kVdlWordSelectorShift) |
+                               0x00336699u);
+
+    vdlp.set_list_address(list);
+    u32 out[1] = {};
+    vdlp.render_field(out, 1, 1);
+    CHECK_EQ(out[0], 0xff336699u);
+}

@@ -52,12 +52,18 @@ set(INSTALL_STATIC_LIBS OFF CACHE BOOL "" FORCE)
 set(CHDR_WANT_TESTS OFF CACHE BOOL "" FORCE)
 set(WITH_SYSTEM_ZLIB OFF CACHE BOOL "" FORCE)
 set(WITH_SYSTEM_ZSTD OFF CACHE BOOL "" FORCE)
-# Hand back cooked user data rather than sync+header+ECC. Pinned explicitly
-# rather than left to the library's default, because the two differ by a
-# 16-byte offset into every sector - which does not fail, it just reads
-# plausible-looking rubbish.
-set(CHDR_WANT_RAW_DATA_SECTOR OFF CACHE BOOL "" FORCE)
-set(CHDR_WANT_SUBCODE OFF CACHE BOOL "" FORCE)
+# Let the library reassemble whole frames, sync and ECC and subcode included.
+#
+# Turning these off does not merely change where a sector's payload starts - it
+# stops the CD codecs reassembling a raw sector at all, and every disc dumped
+# as MODE1_RAW fails to decompress its very first hunk. That is most 3DO dumps
+# in circulation: with them off, one disc in a twelve-title library worked and
+# the other eleven looked like emulator bugs.
+#
+# Where the payload sits inside a frame is then this project's problem, and is
+# handled per track type in disc.cpp.
+set(CHDR_WANT_RAW_DATA_SECTOR ON CACHE BOOL "" FORCE)
+set(CHDR_WANT_SUBCODE ON CACHE BOOL "" FORCE)
 add_subdirectory(third_party/libchdr EXCLUDE_FROM_ALL)
 
 add_library(retro3do_core STATIC
@@ -197,6 +203,12 @@ endif()
 # These run on the host with no window and no device. Per the project's testing
 # rule, a bug found on hardware gets reproduced here first.
 # ---------------------------------------------------------------------------
+# gamecheck boots a whole library headless and reports what each title did. It
+# needs discs, which are not in the repository, so it is a tool rather than a
+# test - point it at a library and it becomes one.
+add_executable(gamecheck tools/gamecheck/gamecheck.cpp)
+target_link_libraries(gamecheck PRIVATE retro3do_core)
+
 if(RETRO3DO_BUILD_TESTS)
     enable_testing()
     add_executable(retro3do_tests

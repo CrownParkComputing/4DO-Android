@@ -97,6 +97,26 @@ Disc::~Disc() {
 // Caching matters more than it looks. A hunk here is 19,584 bytes - eight CD
 // frames - and decompressing one costs an LZMA or FLAC decode. Reading a file
 // sector by sector without a cache decodes the same hunk eight times over.
+// How far into a stored frame the 2048 bytes of user data start, for each track
+// type chdman writes. A raw sector carries its sync and header; a cooked one
+// does not.
+u32 chd_payload_offset(const char* type) {
+    const std::string name(type);
+    if (name == "MODE1_RAW" || name == "MODE1/2352") {
+        return 16;    // 12 bytes of sync, then a 4 byte header
+    }
+    if (name == "MODE2_RAW" || name == "MODE2/2352" ||
+        name == "MODE2_FORM_MIX") {
+        return 24;    // sync and header, then an 8 byte subheader
+    }
+    if (name == "MODE2" || name == "MODE2/2336") {
+        return 8;     // subheader only
+    }
+    // MODE1, MODE1/2048, MODE2_FORM1, MODE2_FORM2 and AUDIO all begin at the
+    // payload.
+    return 0;
+}
+
 struct Disc::ChdReader {
     chd_file* file = nullptr;
     u32 hunk_bytes = 0;
@@ -107,6 +127,20 @@ struct Disc::ChdReader {
     // stored consecutively, each padded up to a multiple of four frames, so
     // this is not always zero.
     u32 data_track_frame = 0;
+
+    // Where a sector's 2048 user bytes begin inside its frame.
+    //
+    // A CHD stores whatever the track type says it stores, and the type is not
+    // a detail: a MODE1 track holds the user data alone, while a MODE1_RAW
+    // track holds the whole 2352-byte sector with twelve bytes of sync and a
+    // four-byte header in front of it. Take the payload from offset zero in
+    // both and the raw one yields sync bytes where the filesystem header
+    // should be - which is not a read error, so the drive reports success and
+    // the machine mounts nonsense.
+    //
+    // Most 3DO dumps in circulation are MODE1_RAW. Only handling MODE1 means
+    // one disc in a library works and the rest look like emulator bugs.
+    u32 payload_offset = 0;
 
     std::vector<u8> hunk;
     u32 cached_hunk = 0xffffffffu;
@@ -329,6 +363,7 @@ bool Disc::open_chd(const std::string& display_name) {
 
         if (!found_data && !track.is_audio) {
             reader->data_track_frame = chd_frame;
+            reader->payload_offset = chd_payload_offset(type);
             sector_count_ = static_cast<u32>(frames);
             found_data = true;
         }
@@ -348,8 +383,6 @@ bool Disc::open_chd(const std::string& display_name) {
         return false;
     }
 
-    // libchdr is built to hand back cooked user data, so a frame begins at the
-    // payload with no sync or header in front of it.
     layout_ = SectorLayout::Cooked2048;
     chd_reader_ = reader;
     last_error_.clear();
@@ -367,7 +400,8 @@ bool Disc::read_chd_frame(u32 chd_frame, u8* out) {
         }
         r->cached_hunk = hunk;
     }
-    std::memcpy(out, r->hunk.data() + within, CD_MAX_SECTOR_DATA);
+    std::memcpy(out, r->hunk.data() + within + r->payload_offset,
+                CD_MAX_SECTOR_DATA);
     return true;
 }
 

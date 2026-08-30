@@ -140,6 +140,12 @@ private:
 
     // The last pair of DAC words the DSP produced, as (right << 16) | left.
     u32 last_sample_ = 0;
+
+    // Samples collected during a frame, handed to the ring at the end of it.
+    // A frame's worth at 44.1 kHz is under a thousand pairs; the cap is only
+    // there so a runaway sample clock cannot grow this without bound.
+    static constexpr size_t kMaxSamplesPerFrame = 4096;
+    std::vector<StereoSample> samples_;
     Sport sport_;
     Disc  disc_;
     PadState  pads_;

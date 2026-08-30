@@ -258,6 +258,16 @@ void Console::tick_dsp(u32 cycles) {
     while (sample_accumulator_ >= kSamplePeriod) {
         sample_accumulator_ -= kSamplePeriod;
         last_sample_ = dsp_.run();
+
+        // The low half is the left channel and the high half the right, both
+        // signed. A pass that wrote nothing leaves the previous pair, which is
+        // what the hardware's DACs hold too.
+        StereoSample pair;
+        pair.left  = static_cast<s16>(last_sample_ & 0xffffu);
+        pair.right = static_cast<s16>(last_sample_ >> 16);
+        if (samples_.size() < kMaxSamplesPerFrame) {
+            samples_.push_back(pair);
+        }
     }
 }
 
@@ -384,14 +394,13 @@ u32 Console::run_frame() {
     // silent — but the ring is filled with the right number of samples anyway,
     // so that the pacing and underrun behaviour are exercised from the start
     // rather than appearing for the first time when sound is switched on.
-    {
-        const u32 fields_per_second = region_ == Region::Pal ? 50u : 60u;
-        const u32 samples_this_frame = kAudioSampleRate / fields_per_second;
-        StereoSample silence[kAudioSampleRate / 50];
-        for (u32 i = 0; i < samples_this_frame; ++i) {
-            silence[i] = StereoSample{};
-        }
-        audio_.push(silence, samples_this_frame);
+    //
+    // These are the DSP's own DAC words, one pair per pass of its program.
+    // If it is stopped, or its program never writes them, the pairs are zero
+    // and the machine is silent - which is the truth rather than a stand-in.
+    if (!samples_.empty()) {
+        audio_.push(samples_.data(), static_cast<u32>(samples_.size()));
+        samples_.clear();
     }
 
     // The machine tells the display where its list is by writing a MADAM

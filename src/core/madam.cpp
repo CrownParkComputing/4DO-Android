@@ -279,15 +279,24 @@ Ccb Madam::read_ccb(u32 address) const {
     const u32 source_base = address + (kCcbSourceWord + 1) * 4;
     const u32 plut_base   = address + (kCcbPlutWord + 1) * 4;
 
-    ccb.next_address = (ccb.flags & kCcbNpAbs)
-                           ? words[kCcbNextWord]
-                           : next_base + words[kCcbNextWord];
-    ccb.source_address = (ccb.flags & kCcbSpAbs)
-                             ? words[kCcbSourceWord]
-                             : source_base + words[kCcbSourceWord];
-    ccb.plut_address = (ccb.flags & kCcbPpAbs)
-                           ? words[kCcbPlutWord]
-                           : plut_base + words[kCcbPlutWord];
+    // A next-pointer of zero is the end of the list, whatever the addressing
+    // mode says. Adding a relative base to it produces a perfectly plausible
+    // address, and the walk marches off through whatever memory happens to
+    // follow - four thousand one-pixel cels out of cleared RAM before the
+    // safety limit stops it.
+    const u32 next_raw = words[kCcbNextWord] & kCcbAddressMask;
+    ccb.next_address = next_raw == 0
+                           ? 0u
+                           : ((ccb.flags & kCcbNpAbs) ? next_raw
+                                                      : next_base + next_raw);
+
+    const u32 source_raw = words[kCcbSourceWord] & kCcbAddressMask;
+    ccb.source_address = (ccb.flags & kCcbSpAbs) ? source_raw
+                                                 : source_base + source_raw;
+
+    const u32 plut_raw = words[kCcbPlutWord] & kCcbAddressMask;
+    ccb.plut_address = (ccb.flags & kCcbPpAbs) ? plut_raw
+                                               : plut_base + plut_raw;
 
     ccb.x = static_cast<s32>(words[kCcbXWord]);
     ccb.y = static_cast<s32>(words[kCcbYWord]);
@@ -456,8 +465,23 @@ void Madam::run_cel_engine() {
     render_cel_list(next_ccb_);
 }
 
+namespace {
+// The walk, one line per cel, off unless CELLOG names a file. A list that
+// stops one cel in looks identical from the outside to a list that only had
+// one cel in it, and only the flags tell them apart.
+std::FILE* const g_cel_log = [] {
+    const char* path = std::getenv("CELLOG");
+    return path != nullptr ? std::fopen(path, "w") : nullptr;
+}();
+}  // namespace
+
 void Madam::render_cel_list(u32 address) {
     stats_ = MadamStats{};
+    ++engine_runs_;
+    if (g_cel_log != nullptr) {
+        std::fprintf(g_cel_log, "RUN %llu head=%06X\n",
+                     (unsigned long long)engine_runs_, address);
+    }
 
     if (address == 0) {
         return;
@@ -469,9 +493,16 @@ void Madam::render_cel_list(u32 address) {
         const Ccb ccb = read_ccb(current_ccb_);
         ++stats_.cels_walked;
         next_ccb_ = ccb.next_address;
+        if (g_cel_log != nullptr) {
+            std::fprintf(g_cel_log, "CCB %06X flags=%08X next=%06X src=%06X %ux%u\n",
+                         current_ccb_, ccb.flags, next_ccb_, ccb.source_address,
+                         ccb.width, ccb.height);
+        }
 
         if ((ccb.flags & kCcbSkip) == 0) {
+            const u32 before = stats_.cels_drawn;
             draw_cel(ccb);
+            total_cels_drawn_ += stats_.cels_drawn - before;
         }
 
         if (ccb.flags & kCcbLast) {

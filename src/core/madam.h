@@ -140,21 +140,43 @@ enum : u32 {
 // this emulator on a halved, wrong memory map.
 constexpr u32 kMadamMemConfigStock = 0x29;
 
-// Flags in the CCB's first word. Only the ones acted on are named.
+// Flags in the CCB's first word.
+//
+// SKIP is the TOP bit and LAST is the one below it, not the other way round.
+// Getting that pair the wrong way up is not a cosmetic error: a cel meant to
+// be skipped is drawn, and the list runs on past the cel that was supposed to
+// end it, off into whatever memory follows.
 enum : u32 {
-    kCcbLast     = 1u << 31,  // this is the final cel in the list
-    kCcbNpAbs    = 1u << 30,  // next pointer is absolute, not relative
-    kCcbSpAbs    = 1u << 29,  // source pointer is absolute
-    kCcbPpAbs    = 1u << 28,  // PLUT pointer is absolute
-    kCcbLdSize   = 1u << 27,  // TODO(madam): confirm
-    kCcbLdPrs    = 1u << 26,  // TODO(madam): confirm
-    kCcbLdPpmp   = 1u << 25,  // TODO(madam): confirm
-    kCcbLdPlut   = 1u << 24,  // TODO(madam): confirm
-    kCcbCcbPre   = 1u << 23,  // TODO(madam): confirm
-    kCcbYoxy     = 1u << 22,  // TODO(madam): confirm
-    kCcbSkip     = 1u << 15,  // TODO(madam): confirm — do not draw this cel
-    kCcbPacked   = 1u << 9,   // TODO(madam): confirm — source is run-length coded
+    kCcbSkip     = 1u << 31,  // do not draw this cel
+    kCcbLast     = 1u << 30,  // this is the final cel in the list
+    kCcbNpAbs    = 1u << 29,  // next pointer is absolute, not relative
+    kCcbSpAbs    = 1u << 28,  // source pointer is absolute
+    kCcbPpAbs    = 1u << 27,  // PLUT pointer is absolute
+    kCcbLdSize   = 1u << 26,
+    kCcbLdPrs    = 1u << 25,
+    kCcbLdPpmp   = 1u << 24,
+    kCcbLdPlut   = 1u << 23,
+    kCcbCcbPre   = 1u << 22,
+    kCcbYoxy     = 1u << 21,
+    kCcbAcsc     = 1u << 20,
+    kCcbAlsc     = 1u << 19,
+    kCcbAcw      = 1u << 18,
+    kCcbAccw     = 1u << 17,
+    kCcbTwd      = 1u << 16,
+    kCcbLce      = 1u << 15,
+    kCcbAce      = 1u << 14,
+    kCcbMaria    = 1u << 12,
+    kCcbPxor     = 1u << 11,
+    kCcbUseAv    = 1u << 10,
+    kCcbPacked   = 1u << 9,   // source is run-length coded
+    kCcbBgnd     = 1u << 5,
+    kCcbNoBlk    = 1u << 4,
 };
+
+// A CCB pointer is a 24-bit address. The upper byte is not part of it and must
+// be dropped BEFORE any relative base is added, or a stray high bit turns a
+// short offset into an address on the other side of memory.
+constexpr u32 kCcbAddressMask = 0x00ffffffu;
 
 // How a cel's source pixels are encoded.
 enum class CelFormat {
@@ -225,6 +247,12 @@ public:
 
     const MadamStats& stats() const { return stats_; }
 
+    // Lifetime totals. `stats()` describes the LAST list only, which reads as
+    // "the engine barely runs" whenever the final list of a frame happens to
+    // be a short one.
+    u64 engine_runs() const { return engine_runs_; }
+    u64 total_cels_drawn() const { return total_cels_drawn_; }
+
     // An expansion-bus DMA the host has programmed and not yet been served.
     bool xbus_dma_pending() const { return xbus_dma_pending_; }
     u32  xbus_dma_address() const { return xbus_dma_address_; }
@@ -281,6 +309,8 @@ private:
     u32 xbus_dma_length_ = 0;
     bool xbus_dma_pending_ = false;
     u32 vdl_address_ = 0;
+    u64 engine_runs_ = 0;
+    u64 total_cels_drawn_ = 0;
     u32 current_ccb_ = 0;
     u32 next_ccb_ = 0;
     u32 dma_address_[kMadamDmaChannels] = {};

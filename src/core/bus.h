@@ -54,10 +54,24 @@ enum : u32 {
     // like 142 million page copies. Narrowing SPORT to the windows it really has
     // fixed that, and the machine now fails honestly and quickly instead.
     //
-    // So the open question is why that routine returns, not why the map is
-    // wrong. With the map wrong, anything the machine places high in DRAM also
-    // lands in video memory, which is where the reference implementation puts
-    // the buffer it reads the disc into.
+    // Traced further: 0x00000A4C is not a self-test, it is the ERROR REPORT - a
+    // blink loop that pulses a register r5 times with delays between, then falls
+    // through to the panic. The real failure is earlier, at
+    //
+    //     0x00000044  mov r0, #0x10000
+    //     0x00000048  bl  0x00000270      ; test memory
+    //     0x0000004C  cmp r0, #0
+    //     0x00000050  bne 0x00000170      ; non-zero -> blink error 7, panic
+    //
+    // and 0x00000270 runs a walking-pattern test at 0x00000434: write a rotating
+    // value along a stride, then read it back. With the real map that test
+    // fails, so the fault is in how this bus answers somewhere in two megabytes
+    // rather than in anything to do with the disc or the video hardware.
+    //
+    // That is the whole remaining question for the memory map. With the map
+    // wrong, anything the machine places high in DRAM also lands in video
+    // memory, which is where the reference implementation puts the buffer it
+    // reads the disc into.
     kDramBase = 0x00000000,
     kDramSize = 1u * 1024 * 1024,
 

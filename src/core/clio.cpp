@@ -274,11 +274,16 @@ void Clio::tick_timers(u32 cycles) {
     // every timed wait expire about forty times too early - drive spin-up,
     // seek settling, the lot - and the machine gives up on hardware that was
     // about to answer.
-    const u32 divider = timer_delay_ != 0 ? timer_delay_ : 1;
-    const u64 per_tick = (static_cast<u64>(kTimerCpuHz) * divider) / kTimerSourceHz;
-    const u32 cycles_per_tick = per_tick != 0 ? static_cast<u32>(per_tick) : 1;
+    // The ratio is not a whole number of cycles - at the stock divider it is
+    // 38.095 - so the accumulator carries a fractional part. Rounding it to 38
+    // is a third of a percent fast, which is enough to leave a calibrated wait
+    // one iteration short of where the same code lands on real hardware.
+    const u64 divider = timer_delay_ != 0 ? timer_delay_ : 1;
+    const u64 per_tick = (static_cast<u64>(kTimerCpuHz) * divider * kTimerFixedOne) /
+                         kTimerSourceHz;
+    const u64 cycles_per_tick = per_tick != 0 ? per_tick : 1;
 
-    timer_accumulator_ += cycles;
+    timer_accumulator_ += static_cast<u64>(cycles) * kTimerFixedOne;
     while (timer_accumulator_ >= cycles_per_tick) {
         timer_accumulator_ -= cycles_per_tick;
         if (timer_config_ != 0) {
@@ -314,10 +319,14 @@ const u32 g_clio_log_high = [] {
     const char* dash = range != nullptr ? std::strchr(range, '-') : nullptr;
     return dash != nullptr ? static_cast<u32>(std::strtoul(dash + 1, nullptr, 16)) : 0x1000u;
 }();
+const long g_clio_log_limit = [] {
+    const char* limit = std::getenv("CLIOLOGMAX");
+    return limit != nullptr ? std::strtol(limit, nullptr, 10) : 200000L;
+}();
 long g_clio_log_count = 0;
 void log_access(char kind, u32 offset, u32 value, u32 pc) {
     std::FILE* file = g_clio_log;
-    if (file == nullptr || g_clio_log_count >= 200000) {
+    if (file == nullptr || g_clio_log_count >= g_clio_log_limit) {
         return;
     }
     const u32 window = offset & 0xfffu;

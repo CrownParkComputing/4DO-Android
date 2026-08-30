@@ -296,7 +296,9 @@ bool CdRomDevice::fill_next_sector_now() {
         transfer_sectors_ = 0;
         return false;
     }
-    data_.assign(sector, sector + kSectorUserBytes);
+    const size_t block = sector_size_ != 0 && sector_size_ <= kSectorUserBytes
+                             ? sector_size_ : kSectorUserBytes;
+    data_.assign(sector, sector + block);
     data_pos_ = 0;
     ++transfer_lba_;
     --transfer_sectors_;
@@ -304,14 +306,29 @@ bool CdRomDevice::fill_next_sector_now() {
 }
 
 bool CdRomDevice::has_chunk() const {
-    return data_pos_ < data_.size() || transfer_sectors_ > 0;
+    return data_pos_ < data_.size();
 }
 
 u8 CdRomDevice::read_data() {
     if (data_pos_ >= data_.size()) {
-        return 0;   // the next sector arrives when the drive reaches it
+        return 0;
     }
-    return data_pos_ < data_.size() ? data_[data_pos_++] : 0;
+    const u8 byte = data_[data_pos_++];
+
+    // Draining the last byte of a block pulls the next one in behind it, if
+    // the command asked for more. The drive keeps data-ready asserted across
+    // the join, so a multi-block read is one continuous stream to the host
+    // rather than a sequence the host has to re-arm.
+    //
+    // Waiting for a rotational delay here instead leaves the host reading
+    // zeroes off an empty FIFO while data-ready still says otherwise, and the
+    // transfer never completes.
+    if (data_pos_ >= data_.size()) {
+        data_.clear();
+        data_pos_ = 0;
+        fill_next_sector_now();
+    }
+    return byte;
 }
 
 u8 CdRomDevice::drive_status() const {

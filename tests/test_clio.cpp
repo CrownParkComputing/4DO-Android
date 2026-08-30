@@ -227,8 +227,12 @@ TEST(the_region_sets_the_field_length) {
 // Timers run off a 21 MHz source divided by TIMERCTL, not off the CPU clock,
 // so a count is worth many CPU cycles. These tests deal in counts and convert.
 namespace {
-// CPU cycles that advance a timer by n counts at the reset divider.
-u32 counts(u32 n) { return n * ((12500000u * 64u) / 21000000u); }
+// CPU cycles that advance a timer by exactly n counts at the reset divider.
+// The ratio is 38.095 cycles per count, so this rounds up by one to be sure of
+// crossing the nth threshold without reaching the one after it.
+u32 counts(u32 n) {
+    return static_cast<u32>((static_cast<u64>(n) * 12500000u * 64u) / 21000000u) + 1u;
+}
 }  // namespace
 
 TEST(a_timer_reloads_and_raises_an_interrupt_when_it_expires) {

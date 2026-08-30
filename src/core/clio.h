@@ -391,7 +391,8 @@ private:
     static constexpr u32 kTimerCpuHz    = 12500000;
     static constexpr u32 kTimerDelayReset = 64;
     u32 timer_delay_ = kTimerDelayReset;
-    u32 timer_accumulator_ = 0;
+    static constexpr u64 kTimerFixedOne = 1u << 16;   // accumulator fraction
+    u64 timer_accumulator_ = 0;
     u32 timer_counter_[kClioTimerCount] = {};
     u32 timer_reload_[kClioTimerCount]  = {};
 

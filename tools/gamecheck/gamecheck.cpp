@@ -17,7 +17,11 @@
 //              that reaches gameplay draws tens of thousands.
 //   screens    distinct framebuffer contents. Separates a moving picture from
 //              a still one, and a still one from a black one.
-//   pixels     the most non-black pixels any single frame reached.
+//   pixels     how much of the busiest frame is actually content: pixels
+//              differing from that frame's most common colour. Counting
+//              non-black pixels instead stops measuring anything the moment a
+//              title programs a non-black background - every pixel is then
+//              "lit" and a blank screen scores full marks.
 //
 // Expectations live beside the library in a plain text file so a regression is
 // a test failure rather than something you have to notice by eye. Without one
@@ -104,12 +108,19 @@ Result run(const fs::path& bios, const fs::path& disc, int frames,
         const size_t count = static_cast<size_t>(image.width) * image.height;
         screens.insert(hash_frame(image.pixels, count));
 
-        int lit = 0;
+        // Content, not brightness: how many pixels differ from the commonest
+        // colour in the frame. A flat screen of any colour scores zero.
+        std::map<u32, int> histogram;
         for (size_t i = 0; i < count; ++i) {
-            if ((image.pixels[i] & 0x00ffffffu) != 0) {
-                ++lit;
+            ++histogram[image.pixels[i] & 0x00ffffffu];
+        }
+        int commonest = 0;
+        for (const auto& entry : histogram) {
+            if (entry.second > commonest) {
+                commonest = entry.second;
             }
         }
+        const int lit = static_cast<int>(count) - commonest;
         // Keep the busiest frame rather than the last one. The last frame of a
         // run lands wherever the title happened to be, which for a
         // double-buffered game is as likely to be the blank half as the drawn

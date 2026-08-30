@@ -21,35 +21,37 @@
 #
 # Status, honestly. "Matches reference" means the machine this was ported from
 # does the same thing with the same dump, so the shortfall is not ours alone.
+# Where a title has been compared frame-for-frame, the figure is how many of
+# its pixels differ from the reference's on the same frame.
 #
+#   Killing Time          its title menu. 3.3% of pixels differ.
+#   Flashback             its menu. 11% differ, and that is the character
+#                         standing at a different point in his idle animation.
 #   Alone in the Dark     its animated intro, over a million cels
-#   Flashback             its menu, within a pixel of the reference machine's
-#   Killing Time          its title menu
 #   PGA Tour 96           credits, clean
 #   Alone in the Dark 2   drawing, mid-transition
-#   Wing Commander III    drawing
-#   Battle Chess          its publisher splash. Cel count matches the
-#                         reference to within two per cent, so this is where
-#                         the title gets to in five minutes, not where we
-#                         stop it - it reaches its board given longer.
+#   Battle Chess          its publisher splash. Cel count within two per cent
+#                         of the reference, so this is where the title gets to
+#                         in five minutes rather than where we stop it.
 #   BattleSport           BIOS shell, "Insert CD". MATCHES REFERENCE.
 #   Road Rash             BIOS shell, "Insert CD". MATCHES REFERENCE.
 #   Doom                  BIOS shell - the dump is bad, chdman rejects it too
-#   Need for Speed        barely draws, stops early. Still to diagnose.
+#   Need for Speed        barely draws. The reference manages sixty-five cels
+#                         to our thirty-three, so it does not work there
+#                         either. Not ours alone to fix.
+#   Wing Commander III    draws a starfield where the reference has a
+#                         cutscene. OURS - the reference gets there.
 #   Wing Commander III d2 will not open at all - suspect a bad dump
 #
 # Eleven of twelve draw. The one that does not is a bad file.
-#
-# Six of them now fill the whole 320x240 screen, which is what a correctly
-# rendered frame looks like rather than a partly drawn one.
 
-Alone in the Dark (USA)       | 1200000 |  600 | 55000
-Alone in the Dark 2           |    7000 | 1400 | 55000
-Battle Chess                  |    4500 |   60 | 35000
-BattleSport                   |  150000 |  700 | 70000
-Doom                          |  150000 |  700 | 70000
-Flashback                     |   95000 | 1400 | 70000
-Killing Time                  |  110000 |  700 | 70000
-PGA Tour 96                   |  100000 | 1700 | 70000
-Road & Track Presents         |      30 |    4 |  7000
+Alone in the Dark (USA)       | 1200000 |  700 | 55000
+Alone in the Dark 2           |    7000 | 1600 | 55000
+Battle Chess                  |    4500 |  700 | 35000
+BattleSport                   |  150000 |  800 | 65000
+Doom                          |  150000 |  800 | 65000
+Flashback                     |   95000 | 1500 | 50000
+Killing Time                  |  110000 |  800 | 65000
+PGA Tour 96                   |  100000 | 2000 | 65000
+Road & Track Presents         |      30 |    3 |  7000
 Wing Commander III            |     240 |  400 | 45000

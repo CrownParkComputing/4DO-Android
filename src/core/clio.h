@@ -38,6 +38,11 @@ class Arm60;
 // soft-reset path, which boots to a picture and looks fine - and then never
 // brings up the CD driver, because on a soft reset it is supposed to still be
 // there from last time.
+// Sources on the SECOND interrupt bank.
+enum : u32 {
+    kIrq1PbusComplete = 1u << 0,   // a controller scan finished
+};
+
 enum : u32 {
     kResetSoftware  = 1u << 0,
     kResetWatchdog  = 1u << 1,
@@ -338,7 +343,7 @@ public:
     void write_impl(u32 offset, u32 value);
 
     // --- interrupt sources -------------------------------------------------
-    void raise(u32 sources);          // bank 0
+    void raise(u32 sources);            // bank 0
     void raise_secondary(u32 sources);  // bank 1
 
     // --- video timing ------------------------------------------------------

@@ -85,6 +85,19 @@ private:
     u32 bit_ = 0;
 };
 
+// A register trace, off unless MADAMLOG names a file. Same idea as the CLIO
+// one: comparing the sequence against a machine known to work is the quickest
+// way to find a register nobody is driving.
+std::FILE* const g_madam_log = [] {
+    const char* path = std::getenv("MADAMLOG");
+    return path != nullptr ? std::fopen(path, "w") : nullptr;
+}();
+long g_madam_log_count = 0;
+const long g_madam_log_limit = [] {
+    const char* limit = std::getenv("MADAMLOGMAX");
+    return limit != nullptr ? std::strtol(limit, nullptr, 10) : 200000L;
+}();
+
 unsigned bits_per_pixel(CelFormat format) {
     switch (format) {
         case CelFormat::Indexed1: return 1;
@@ -182,6 +195,9 @@ u32 Madam::read(u32 offset) {
         case kMadamXbusDmaAddress:   return xbus_dma_address_;
         case kMadamXbusDmaLength:    return xbus_dma_length_;
         case kMadamVdlAddress: return vdl_address_;
+        case kMadamPbusAddress: return pbus_address_;
+        case kMadamPbusLength:  return pbus_length_;
+        case kMadamPbusPointer: return pbus_pointer_;
         case kMadamCurrentCcb: return current_ccb_;
         case kMadamNextCcb:    return next_ccb_;
         default:
@@ -210,6 +226,10 @@ void Madam::note_write(u32 offset, u32 value) {
 
 void Madam::write(u32 offset, u32 value) {
     offset &= (kMadamWindowSize - 1);
+    if (g_madam_log != nullptr && g_madam_log_count < g_madam_log_limit) {
+        std::fprintf(g_madam_log, "W %04X %08X\n", offset, value);
+        ++g_madam_log_count;
+    }
     note_write(offset, value);
     u32 channel = 0;
     bool is_length = false;
@@ -234,7 +254,14 @@ void Madam::write(u32 offset, u32 value) {
             // zero DRAM, and panics.
             break;
         case kMadamDmaEnable:
+            // Bit 15 asks for a controller scan. The transfer runs here,
+            // inside the store, because the OS starts it and then blocks on
+            // the interrupt it raises - there is no later point at which it
+            // would be convenient to notice.
             dma_enable_ = value;
+            if ((dma_enable_ & kMadamPbusStart) != 0 && pbus_handler_ != nullptr) {
+                pbus_handler_(pbus_context_);
+            }
             break;
         case kMadamXbusDmaAddress:
             xbus_dma_address_ = value;
@@ -247,6 +274,16 @@ void Madam::write(u32 offset, u32 value) {
             break;
         case kMadamVdlAddress:
             vdl_address_ = value;
+            break;
+
+        case kMadamPbusAddress:
+            pbus_address_ = value;
+            break;
+        case kMadamPbusLength:
+            pbus_length_ = value;
+            break;
+        case kMadamPbusPointer:
+            pbus_pointer_ = value;
             break;
         // The value written to any of these is discarded; the port itself is
         // the instruction. The real chip runs the walk asynchronously and

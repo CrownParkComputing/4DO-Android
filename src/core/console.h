@@ -17,6 +17,7 @@
 #include "disc.h"
 #include "clio.h"
 #include "madam.h"
+#include "pbus.h"
 #include "pad.h"
 #include "sport.h"
 #include "vdlp.h"
@@ -78,6 +79,14 @@ public:
 
 private:
     void service_expansion_dma();
+    void service_pbus_dma();
+
+public:
+    // The controller state the machine will report on its next input scan.
+    void set_joypad(const Joypad& pad) { joypad_ = pad; }
+    const Joypad& joypad() const { return joypad_; }
+
+private:
     u64 expansion_dma_count_ = 0;
 
 public:
@@ -103,6 +112,8 @@ private:
     Clio  clio_;
     Vdlp  vdlp_;
     Madam madam_;
+    Pbus pbus_;
+    Joypad joypad_;
     Sport sport_;
     Disc  disc_;
     PadState  pads_;

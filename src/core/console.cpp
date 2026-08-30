@@ -35,6 +35,11 @@ Console::Console() : cpu_(bus_), clio_(cpu_), vdlp_(bus_), madam_(bus_), sport_(
             static_cast<Console*>(context)->service_expansion_dma();
         },
         this);
+    madam_.set_pbus_handler(
+        [](void* context) {
+            static_cast<Console*>(context)->service_pbus_dma();
+        },
+        this);
     set_region(Region::Ntsc);
     reset();
 }
@@ -198,6 +203,62 @@ void Console::apply_write_watch() {
 // address and a length and then waits for the transfer-complete interrupt, so
 // without this the machine issues a perfectly good READ and then waits forever
 // for data that has nowhere to go.
+// Write the state of every attached controller into memory and say so.
+//
+// The length register counts DOWN and holds bytes-minus-four, so a negative
+// value means there is no buffer to fill and the transfer is skipped entirely
+// rather than run with a wrapped count.
+//
+// The first word of the buffer is stepped over without being written. That is
+// not an off-by-one: the transfer begins by advancing past it, and software
+// lays its buffer out expecting that.
+void Console::service_pbus_dma() {
+    if (static_cast<s32>(madam_.pbus_length()) < 0) {
+        return;
+    }
+
+    pbus_.begin();
+    pbus_.add_joypad(joypad_);
+    pbus_.pad();
+
+    u32 address = madam_.pbus_address();
+    s32 remaining = static_cast<s32>(madam_.pbus_length());
+
+    remaining -= 4;
+    address += 4;
+    madam_.advance_pbus_pointer();
+
+    const u8* source = pbus_.data();
+    s32 available = static_cast<s32>(pbus_.size());
+    while (remaining > 0 && available > 0) {
+        // Four bytes, most significant first - the order they were reported
+        // in, not the order the host happens to store words in.
+        const u32 word = (static_cast<u32>(source[0]) << 24) |
+                         (static_cast<u32>(source[1]) << 16) |
+                         (static_cast<u32>(source[2]) << 8) |
+                          static_cast<u32>(source[3]);
+        bus_.write32(address, word);
+        source += 4;
+        available -= 4;
+        remaining -= 4;
+        address += 4;
+        madam_.advance_pbus_pointer();
+    }
+
+    // Anything the devices did not fill reads as absent.
+    while (remaining > 0) {
+        bus_.write32(address, 0xffffffffu);
+        remaining -= 4;
+        address += 4;
+        madam_.advance_pbus_pointer();
+    }
+
+    madam_.set_pbus_address(address);
+    madam_.set_pbus_length(0xfffffffcu);
+    madam_.finish_pbus();
+    clio_.raise_secondary(kIrq1PbusComplete);
+}
+
 void Console::service_expansion_dma() {
     if (!clio_.xbus_dma_requested()) {
         return;

@@ -78,6 +78,14 @@ enum : u32 {
     // device's reply is DMA'd into memory rather than read back through a
     // port, which is why no amount of adjusting the status port moved the
     // machine.
+    // The PBUS channel lives on the DMA-enable register above: writing it with
+    // bit 15 set starts a controller scan, and the hardware clears the bit
+    // when it is done and interrupts.
+    kMadamPbusStart   = 0x8000,
+    kMadamPbusAddress = 0x0570,
+    kMadamPbusLength  = 0x0574,
+    kMadamPbusPointer = 0x0578,
+
     kMadamDmaBase    = 0x0200,
 
     // The expansion-bus DMA. This is how a sector actually reaches memory: the
@@ -249,6 +257,20 @@ public:
     // The rectangle cels are clipped to. Defaults to the whole visible field.
     void set_clip(u32 width, u32 height);
 
+    // The PBUS transfer happens inside the store that starts it, and it is
+    // MADAM that owns the registers but the machine that owns memory, so the
+    // work itself is handed back out.
+    void set_pbus_handler(void (*handler)(void*), void* context) {
+        pbus_handler_ = handler;
+        pbus_context_ = context;
+    }
+    u32  pbus_address() const { return pbus_address_; }
+    u32  pbus_length() const { return pbus_length_; }
+    void set_pbus_address(u32 value) { pbus_address_ = value; }
+    void set_pbus_length(u32 value) { pbus_length_ = value; }
+    void advance_pbus_pointer() { pbus_pointer_ += 4; }
+    void finish_pbus() { dma_enable_ &= ~kMadamPbusStart; }
+
     const MadamStats& stats() const { return stats_; }
 
     // Lifetime totals. `stats()` describes the LAST list only, which reads as
@@ -315,6 +337,11 @@ private:
     u32 vdl_address_ = 0;
     u64 engine_runs_ = 0;
     u64 total_cels_drawn_ = 0;
+    u32 pbus_address_ = 0;
+    u32 pbus_length_ = 0;
+    u32 pbus_pointer_ = 0;
+    void (*pbus_handler_)(void*) = nullptr;
+    void* pbus_context_ = nullptr;
     u32 current_ccb_ = 0;
     u32 next_ccb_ = 0;
     u32 dma_address_[kMadamDmaChannels] = {};

@@ -129,10 +129,12 @@ void Clio::raise(u32 sources) {
 
 void Clio::raise_secondary(u32 sources) {
     irq1_pending_ |= sources;
-    // Bank 1 does not reach the CPU on its own. It sets a bit in bank 0, so a
-    // handler always reads bank 0 first and only then looks at bank 1. Which
-    // bit that is has not been confirmed.
-    if ((irq1_pending_ & irq1_enabled_) != 0) {
+    // Bank 1 does not reach the CPU on its own. ANY pending source in it sets
+    // bit 31 of bank 0, so a handler reads bank 0 first and only then looks at
+    // bank 1. The enable mask does not gate this: a source that is pending but
+    // masked still announces the bank, and it is the handler that decides
+    // whether to act.
+    if (irq1_pending_ != 0) {
         irq0_pending_ |= kIrqSecondaryBank;
     }
     update_cpu_interrupt_line();

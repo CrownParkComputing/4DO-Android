@@ -27,7 +27,14 @@
 #   Killing Time          its title menu. PIXEL IDENTICAL to the reference.
 #   Flashback             its menu. 11% differ, and that is the character
 #                         standing at a different point in his idle animation.
-#   Alone in the Dark     its animated intro. PIXEL IDENTICAL.
+#   Alone in the Dark     its Infogrames logo and on into the game. It used to
+#                         be PIXEL IDENTICAL to the reference and is now 27%
+#                         different, which is an improvement rather than a
+#                         regression: the reference stops on "There is only
+#                         enough space on your 3DO system to save 0 games",
+#                         which is the blank-NVRAM fault, and this machine no
+#                         longer has it. The old identical match was the two
+#                         machines agreeing on a bug.
 #   Alone in the Dark 2   PIXEL IDENTICAL.
 #   PGA Tour 96           gameplay. Differs from the reference only in where
 #                         the two machines are in the round.
@@ -48,27 +55,38 @@
 #                         points at the dump rather than at either emulator.
 #                         Not proven, only narrowed.
 #   Doom                  BIOS shell - the dump is bad, chdman rejects it too
-#   Need for Speed        was not stuck - it waits at a menu for a button.
-#                         With --press it reaches ten thousand cels and then
-#                         stops on "NVRAM Full: Configuration not saved",
-#                         which is a real fault: the BIOS formats the NVRAM
-#                         correctly and only forty-one bytes of thirty-two
-#                         thousand are in use, so "full" is wrong.
+#   Need for Speed        FIXED, and no longer needs --press at all. It used
+#                         to stop on "NVRAM Full: Configuration not saved"
+#                         with forty-one bytes of thirty-two thousand in use.
+#                         The cause was an NVRAM that came up blank: the OS
+#                         only formats it on reaching its own shell, so a title
+#                         booted straight from a disc finds no filesystem and
+#                         calls it full. The machine now boots with the image
+#                         the boot ROM itself writes, as real hardware does.
+#                         Thirty-three cels became thirteen thousand, two
+#                         hundred and ninety-two sectors became thirty-five
+#                         thousand, and it reaches its attract screen.
 #   Wing Commander III    Was stalled after 262 cels and 4,333 sectors. Fixed
 #                         by charging the real memory-cycle costs: now 304
 #                         cels and 27,853 sectors, and ten times the distinct
 #                         frames. It was waiting on timing.
 #   Wing Commander III d2 will not open at all - suspect a bad dump
 #
+# A note on the floors below. Alone in the Dark's cel floor went DOWN, which
+# is normally forbidden. It is allowed here because the title is no longer
+# doing the same thing: it used to loop its intro for the whole run, and now
+# gets past the save-game screen and into the game, which draws far fewer cels
+# and far more distinct screens. The screen floor doubled to hold that gain.
+#
 # Eleven of twelve draw. The one that does not is a bad file.
 
-Alone in the Dark (USA)       | 1300000 | 1000 | 55000
-Alone in the Dark 2           |    7500 | 2200 | 55000
+Alone in the Dark (USA)       |   16000 | 1900 | 55000
+Alone in the Dark 2           |    7800 | 2300 | 60000
 Battle Chess                  |    4500 |  700 | 35000
 BattleSport                   |  180000 |  800 | 65000
 Doom                          |  180000 |  800 | 65000
 Flashback                     |  100000 | 1800 | 60000
 Killing Time                  |   55000 |  800 | 70000
-PGA Tour 96                   |   65000 | 1900 | 70000
-Road & Track Presents         |      30 |    3 |  9000
+PGA Tour 96                   |   64000 | 1900 | 70000
+Road & Track Presents         |   13000 | 2500 | 70000
 Wing Commander III            |     300 | 4000 | 45000

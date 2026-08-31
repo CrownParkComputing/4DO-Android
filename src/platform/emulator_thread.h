@@ -32,8 +32,10 @@
 
 #include <atomic>
 #include <memory>
+#include <mutex>
 #include <string>
 #include <thread>
+#include <vector>
 
 #include "core/types.h"
 
@@ -72,6 +74,16 @@ public:
     // emulator is midway through a frame.
     void request_reset();
 
+    // Take a copy of the NVRAM, if the machine has written it since the last
+    // time anyone asked. Returns false when there is nothing new, which is the
+    // usual answer - titles touch it when the user saves and at no other time.
+    //
+    // It works this way, rather than the caller reading the bus directly,
+    // because emulation owns that memory and is usually midway through a frame
+    // when the display thread comes asking. The copy is taken at a frame
+    // boundary, so what comes out is always a whole consistent image.
+    bool take_nvram(std::vector<u8>& out);
+
     EmulatorStats stats() const;
 
 private:
@@ -85,6 +97,10 @@ private:
     std::atomic<bool> should_stop_{false};
     std::atomic<bool> paused_{false};
     std::atomic<bool> reset_requested_{false};
+
+    mutable std::mutex nvram_lock_;
+    std::vector<u8> nvram_snapshot_;
+    bool nvram_pending_ = false;
 
     std::atomic<u64> frames_emulated_{0};
     std::atomic<u64> frames_behind_{0};

@@ -4,6 +4,7 @@
 #include <chrono>
 #include <cstring>
 
+#include "core/bus.h"
 #include "core/console.h"
 #include "core/frame_mailbox.h"
 
@@ -58,6 +59,16 @@ void EmulatorThread::request_reset() {
     reset_requested_.store(true, std::memory_order_release);
 }
 
+bool EmulatorThread::take_nvram(std::vector<u8>& out) {
+    std::lock_guard<std::mutex> guard(nvram_lock_);
+    if (!nvram_pending_) {
+        return false;
+    }
+    out = nvram_snapshot_;
+    nvram_pending_ = false;
+    return true;
+}
+
 EmulatorStats EmulatorThread::stats() const {
     EmulatorStats s;
     s.frames_emulated = frames_emulated_.load(std::memory_order_relaxed);
@@ -101,6 +112,16 @@ void EmulatorThread::run() {
             std::memcpy(mailbox_.writable(), frame.pixels,
                         static_cast<size_t>(frame.width) * frame.height * sizeof(u32));
             mailbox_.publish();
+        }
+
+        // Snapshot the NVRAM if the machine wrote to it. Cheap to test and
+        // almost always false, so this costs a load per frame and nothing else.
+        if (console_.bus().nvram_dirty()) {
+            std::lock_guard<std::mutex> guard(nvram_lock_);
+            nvram_snapshot_.assign(console_.bus().nvram(),
+                                   console_.bus().nvram() + console_.bus().nvram_size());
+            nvram_pending_ = true;
+            console_.bus().clear_nvram_dirty();
         }
 
         const auto finished = Clock::now();

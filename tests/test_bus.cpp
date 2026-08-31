@@ -4,6 +4,8 @@
 // access therefore swaps, and a swap that is right in one direction and wrong
 // in the other produces graphics that are almost right — the most expensive
 // kind of bug to chase later. So it is pinned down here.
+#include <vector>
+
 #include "core/bus.h"
 #include "core/console.h"
 #include "test_harness.h"
@@ -94,6 +96,38 @@ TEST(the_frame_is_the_right_shape_for_the_region) {
     frame = console.framebuffer();
     CHECK_EQ(frame.width, 320);
     CHECK_EQ(frame.height, 288);
+}
+
+TEST(nvram_survives_a_round_trip_through_a_saved_image) {
+    Bus bus;
+    // Nothing to save until the machine writes something. Formatting counts,
+    // so the very first ask is expected to hand back the formatted image.
+    CHECK(bus.nvram_dirty());
+    bus.clear_nvram_dirty();
+    CHECK(!bus.nvram_dirty());
+
+    bus.write32(kNvramBase + 300 * 4, 0xa5u);
+    CHECK(bus.nvram_dirty());
+
+    const std::vector<u8> saved(bus.nvram(), bus.nvram() + bus.nvram_size());
+
+    Bus fresh;
+    CHECK_EQ(fresh.read32(kNvramBase + 300 * 4) & 0xffu, 0x00u);
+    CHECK(fresh.restore_nvram(saved.data(), saved.size()));
+    CHECK_EQ(fresh.read32(kNvramBase + 300 * 4) & 0xffu, 0xa5u);
+    // Nothing has changed since the restore, so there is nothing to write back.
+    CHECK(!fresh.nvram_dirty());
+}
+
+TEST(a_wrong_sized_nvram_image_is_refused_rather_than_padded) {
+    // A half-restored NVRAM looks corrupt to a title, which then offers to
+    // reformat it - so a short read must lose nothing rather than lose all of
+    // it. Refusing leaves the formatted image in place.
+    Bus bus;
+    const std::vector<u8> too_short(16, 0xffu);
+    CHECK(!bus.restore_nvram(too_short.data(), too_short.size()));
+    CHECK(!bus.restore_nvram(nullptr, bus.nvram_size()));
+    CHECK_EQ(bus.read32(kNvramBase + 0 * 4) & 0xffu, 0x01u);
 }
 
 TEST(the_nvram_comes_up_formatted_rather_than_blank) {

@@ -9,6 +9,7 @@
 
 #include <memory>
 #include <string>
+#include <vector>
 
 #include "core/types.h"
 
@@ -63,6 +64,8 @@ private:
     void open_gamepad(u32 which);
     void load_settings();
     void save_settings();
+    void load_nvram();
+    void save_nvram();
     bool open_bios(const std::string& path, const std::string& name);
     bool open_disc(const std::string& path, const std::string& name);
     void present();
@@ -89,6 +92,9 @@ private:
     bool start_on_launch_ = false;
     bool running_ = false;
     bool emulating_ = false;
+
+    // Reused across saves so a save does not allocate thirty-two kilobytes.
+    std::vector<u8> nvram_scratch_;
 
     std::string last_error_;
 };

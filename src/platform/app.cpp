@@ -48,6 +48,11 @@ void write_test_pattern(Console& console) {
     console.vdlp().set_list_address(list);
 }
 
+// One NVRAM, shared by every title, exactly as a console has one. Keeping a
+// separate image per disc would be tidier to reason about, but it is not what
+// the hardware does and it would break the titles that read each other's saves.
+constexpr const char* kNvramFile = "nvram.bin";
+
 }  // namespace
 
 App::App() = default;
@@ -57,7 +62,11 @@ App::~App() {
     if (settings_ && touch_ && console_) {
         save_settings();
     }
-    if (emulator_) emulator_->stop();
+    // Last chance to write out a save the user made just before quitting.
+    if (emulator_) {
+        emulator_->stop();
+        save_nvram();
+    }
     emulator_.reset();
     ui_.reset();
     stop_audio();
@@ -140,6 +149,7 @@ bool App::init() {
         touch_->reset_layout(window_w, window_h);
     }
     load_settings();
+    load_nvram();
 
     emulator_->set_paused(!start_on_launch_);
     emulating_ = start_on_launch_;
@@ -329,6 +339,37 @@ void App::set_launch_files(std::string bios, std::string disc) {
     launch_disc_ = std::move(disc);
 }
 
+// The NVRAM is restored before emulation starts, so a title that reads it on
+// its first frame sees the user's saves rather than an empty card.
+//
+// A missing file is a first run, not an error: the machine has already put a
+// formatted image there. A file of the wrong length is refused rather than
+// padded - a half-restored NVRAM would look to a title like a corrupt one, and
+// it would offer to reformat it, which would lose everything.
+void App::load_nvram() {
+    if (!console_) return;
+    const std::string path = Storage::join(Storage::writable_directory(), kNvramFile);
+    size_t size = 0;
+    void* data = SDL_LoadFile(path.c_str(), &size);
+    if (data == nullptr) {
+        return;
+    }
+    console_->bus().restore_nvram(static_cast<const u8*>(data), size);
+    SDL_free(data);
+}
+
+// Called every turn of the display loop. It costs a lock and a bool nearly
+// every time: the machine only writes the NVRAM when the user saves, so the
+// file is only touched then too.
+void App::save_nvram() {
+    if (!emulator_) return;
+    if (!emulator_->take_nvram(nvram_scratch_)) {
+        return;
+    }
+    const std::string path = Storage::join(Storage::writable_directory(), kNvramFile);
+    SDL_SaveFile(path.c_str(), nvram_scratch_.data(), nvram_scratch_.size());
+}
+
 void App::load_settings() {
     settings_->load(Storage::join(Storage::writable_directory(), "settings.cfg"));
 
@@ -474,6 +515,7 @@ void App::tick() {
     handle_events();
 
     feed_audio();
+    save_nvram();
 
     // Frames per second, smoothed, for the overlay. Measured across the whole
     // turn of the loop, so it reflects what the user actually sees.

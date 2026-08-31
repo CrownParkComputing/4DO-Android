@@ -171,6 +171,24 @@ public:
     // it as full rather than formatting it.
     void format_nvram();
 
+    // The NVRAM as bytes, for saving to and restoring from a file. It is one
+    // byte per 32-bit word as the CPU sees it, so this is kNvramSize long and
+    // not the 128KiB the address window covers.
+    //
+    // A restored image is taken as-is rather than being validated: a console
+    // with a corrupt NVRAM shows the user its own error message about it, and
+    // rewriting it behind their back would hide a real fault and lose real
+    // saves. The only check is the length.
+    const u8* nvram() const { return nvram_.data(); }
+    size_t nvram_size() const { return nvram_.size(); }
+    bool restore_nvram(const u8* data, size_t size);
+
+    // Set by any write to the NVRAM, cleared when the caller has saved it.
+    // Saving thirty-two kilobytes every frame would be wasteful and would
+    // wear a phone's flash for no reason; titles write it rarely.
+    bool nvram_dirty() const { return nvram_dirty_; }
+    void clear_nvram_dirty() { nvram_dirty_ = false; }
+
     u8* dram() { return dram_.data(); }
     u8* vram() { return vram_.data(); }
     const u8* dram() const { return dram_.data(); }
@@ -208,6 +226,7 @@ private:
     std::vector<u8> vram_;
     std::vector<u8> rom_;
     std::vector<u8> nvram_;
+    bool nvram_dirty_ = false;
 
     bool bios_loaded_ = false;
 

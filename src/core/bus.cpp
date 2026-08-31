@@ -81,6 +81,18 @@ void Bus::format_nvram() {
     std::fill(nvram_.begin(), nvram_.end(), 0);
     std::copy(std::begin(kFormattedNvram), std::end(kFormattedNvram),
               nvram_.begin());
+    nvram_dirty_ = true;
+}
+
+bool Bus::restore_nvram(const u8* data, size_t size) {
+    if (data == nullptr || size != nvram_.size()) {
+        return false;
+    }
+    std::copy(data, data + size, nvram_.begin());
+    // A restored image is what the user last had, so there is nothing new to
+    // write back until the machine changes it.
+    nvram_dirty_ = false;
+    return true;
 }
 
 void Bus::reset() {
@@ -229,6 +241,7 @@ void Bus::write32(u32 address, u32 value) {
     }
     if (addr >= kNvramBase && addr < kNvramBase + kNvramSpan) {
         nvram_[((addr - kNvramBase) % kNvramMirror) / kNvramStride] = static_cast<u8>(value & 0xffu);
+        nvram_dirty_ = true;
         return;
     }
     if (clio_ != nullptr && addr >= kClioBase && addr < kClioBase + kClioSize) {
@@ -284,6 +297,7 @@ void Bus::write8(u32 address, u8 value) {
     if (address >= kNvramBase && address < kNvramBase + kNvramSpan) {
         if ((((address - kNvramBase) % kNvramMirror) % kNvramStride) == kNvramStride - 1) {
             nvram_[((address - kNvramBase) % kNvramMirror) / kNvramStride] = value;
+            nvram_dirty_ = true;
         }
         return;
     }

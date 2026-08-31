@@ -1462,12 +1462,34 @@ void Madam::draw_cel(const Ccb& ccb) {
     if (cel_is_invisible(ccb, (ccb.flags & kCcbPacked) != 0)) {
         return;
     }
+    // A cel drawn backwards along an axis is shifted back by half a pixel on
+    // that axis.
+    //
+    // It is a rounding correction. Stepping forwards, a pixel's address is
+    // truncated towards the pixel it starts on; stepping backwards, the same
+    // truncation lands on the pixel BEFORE the one the hardware means, so a
+    // mirrored cel would sit one pixel off from its unmirrored twin. The half
+    // pixel puts the rounding back where it belongs, and only the axis-aligned
+    // mappers need it - a rotated cel is resolved a different way.
+    //
+    // Honestly: this changes nothing measurable in the twelve titles here. One
+    // extra distinct frame in Flashback out of two thousand, and both
+    // pixel-identical titles stay identical. It is in because the hardware
+    // does it and a mirrored cel elsewhere will need it, not because anything
+    // here was visibly wrong without it.
+    Ccb biased = ccb;
+    if (ccb.hddx == 0 && ccb.hddy == 0 &&
+        ((ccb.hdx == 0 && ccb.vdy == 0) || (ccb.hdy == 0 && ccb.vdx == 0))) {
+        if (ccb.hdx < 0 || ccb.vdx < 0) biased.x -= 0x8000;
+        if (ccb.hdy < 0 || ccb.vdy < 0) biased.y -= 0x8000;
+    }
+    const Ccb& use = biased;
     if ((ccb.flags & kCcbPacked) != 0) {
-        draw_packed_cel(ccb);
+        draw_packed_cel(use);
     } else if ((ccb.pre1 & kPre1Lrform) != 0 && cel_bpp_ == 16) {
-        draw_lr_cel(ccb);
+        draw_lr_cel(use);
     } else {
-        draw_unpacked_cel(ccb);
+        draw_unpacked_cel(use);
     }
 }
 

@@ -311,10 +311,15 @@ void Ui::draw_launcher(Console& console, bool touch_visible,
     ImGui::Spacing();
     ImGui::Separator();
     ImGui::PushTextWrapPos(0.0f);
+    // Kept honest deliberately. A launcher that claims everything works is
+    // worse than one that says what does: the person in front of it can tell
+    // the difference in about ten seconds, and then trusts nothing else it
+    // says either.
     ImGui::TextDisabled(
-        "Under construction. The CPU, interrupts, graphics and display path all "
-        "work - the test pattern proves them. What is missing is the link "
-        "between the disc and the CPU, so a real disc will not boot yet.");
+        "Load a BIOS and a disc, then press Start. Most titles reach their "
+        "menus; some reach gameplay. A few stop at the 3DO's own \"Insert CD\" "
+        "screen - that is where the disc gets to, not a fault in the machine. "
+        "Sound is running.");
     ImGui::PopTextWrapPos();
 
     ImGui::End();

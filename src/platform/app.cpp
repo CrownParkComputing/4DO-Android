@@ -70,7 +70,12 @@ App::~App() {
     emulator_.reset();
     ui_.reset();
     stop_audio();
-    if (gamepad_) SDL_CloseGamepad(gamepad_);
+    for (SDL_Gamepad*& pad : gamepads_) {
+        if (pad != nullptr) {
+            SDL_CloseGamepad(pad);
+            pad = nullptr;
+        }
+    }
     if (frame_texture_) SDL_DestroyTexture(frame_texture_);
     if (renderer_) SDL_DestroyRenderer(renderer_);
     if (window_) SDL_DestroyWindow(window_);
@@ -221,31 +226,23 @@ void App::handle_events() {
                 open_gamepad(event.gdevice.which);
                 break;
             case SDL_EVENT_GAMEPAD_REMOVED:
-                if (gamepad_ != nullptr &&
-                    SDL_GetGamepadID(gamepad_) == event.gdevice.which) {
-                    SDL_CloseGamepad(gamepad_);
-                    gamepad_ = nullptr;
-                    touch_->set_physical_gamepad_present(false);
-                }
+                close_gamepad(event.gdevice.which);
                 break;
 
             case SDL_EVENT_GAMEPAD_BUTTON_DOWN:
             case SDL_EVENT_GAMEPAD_BUTTON_UP: {
-                const bool down = event.type == SDL_EVENT_GAMEPAD_BUTTON_DOWN;
-                PadState& pads = console_->pads();
-                switch (event.gbutton.button) {
-                    case SDL_GAMEPAD_BUTTON_DPAD_UP:    pads.press(0, PadButton::Up, down); break;
-                    case SDL_GAMEPAD_BUTTON_DPAD_DOWN:  pads.press(0, PadButton::Down, down); break;
-                    case SDL_GAMEPAD_BUTTON_DPAD_LEFT:  pads.press(0, PadButton::Left, down); break;
-                    case SDL_GAMEPAD_BUTTON_DPAD_RIGHT: pads.press(0, PadButton::Right, down); break;
-                    case SDL_GAMEPAD_BUTTON_SOUTH:      pads.press(0, PadButton::A, down); break;
-                    case SDL_GAMEPAD_BUTTON_EAST:       pads.press(0, PadButton::B, down); break;
-                    case SDL_GAMEPAD_BUTTON_WEST:       pads.press(0, PadButton::C, down); break;
-                    case SDL_GAMEPAD_BUTTON_START:      pads.press(0, PadButton::Play, down); break;
-                    case SDL_GAMEPAD_BUTTON_BACK:       pads.press(0, PadButton::Stop, down); break;
-                    case SDL_GAMEPAD_BUTTON_LEFT_SHOULDER:  pads.press(0, PadButton::LeftShift, down); break;
-                    case SDL_GAMEPAD_BUTTON_RIGHT_SHOULDER: pads.press(0, PadButton::RightShift, down); break;
-                    default: break;
+                const int slot = pad_slot_for(event.gbutton.which);
+                if (slot >= 0) {
+                    apply_gamepad_button(slot, event.gbutton.button,
+                                         event.type == SDL_EVENT_GAMEPAD_BUTTON_DOWN);
+                }
+                break;
+            }
+
+            case SDL_EVENT_GAMEPAD_AXIS_MOTION: {
+                const int slot = pad_slot_for(event.gaxis.which);
+                if (slot >= 0) {
+                    apply_gamepad_axis(slot, event.gaxis.axis, event.gaxis.value);
                 }
                 break;
             }
@@ -500,15 +497,155 @@ void App::apply_keyboard(int scancode, bool down) {
     }
 }
 
+int App::pad_slot_for(u32 joystick_id) const {
+    for (int slot = 0; slot < static_cast<int>(kMaxPads); ++slot) {
+        if (gamepads_[slot] != nullptr &&
+            SDL_GetGamepadID(gamepads_[slot]) == joystick_id) {
+            return slot;
+        }
+    }
+    return -1;
+}
+
+// A 3DO chains its pads: the machine sees one serial stream with every
+// connected pad in it, which is why it needs no multitap and why four-player
+// games exist for it at all. So a second controller is a second pad, not a
+// second view of the first.
+//
+// A controller keeps its slot until it is unplugged. Compacting the list when
+// player two leaves would hand player three's pad to player two mid-game.
 void App::open_gamepad(u32 which) {
-    if (gamepad_ != nullptr) {
-        return;  // one pad for now; the 3DO chains up to eight
+    if (pad_slot_for(which) >= 0) {
+        return;
     }
-    gamepad_ = SDL_OpenGamepad(which);
-    if (gamepad_ != nullptr) {
-        SDL_Log("Gamepad connected: %s", SDL_GetGamepadName(gamepad_));
+    for (int slot = 0; slot < static_cast<int>(kMaxPads); ++slot) {
+        if (gamepads_[slot] != nullptr) {
+            continue;
+        }
+        SDL_Gamepad* pad = SDL_OpenGamepad(which);
+        if (pad == nullptr) {
+            return;
+        }
+        gamepads_[slot] = pad;
+        axis_direction_[slot][0] = 0;
+        axis_direction_[slot][1] = 0;
+        console_->pads().set_connected(static_cast<u32>(slot), true);
         touch_->set_physical_gamepad_present(true);
+        SDL_Log("Controller %s is 3DO pad %d", SDL_GetGamepadName(pad), slot + 1);
+        return;
     }
+}
+
+void App::close_gamepad(u32 which) {
+    const int slot = pad_slot_for(which);
+    if (slot < 0) {
+        return;
+    }
+    SDL_CloseGamepad(gamepads_[slot]);
+    gamepads_[slot] = nullptr;
+
+    // Release anything that was held when it went, or the game keeps running
+    // in whatever direction the player was pushing.
+    PadState& pads = console_->pads();
+    for (u32 b = 0; b < static_cast<u32>(PadButton::Count); ++b) {
+        pads.press(static_cast<u32>(slot), static_cast<PadButton>(b), false);
+    }
+    // Slot zero is always attached: it is what the keyboard and the on-screen
+    // controls drive, and a machine with no pad in it is not a state worth
+    // reproducing.
+    if (slot != 0) {
+        pads.set_connected(static_cast<u32>(slot), false);
+    }
+
+    bool any = false;
+    for (SDL_Gamepad* g : gamepads_) {
+        any = any || (g != nullptr);
+    }
+    touch_->set_physical_gamepad_present(any);
+}
+
+void App::apply_gamepad_button(int slot, int button, bool down) {
+    PadState& pads = console_->pads();
+    const u32 pad = static_cast<u32>(slot);
+    switch (button) {
+        case SDL_GAMEPAD_BUTTON_DPAD_UP:    pads.press(pad, PadButton::Up, down); break;
+        case SDL_GAMEPAD_BUTTON_DPAD_DOWN:  pads.press(pad, PadButton::Down, down); break;
+        case SDL_GAMEPAD_BUTTON_DPAD_LEFT:  pads.press(pad, PadButton::Left, down); break;
+        case SDL_GAMEPAD_BUTTON_DPAD_RIGHT: pads.press(pad, PadButton::Right, down); break;
+        // The 3DO's three face buttons sit in a row, A B C from the left. On a
+        // modern controller the bottom and right buttons are the two that fall
+        // under the thumb, so they take A and B, and C goes to the left one -
+        // which leaves the top button free rather than putting C somewhere it
+        // cannot be reached in a hurry.
+        case SDL_GAMEPAD_BUTTON_SOUTH:      pads.press(pad, PadButton::A, down); break;
+        case SDL_GAMEPAD_BUTTON_EAST:       pads.press(pad, PadButton::B, down); break;
+        case SDL_GAMEPAD_BUTTON_WEST:       pads.press(pad, PadButton::C, down); break;
+        case SDL_GAMEPAD_BUTTON_START:      pads.press(pad, PadButton::Play, down); break;
+        case SDL_GAMEPAD_BUTTON_BACK:       pads.press(pad, PadButton::Stop, down); break;
+        case SDL_GAMEPAD_BUTTON_LEFT_SHOULDER:  pads.press(pad, PadButton::LeftShift, down); break;
+        case SDL_GAMEPAD_BUTTON_RIGHT_SHOULDER: pads.press(pad, PadButton::RightShift, down); break;
+        default: break;
+    }
+}
+
+// An analogue stick standing in for a d-pad.
+//
+// The 3DO pad has no stick, so every direction a game can read is a switch -
+// but most controllers people own now put the stick where the thumb goes and
+// leave the d-pad as the awkward one. Without this a modern controller looks
+// dead in a game that only reads directions.
+//
+// Two thresholds rather than one. A stick resting near a single threshold
+// crosses it repeatedly on the smallest movement, and a direction that flickers
+// on and off is worse than one that does not work: it walks a menu cursor away
+// on its own. Pushing IN takes more than letting go does.
+void App::apply_gamepad_axis(int slot, int axis, s16 value) {
+    PadState& pads = console_->pads();
+    const u32 pad = static_cast<u32>(slot);
+
+    // The shoulder buttons are the 3DO's only shoulder controls, so a trigger
+    // pulled counts as the same press. A trigger rests at zero rather than
+    // centred, so it needs its own threshold and no direction at all.
+    if (axis == SDL_GAMEPAD_AXIS_LEFT_TRIGGER ||
+        axis == SDL_GAMEPAD_AXIS_RIGHT_TRIGGER) {
+        constexpr s16 kTriggerOn = 12000;
+        const PadButton button = (axis == SDL_GAMEPAD_AXIS_LEFT_TRIGGER)
+                                     ? PadButton::LeftShift
+                                     : PadButton::RightShift;
+        pads.press(pad, button, value > kTriggerOn);
+        return;
+    }
+
+    int index;
+    PadButton negative;
+    PadButton positive;
+    if (axis == SDL_GAMEPAD_AXIS_LEFTX) {
+        index = 0; negative = PadButton::Left; positive = PadButton::Right;
+    } else if (axis == SDL_GAMEPAD_AXIS_LEFTY) {
+        index = 1; negative = PadButton::Up; positive = PadButton::Down;
+    } else {
+        return;   // the right stick has nothing on this machine to drive
+    }
+
+    constexpr s16 kPushIn = 16000;    // about half deflection
+    constexpr s16 kLetGo  = 9000;
+
+    s8& held = axis_direction_[slot][index];
+    s8 wanted = held;
+    if (held == 0) {
+        if (value >  kPushIn) wanted =  1;
+        if (value < -kPushIn) wanted = -1;
+    } else if (held > 0) {
+        if (value < kLetGo) wanted = (value < -kPushIn) ? -1 : 0;
+    } else {
+        if (value > -kLetGo) wanted = (value > kPushIn) ? 1 : 0;
+    }
+    if (wanted == held) {
+        return;
+    }
+    held = wanted;
+    pads.press(pad, negative, wanted < 0);
+    pads.press(pad, positive, wanted > 0);
 }
 
 void App::tick() {

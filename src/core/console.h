@@ -81,6 +81,7 @@ public:
 private:
     void service_expansion_dma();
     void service_pbus_dma();
+    Joypad joypad_for(u32 slot) const;
     void tick_dsp(u32 cycles);
 
 public:
@@ -101,8 +102,11 @@ private:
 
 public:
     // The controller state the machine will report on its next input scan.
-    void set_joypad(const Joypad& pad) { joypad_ = pad; }
-    const Joypad& joypad() const { return joypad_; }
+    // Set pad one directly. Kept for the headless harness, which has no
+    // PadState of its own to drive; it writes through to the same place the
+    // front end does so that there is only ever one answer to "what is held".
+    void set_joypad(const Joypad& pad);
+    Joypad joypad() const { return joypad_for(0); }
 
 private:
     u64 expansion_dma_count_ = 0;
@@ -132,7 +136,6 @@ private:
     Madam madam_;
     Dsp dsp_;
     Pbus pbus_;
-    Joypad joypad_;
     // The DSP runs one pass of its program per audio sample. At 44.1 kHz
     // that is about every 283 CPU cycles.
     static constexpr u32 kSamplePeriod = 12500000u / 44100u;

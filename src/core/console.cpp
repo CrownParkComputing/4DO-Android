@@ -271,13 +271,60 @@ void Console::tick_dsp(u32 cycles) {
     }
 }
 
+// One pad's buttons, in the shape the PBUS wants them.
+void Console::set_joypad(const Joypad& pad) {
+    const auto hold = [this](PadButton button, bool down) {
+        pads_.press(0, button, down);
+    };
+    hold(PadButton::Up, pad.up);
+    hold(PadButton::Down, pad.down);
+    hold(PadButton::Left, pad.left);
+    hold(PadButton::Right, pad.right);
+    hold(PadButton::A, pad.a);
+    hold(PadButton::B, pad.b);
+    hold(PadButton::C, pad.c);
+    hold(PadButton::Play, pad.play);
+    hold(PadButton::Stop, pad.stop);
+    hold(PadButton::LeftShift, pad.left_shift);
+    hold(PadButton::RightShift, pad.right_shift);
+}
+
+Joypad Console::joypad_for(u32 slot) const {
+    const u32 held = pads_.buttons(slot);
+    const auto down = [held](PadButton button) {
+        return (held & (1u << static_cast<u32>(button))) != 0;
+    };
+    Joypad pad;
+    pad.up          = down(PadButton::Up);
+    pad.down        = down(PadButton::Down);
+    pad.left        = down(PadButton::Left);
+    pad.right       = down(PadButton::Right);
+    pad.a           = down(PadButton::A);
+    pad.b           = down(PadButton::B);
+    pad.c           = down(PadButton::C);
+    pad.play        = down(PadButton::Play);
+    pad.stop        = down(PadButton::Stop);
+    pad.left_shift  = down(PadButton::LeftShift);
+    pad.right_shift = down(PadButton::RightShift);
+    return pad;
+}
+
 void Console::service_pbus_dma() {
     if (static_cast<s32>(madam_.pbus_length()) < 0) {
         return;
     }
 
     pbus_.begin();
-    pbus_.add_joypad(joypad_);
+    // Every attached pad, in order, onto the one serial stream. This is where
+    // the host's buttons finally reach the machine, and for a long time it was
+    // not: the front end wrote into PadState and this read a separate Joypad
+    // that only the headless harness ever set, so a game saw nothing at all
+    // from the on-screen controls or from a controller. There is one source of
+    // truth now, and it is PadState.
+    const u32 attached = pads_.connected_count();
+    for (u32 slot = 0; slot < attached; ++slot) {
+        pbus_.add_joypad(joypad_for(slot));
+    }
     pbus_.pad();
 
     u32 address = madam_.pbus_address();

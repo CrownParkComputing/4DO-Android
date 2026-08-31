@@ -10,6 +10,7 @@
 #include "core/audio_ring.h"
 #include "core/console.h"
 #include "core/pad.h"
+#include "core/pbus.h"
 #include "test_harness.h"
 
 using namespace retro3do;
@@ -236,4 +237,69 @@ TEST(out_of_range_pads_are_ignored_rather_than_corrupting_memory) {
     pads.press(999, PadButton::A, true);
     CHECK(!pads.pressed(kMaxPads, PadButton::A));
     CHECK_EQ(pads.buttons(999), 0u);
+}
+
+// ---------------------------------------------------------------------------
+// From the host's buttons to the machine
+// ---------------------------------------------------------------------------
+//
+// Every test above this point checks PadState on its own, and PadState worked
+// perfectly. What did not exist was anything reading it: the front end wrote
+// presses into PadState while the PBUS transfer read a separate Joypad that
+// only the headless harness ever set. So the on-screen controls and every
+// controller were silently connected to nothing, and no test noticed, because
+// no test followed a button past the object it was stored in.
+
+TEST(a_press_reaches_the_machine_and_not_merely_the_pad_state) {
+    Console console;
+    console.pads().press(0, PadButton::A, true);
+    console.pads().press(0, PadButton::Right, true);
+
+    const Joypad seen = console.joypad();
+    CHECK(seen.a);
+    CHECK(seen.right);
+    CHECK(!seen.b);
+    CHECK(!seen.left);
+
+    console.pads().press(0, PadButton::A, false);
+    CHECK(!console.joypad().a);
+    CHECK(console.joypad().right);
+}
+
+TEST(setting_pad_one_directly_lands_in_the_same_place_the_front_end_writes) {
+    // The harness has no PadState of its own to drive, so it sets a Joypad.
+    // That has to write through rather than into a second copy, or the two
+    // paths can disagree about what is held - which is how the first one came
+    // to be dead without anybody noticing.
+    Console console;
+    Joypad pad;
+    pad.play = true;
+    console.set_joypad(pad);
+
+    CHECK(console.pads().pressed(0, PadButton::Play));
+    CHECK(console.joypad().play);
+}
+
+TEST(every_attached_pad_is_chained_onto_the_one_stream) {
+    // A 3DO needs no multitap: the pads chain, and the machine sees one serial
+    // stream with each pad's report in it, in order.
+    Pbus bus;
+    bus.begin();
+
+    Joypad first;
+    first.a = true;
+    Joypad second;
+    second.b = true;
+    bus.add_joypad(first);
+    bus.add_joypad(second);
+
+    // Two bytes each, and the second pad's report must not overwrite the
+    // first's.
+    CHECK(bus.size() >= 4);
+    const u8* data = bus.data();
+    CHECK_EQ(data[0] & 0x80u, 0x80u);   // a pad announces itself
+    CHECK_EQ(data[0] & 0x01u, 0x01u);   // ...and pad one is holding A
+    CHECK_EQ(data[2] & 0x80u, 0x80u);
+    CHECK_EQ(data[2] & 0x01u, 0x00u);   // pad two is not
+    CHECK_EQ(data[3] & 0x80u, 0x80u);   // pad two is holding B
 }

@@ -11,6 +11,7 @@
 #include <string>
 #include <vector>
 
+#include "core/pad.h"
 #include "core/types.h"
 
 struct SDL_Window;
@@ -62,6 +63,13 @@ private:
     void feed_audio();
     void apply_keyboard(int scancode, bool down);
     void open_gamepad(u32 which);
+    void close_gamepad(u32 which);
+    // Which chained pad a host controller drives, or -1 if it is not one of
+    // ours. Controllers keep the slot they were given for as long as they stay
+    // plugged in, so unplugging player two does not shuffle player three.
+    int pad_slot_for(u32 joystick_id) const;
+    void apply_gamepad_button(int slot, int button, bool down);
+    void apply_gamepad_axis(int slot, int axis, s16 value);
     void load_settings();
     void save_settings();
     void load_nvram();
@@ -85,7 +93,14 @@ private:
     std::unique_ptr<EmulatorThread> emulator_;
 
     SDL_AudioStream* audio_stream_ = nullptr;
-    SDL_Gamepad* gamepad_ = nullptr;
+    // One host controller per chained 3DO pad. Slot zero is also what the
+    // keyboard and the on-screen controls drive, so it is never freed.
+    SDL_Gamepad* gamepads_[kMaxPads] = {};
+
+    // Which way each analogue axis is currently being held, per pad. Kept so a
+    // stick resting near the threshold cannot chatter: crossing out of a
+    // direction needs a smaller push than crossing into it.
+    s8 axis_direction_[kMaxPads][2] = {};
 
     std::string launch_bios_;
     std::string launch_disc_;

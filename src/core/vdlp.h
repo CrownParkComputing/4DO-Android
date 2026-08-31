@@ -182,6 +182,11 @@ private:
 // way that looks like a rendering bug in whichever one you happen to suspect.
 // They were briefly inconsistent, and the test that caught it was the one that
 // draws a cel and then checks it appears in the frame - the seam between them.
+// The top bit of a framebuffer pixel. It means nothing at all unless the
+// display list has asked for CLUT bypass, and then it means "this pixel is
+// already a colour, do not look it up".
+constexpr u16 kVdlPixelLiteral = 0x8000;
+
 constexpr u32 framebuffer_offset(int x, int y, int width) {
     const u32 pair = static_cast<u32>(y) / 2u;
     const u32 pair_bytes = static_cast<u32>(width) * 4u;

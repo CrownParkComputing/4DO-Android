@@ -128,11 +128,31 @@ void Vdlp::process_control_words(u32 address, u32 count) {
 }
 
 // One framebuffer pixel to one output pixel.
+// Turn a pixel out of the framebuffer into a colour on the screen.
+//
+// Zero is not a colour. Whatever the palette says about entry zero, a zero
+// pixel shows the background colour - that is how a title gets a coloured
+// border or a flat backdrop without writing it into the framebuffer at all.
+//
+// "Bypass CLUT" does not bypass the CLUT.
+// -------------------------------------
+// The name is a trap. Turning it on does not send every pixel straight to the
+// screen; it makes bit 15 of each pixel decide, PER PIXEL, which way that
+// pixel goes. Set, and the remaining fifteen bits are already a colour and are
+// used as one. Clear, and the pixel goes through the palette exactly as it
+// would with the bit switched off entirely.
+//
+// So the mode is not a bypass, it is a per-pixel escape hatch: it lets a title
+// mix true-colour pixels into a palettised image. Treating it as a whole-frame
+// bypass sends the palettised half of that mixture to the screen as raw
+// colour, which puts a coloured speckle over the picture in exactly the places
+// the title was relying on the palette. Wing Commander III's opening video
+// plays under one.
 u32 Vdlp::shade(u16 pixel) const {
     if (pixel == 0) {
         return 0xff000000u | (background_ & 0x00ffffffu);
     }
-    if (clut_bypass_) {
+    if (clut_bypass_ && (pixel & kVdlPixelLiteral) != 0) {
         return expand_rgb555(pixel);
     }
     return 0xff000000u |

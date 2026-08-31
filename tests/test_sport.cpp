@@ -69,7 +69,7 @@ TEST(sport_addresses_are_relative_to_vram_not_absolute) {
     CHECK_EQ(rig.bus.read32(0x1000), 0u);
 }
 
-TEST(only_the_masked_bits_are_copied) {
+TEST(a_mask_bit_protects_the_destination_rather_than_selecting_it) {
     Rig rig;
     for (u32 i = 0; i < kSportPageBytes; i += 4) {
         rig.bus.write32(kVramBase + 0x0000 + i, 0xAAAAAAAAu);
@@ -79,9 +79,16 @@ TEST(only_the_masked_bits_are_copied) {
     rig.bus.read32(rig.copy_addr(0x0000));
     rig.bus.write32(rig.copy_addr(0x0800), 0x0000FFFFu);
 
-    // Low half taken from the source, high half left as it was. This is what
-    // lets SPORT write one bitplane without disturbing the others.
-    CHECK_EQ(rig.bus.read32(kVramBase + 0x0800), 0x5555AAAAu);
+    // A one PROTECTS. The low half of the mask is set, so the destination's
+    // low half survives; the high half is clear, so the source comes through
+    // there. This reads backwards until you notice that an all-ones mask is
+    // the same as no mask at all - which it is, and which only works if a one
+    // means "leave this alone".
+    //
+    // This test used to assert the opposite, because it was written from an
+    // assumption rather than from the hardware. What that cost is recorded in
+    // sport.cpp.
+    CHECK_EQ(rig.bus.read32(kVramBase + 0x0800), 0xAAAA5555u);
 }
 
 TEST(the_fill_value_register_is_separate_from_the_fill) {
@@ -112,7 +119,8 @@ TEST(a_fill_respects_its_mask_too) {
     rig.bus.write32(kSportBase + kSportValueReg, 0x00000000u);
     rig.bus.write32(rig.fill_addr(0x0000), 0x0000FF00u);
 
-    CHECK_EQ(rig.bus.read32(kVramBase), 0xFFFF00FFu);
+    // Everything is filled with zero except the one byte the mask protects.
+    CHECK_EQ(rig.bus.read32(kVramBase), 0x0000FF00u);
 }
 
 TEST(a_fill_does_not_disturb_the_next_page) {

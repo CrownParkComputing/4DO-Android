@@ -71,6 +71,17 @@ constexpr u32 kSportValueReg   = 0x2000;
 constexpr u32 kSportFillWindow = 0x4000;
 constexpr u32 kSportWindowSpan = 0x2000;
 
+// Which window an offset names is decided by three bits of it, not by a range.
+// Everything the value and fill windows do not claim is a copy.
+constexpr u32 kSportWindowMask = 0xe000;
+
+// The page index wraps within the VRAM the SPORT can reach rather than running
+// off the end of it.
+constexpr u32 kSportIndexMask = 0x7ff;
+
+// A mask of all ones protects nothing, so it is the same as an unmasked copy.
+constexpr u32 kSportNoMask = 0xffffffffu;
+
 class Sport {
 public:
     explicit Sport(Bus& bus) : bus_(bus) {}
@@ -90,6 +101,8 @@ public:
     u32 fill_value() const { return fill_value_; }
 
 private:
+    static u32 page_address(u32 offset);
+    static u32 apply_mask(u32 destination, u32 source, u32 mask);
     void copy_page(u32 destination, u32 mask);
     void fill_page(u32 destination, u32 mask);
 

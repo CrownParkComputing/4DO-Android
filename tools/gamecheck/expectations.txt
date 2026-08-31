@@ -66,10 +66,14 @@
 #                         Thirty-three cels became thirteen thousand, two
 #                         hundred and ninety-two sectors became thirty-five
 #                         thousand, and it reaches its attract screen.
-#   Wing Commander III    Was stalled after 262 cels and 4,333 sectors. Fixed
-#                         by charging the real memory-cycle costs: now 304
-#                         cels and 27,853 sectors, and ten times the distinct
-#                         frames. It was waiting on timing.
+#   Wing Commander III    Its opening video now plays cleanly all the way
+#                         through - the galaxy, the Origin logo, the title
+#                         card and the full cast. It had been playing all
+#                         along, buried under coloured speckle, because
+#                         "bypass CLUT" was being read as a whole-frame bypass
+#                         when it is a per-pixel escape hatch selected by bit
+#                         15. Only 304 cels because it is video, not cels:
+#                         4,673 distinct screens is the number that matters.
 #   Wing Commander III d2 will not open at all - suspect a bad dump
 #
 # A note on the floors below. Alone in the Dark's cel floor went DOWN, which

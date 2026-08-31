@@ -36,10 +36,24 @@
 #                         that long. Not a stall.
 #   BattleSport           BIOS shell, "Insert CD". MATCHES REFERENCE.
 #   Road Rash             BIOS shell, "Insert CD". MATCHES REFERENCE.
+#                         Narrowed as far as the disc allows: its volume
+#                         header is structurally identical to a working one,
+#                         its root directory is present and valid at the
+#                         offset it declares, and its length is inside what a
+#                         longer working disc uses. The OS reads five sectors
+#                         of the header area where a working disc reads six,
+#                         asks for the disc info, and ejects. That area holds
+#                         the disc's signature block, and both this machine
+#                         and the reference reject it identically - which
+#                         points at the dump rather than at either emulator.
+#                         Not proven, only narrowed.
 #   Doom                  BIOS shell - the dump is bad, chdman rejects it too
-#   Need for Speed        barely draws. The reference manages sixty-five cels
-#                         to our thirty-three, so it does not work there
-#                         either. Not ours alone to fix.
+#   Need for Speed        was not stuck - it waits at a menu for a button.
+#                         With --press it reaches ten thousand cels and then
+#                         stops on "NVRAM Full: Configuration not saved",
+#                         which is a real fault: the BIOS formats the NVRAM
+#                         correctly and only forty-one bytes of thirty-two
+#                         thousand are in use, so "full" is wrong.
 #   Wing Commander III    Was stalled after 262 cels and 4,333 sectors. Fixed
 #                         by charging the real memory-cycle costs: now 304
 #                         cels and 27,853 sectors, and ten times the distinct

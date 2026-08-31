@@ -82,7 +82,7 @@ u64 hash_frame(const u32* pixels, size_t count) {
 }
 
 Result run(const fs::path& bios, const fs::path& disc, int frames,
-           const fs::path& shot_dir) {
+           const fs::path& shot_dir, bool press_start) {
     Result result;
     result.name = disc.stem().string();
 
@@ -107,7 +107,7 @@ Result run(const fs::path& bios, const fs::path& disc, int frames,
 
     const auto started = std::chrono::steady_clock::now();
     for (int frame = 0; frame < frames; ++frame) {
-        // Press start, periodically.
+        // Press start, periodically, if asked to.
         //
         // A title sitting on its own menu waiting to be told to begin is not
         // stuck, but it looks exactly like it from the outside: no cels, no
@@ -115,12 +115,17 @@ Result run(const fs::path& bios, const fs::path& disc, int frames,
         // for sixty thousand frames here and ran perfectly well on a device
         // where somebody pressed a button.
         //
-        // Held for a few frames because a title that samples the pad once a
-        // frame can still miss a press that lasts one.
-        Joypad pad;
-        const int phase = frame % kPressPeriod;
-        pad.play = phase < kPressHold;
-        console.set_joypad(pad);
+        // It is off by default all the same, because pressing start also
+        // navigates AWAY from where a title would otherwise settle: it takes
+        // Battle Chess from five thousand cels to six hundred thousand and
+        // Killing Time from a hundred and twenty thousand down to thirty-five.
+        // Neither number is wrong, but only one of them is comparable run to
+        // run, and a floor needs the comparable one.
+        if (press_start) {
+            Joypad pad;
+            pad.play = (frame % kPressPeriod) < kPressHold;
+            console.set_joypad(pad);
+        }
 
         console.run_frame();
 
@@ -266,7 +271,10 @@ int usage() {
                  "  --frames N      frames to run per title (default 20000)\n"
                  "  --expect FILE   floors to check against\n"
                  "  --shots DIR     write the busiest frame of each title here\n"
-                 "  --only SUBSTR   run only titles whose name contains this\n");
+                 "  --only SUBSTR   run only titles whose name contains this\n"
+                 "  --press         hold start periodically, for titles that\n"
+                 "                  wait at a menu. Changes what a title\n"
+                 "                  reaches, so it is off by default\n");
     return 2;
 }
 
@@ -283,6 +291,7 @@ int main(int argc, char** argv) {
     fs::path expect_path;
     fs::path shot_dir;
     std::string only;
+    bool press_start = false;
     for (int i = 3; i < argc; ++i) {
         const std::string flag = argv[i];
         const bool has_value = (i + 1) < argc;
@@ -294,6 +303,8 @@ int main(int argc, char** argv) {
             shot_dir = argv[++i];
         } else if (flag == "--only" && has_value) {
             only = argv[++i];
+        } else if (flag == "--press") {
+            press_start = true;
         } else {
             return usage();
         }
@@ -334,7 +345,7 @@ int main(int argc, char** argv) {
     int failures = 0;
     int booted = 0;
     for (const fs::path& disc : discs) {
-        const Result result = run(bios, disc, frames, shot_dir);
+        const Result result = run(bios, disc, frames, shot_dir, press_start);
         if (!result.loaded) {
             std::printf("%-52s  could not be opened\n", result.name.c_str());
             ++failures;

@@ -300,8 +300,7 @@ public:
     void draw_packed_cel(const Ccb& ccb);
     void draw_unpacked_cel(const Ccb& ccb);
     void plot_footprint(const Ccb& ccb, s32 px, s32 py, s32 step_x, s32 step_y,
-                        u32 horizontal_span, u32 vertical_span, u16 pixel,
-                        u16 shade);
+                        u16 pixel, u16 shade);
     // Turn one source value into a colour, and say what multiplier it carries
     // and whether it is transparent.
     //
@@ -482,6 +481,11 @@ private:
     u32 cel_pluta_ = 0;
     u32 cel_pixel_mask_ = 0;
     bool cel_transparent_mask_ = true;
+
+    // Whether this cel maps one source pixel to one screen pixel. The common
+    // case by a very long way, and worth knowing per cel rather than deciding
+    // per pixel.
+    bool cel_one_to_one_ = true;
 
     // The cel engine's own palette, loaded from a cel that says to and kept
     // for the ones that do not.

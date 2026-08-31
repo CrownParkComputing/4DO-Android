@@ -765,6 +765,14 @@ void Madam::begin_cel(const Ccb& ccb) {
     cel_origin_vh_ = (static_cast<u32>(ccb.x) & 1u) |
                      ((static_cast<u32>(ccb.y) & 1u) << 15);
 
+    // One source pixel to one screen pixel when the cel is neither scaled nor
+    // rotated and lands on whole pixels. Anything else covers the rectangle
+    // out to the next pixel's position instead.
+    cel_one_to_one_ = (ccb.hdy == 0) && (ccb.vdx == 0) &&
+                      (ccb.hdx == 0x10000 || ccb.hdx == -0x10000) &&
+                      (ccb.vdy == 0x10000 || ccb.vdy == -0x10000) &&
+                      ((ccb.x | ccb.y) & 0xffff) == 0;
+
     cel_bpp_ = bits_per_pixel(ccb.format);
     cel_linear_ = (ccb.pre0 & kPre0Linear) != 0;
 
@@ -1016,29 +1024,49 @@ void Madam::put_pixel(s32 x, s32 y, u16 pixel, u16 shade) {
 // A 1:1 cel costs exactly one write per pixel; only magnified cels pay more,
 // and what they pay is proportional to the destination area, which is the work
 // that actually has to happen.
+// One source pixel onto the screen.
+//
+// A cel that is neither scaled nor rotated puts one source pixel on one screen
+// pixel, and that is the common case by a long way - upwards of ninety-eight
+// per cent of the cels in most titles.
+//
+// A scaled cel instead covers the rectangle from where this pixel lands to
+// where the NEXT one will. Taking the bounds from the next position rather
+// than from the size of the step is what makes it exact: derive a span from
+// the step magnitude and a fractional step leaves gaps on some pixels and
+// double-writes others.
+//
+// An empty rectangle draws nothing. That is not a degenerate case to guard
+// against - it is how a cel drawn smaller than its source drops the pixels
+// that do not fit.
 void Madam::plot_footprint(const Ccb& ccb, s32 px, s32 py, s32 step_x,
-                           s32 step_y, u32 horizontal_span, u32 vertical_span,
-                           u16 pixel, u16 shade) {
-    // Transparency is decided by the decoder, which knows whether this cel
-    // treats colour zero as a hole or as black.
-    if (horizontal_span == 1 && vertical_span == 1) {
+                           s32 step_y, u16 pixel, u16 shade) {
+    if (cel_one_to_one_) {
         put_pixel(px >> 16, py >> 16, pixel, shade);
         return;
     }
-    for (u32 j = 0; j < vertical_span; ++j) {
-        const s32 oy = static_cast<s32>(
-            (static_cast<s64>(ccb.vdy) * j) / vertical_span);
-        const s32 ox = static_cast<s32>(
-            (static_cast<s64>(ccb.vdx) * j) / vertical_span);
-        for (u32 i = 0; i < horizontal_span; ++i) {
-            const s32 ix = static_cast<s32>(
-                (static_cast<s64>(step_x) * i) / horizontal_span);
-            const s32 iy = static_cast<s32>(
-                (static_cast<s64>(step_y) * i) / horizontal_span);
-            put_pixel((px + ix + ox) >> 16, (py + iy + oy) >> 16, pixel, shade);
+
+    s32 x0 = px >> 16;
+    s32 x1 = (px + step_x) >> 16;
+    s32 y0 = py >> 16;
+    s32 y1 = (py + ccb.vdy) >> 16;
+    if (x1 < x0) { const s32 t = x0; x0 = x1 + 1; x1 = t + 1; }
+    if (y1 < y0) { const s32 t = y0; y0 = y1 + 1; y1 = t + 1; }
+
+    // A cel can be enormous when a CCB is malformed, and filling what it asks
+    // for would take longer than the frame it is part of.
+    if (x1 - x0 > static_cast<s32>(kMaxCelDimension) ||
+        y1 - y0 > static_cast<s32>(kMaxCelDimension)) {
+        return;
+    }
+
+    for (s32 y = y0; y < y1; ++y) {
+        for (s32 x = x0; x < x1; ++x) {
+            put_pixel(x, y, pixel, shade);
         }
     }
 }
+
 
 // A packed cel does not have a width. Its rows are a bitstream of packets and
 // each row ends where the packets say it does, so there is nothing to index
@@ -1071,7 +1099,6 @@ void Madam::draw_packed_cel(const Ccb& ccb) {
     s32 row_y = ccb.y;
     s32 step_x = ccb.hdx;
     s32 step_y = ccb.hdy;
-    const u32 vertical_span = footprint_steps(ccb.vdx, ccb.vdy);
 
     for (u32 row = 0; row < ccb.height; ++row) {
         BitReader reader(bus, row_data);
@@ -1082,7 +1109,6 @@ void Madam::draw_packed_cel(const Ccb& ccb) {
 
         s32 px = row_x;
         s32 py = row_y;
-        const u32 horizontal_span = footprint_steps(step_x, step_y);
 
         for (;;) {
             u32 type = reader.read(2);
@@ -1109,8 +1135,7 @@ void Madam::draw_packed_cel(const Ccb& ccb) {
                 const u16 pixel = decode_pixel(reader.read(bpp), &shade, &clear);
                 for (u32 i = 0; i < count; ++i) {
                     if (!clear) {
-                        plot_footprint(ccb, px, py, step_x, step_y,
-                                       horizontal_span, vertical_span, pixel, shade);
+                        plot_footprint(ccb, px, py, step_x, step_y, pixel, shade);
                     }
                     px += step_x;
                     py += step_y;
@@ -1122,8 +1147,7 @@ void Madam::draw_packed_cel(const Ccb& ccb) {
                 bool clear = false;
                 const u16 pixel = decode_pixel(reader.read(bpp), &shade, &clear);
                 if (!clear) {
-                    plot_footprint(ccb, px, py, step_x, step_y,
-                                   horizontal_span, vertical_span, pixel, shade);
+                    plot_footprint(ccb, px, py, step_x, step_y, pixel, shade);
                 }
                 px += step_x;
                 py += step_y;
@@ -1173,7 +1197,6 @@ void Madam::draw_unpacked_cel(const Ccb& ccb) {
     s32 row_y = ccb.y;
     s32 step_x = ccb.hdx;
     s32 step_y = ccb.hdy;
-    const u32 vertical_span = footprint_steps(ccb.vdx, ccb.vdy);
 
     for (u32 row = 0; row < ccb.height; ++row) {
         BitReader reader(bus_, ccb.source_address + row * row_bytes);
@@ -1181,15 +1204,13 @@ void Madam::draw_unpacked_cel(const Ccb& ccb) {
 
         s32 px = row_x;
         s32 py = row_y;
-        const u32 horizontal_span = footprint_steps(step_x, step_y);
 
         for (u32 column = 0; column < width; ++column) {
             u16 shade = 0;
             bool clear = false;
             const u16 pixel = decode_pixel(reader.read(bpp), &shade, &clear);
             if (!clear) {
-                plot_footprint(ccb, px, py, step_x, step_y, horizontal_span,
-                               vertical_span, pixel, shade);
+                plot_footprint(ccb, px, py, step_x, step_y, pixel, shade);
             }
             px += step_x;
             py += step_y;

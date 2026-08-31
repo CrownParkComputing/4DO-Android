@@ -24,40 +24,37 @@
 # Where a title has been compared frame-for-frame, the figure is how many of
 # its pixels differ from the reference's on the same frame.
 #
-#   Killing Time          its title menu. 3.3% of pixels differ.
+#   Killing Time          its title menu. PIXEL IDENTICAL to the reference.
 #   Flashback             its menu. 11% differ, and that is the character
 #                         standing at a different point in his idle animation.
-#   Alone in the Dark     its animated intro, over a million cels
-#   PGA Tour 96           credits, clean
-#   Alone in the Dark 2   drawing, mid-transition
-#   Battle Chess          its publisher splash. Cel count within two per cent
-#                         of the reference, so this is where the title gets to
-#                         in five minutes rather than where we stop it.
+#   Alone in the Dark     its animated intro. PIXEL IDENTICAL.
+#   Alone in the Dark 2   PIXEL IDENTICAL.
+#   PGA Tour 96           gameplay. Differs from the reference only in where
+#                         the two machines are in the round.
+#   Battle Chess          its publisher splash at twenty thousand frames, and
+#                         its board given sixty thousand - both machines need
+#                         that long. Not a stall.
 #   BattleSport           BIOS shell, "Insert CD". MATCHES REFERENCE.
 #   Road Rash             BIOS shell, "Insert CD". MATCHES REFERENCE.
 #   Doom                  BIOS shell - the dump is bad, chdman rejects it too
 #   Need for Speed        barely draws. The reference manages sixty-five cels
 #                         to our thirty-three, so it does not work there
 #                         either. Not ours alone to fix.
-#   Wing Commander III    OURS. The 262 cels it draws are byte-identical to
-#                         the reference's first 262, and its drive traffic
-#                         matches command for command - it reads everything it
-#                         asks for and then idles on the once-a-second version
-#                         poll, while the reference goes on to 303 cels and a
-#                         cutscene. So it is not a decode fault: the machine
-#                         stops asking. Waiting on something, not broken at
-#                         drawing.
+#   Wing Commander III    Was stalled after 262 cels and 4,333 sectors. Fixed
+#                         by charging the real memory-cycle costs: now 304
+#                         cels and 27,853 sectors, and ten times the distinct
+#                         frames. It was waiting on timing.
 #   Wing Commander III d2 will not open at all - suspect a bad dump
 #
 # Eleven of twelve draw. The one that does not is a bad file.
 
-Alone in the Dark (USA)       | 1200000 |  700 | 55000
-Alone in the Dark 2           |    7000 | 1600 | 55000
+Alone in the Dark (USA)       | 1300000 | 1000 | 55000
+Alone in the Dark 2           |    7500 | 2200 | 55000
 Battle Chess                  |    4500 |  700 | 35000
-BattleSport                   |  150000 |  800 | 65000
-Doom                          |  150000 |  800 | 65000
-Flashback                     |   95000 | 1500 | 50000
-Killing Time                  |  110000 |  800 | 65000
-PGA Tour 96                   |  100000 | 2000 | 65000
-Road & Track Presents         |      30 |    3 |  7000
-Wing Commander III            |     240 |  400 | 45000
+BattleSport                   |  180000 |  800 | 65000
+Doom                          |  180000 |  800 | 65000
+Flashback                     |  100000 | 1800 | 60000
+Killing Time                  |   55000 |  800 | 70000
+PGA Tour 96                   |   65000 | 1900 | 70000
+Road & Track Presents         |      30 |    3 |  9000
+Wing Commander III            |     300 | 4000 | 45000

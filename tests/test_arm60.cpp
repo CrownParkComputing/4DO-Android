@@ -416,3 +416,50 @@ TEST(nvram_answers_at_its_mirror_too) {
     CHECK_EQ(bus.read32(kNvramBase + 8), 0x5Au);
     CHECK_EQ(bus.read32(kNvramBase + kNvramMirror + 8), 0x5Au);
 }
+
+// ---------------------------------------------------------------------------
+// Instruction timing
+// ---------------------------------------------------------------------------
+
+TEST(a_multiply_costs_by_the_bits_of_its_multiplier_not_its_bytes) {
+    // The ARM60 is an ARM6: a 2-bit Booth array that terminates on the
+    // significant BIT count. Nearly every cycle table in circulation is the
+    // ARM7's, which terminates on the significant BYTE count and so gives an
+    // answer up to four times too cheap. Getting this wrong makes the CPU far
+    // too fast at exactly the work 3D titles do most of.
+    //
+    // Multiplier in Rs. Build it directly so the operand is exact.
+    const auto cost_for = [](u32 rs_value) {
+        Machine m{
+            kAlways | 0x3A01001u,   // mov r1, #1      (multiplicand)
+            kAlways | 0x0000291u,   // mul r0, r1, r2  (Rs = r2)
+        };
+        m.step();
+        m.cpu.set_reg(2, rs_value);
+        const u64 before = m.cpu.total_cycles();
+        m.step();
+        return static_cast<u32>(m.cpu.total_cycles() - before);
+    };
+
+    // 1S plus ((significant_bits + 5) / 2) - 1 internal cycles, capped at 16.
+    CHECK_EQ(cost_for(0u), 1u + 2u);            // 1 bit  -> 2I
+    CHECK_EQ(cost_for(1u), 1u + 2u);            // 1 bit  -> 2I
+    CHECK_EQ(cost_for(0xffu), 1u + 5u);         // 8 bits -> 5I
+    CHECK_EQ(cost_for(0xffffu), 1u + 9u);       // 16 bits -> 9I
+    // A full 32-bit multiplier saturates the array. The ARM7 table would have
+    // charged four here; the ARM6 charges sixteen.
+    CHECK_EQ(cost_for(0x80000000u), 1u + 16u);
+    CHECK_EQ(cost_for(0xffffffffu), 1u + 16u);
+}
+
+TEST(taking_an_exception_costs_what_a_taken_branch_costs) {
+    // SWI, an undefined instruction and an absent coprocessor are the same
+    // event as far as the pipeline is concerned: what was fetched is thrown
+    // away and refetched from the vector. That is 2S+1N, and the OS reaches
+    // almost everything through SWI, so undercharging it makes the whole of
+    // the system software run faster than the hardware ever did.
+    Machine m{kAlways | 0x0F000000u};   // swi #0
+    const u64 before = m.cpu.total_cycles();
+    m.step();
+    CHECK_EQ(static_cast<u32>(m.cpu.total_cycles() - before), 2u * 1u + 4u);
+}

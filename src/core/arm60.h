@@ -176,6 +176,12 @@ public:
     // Cycles executed since reset. The scheduler drives everything from this.
     u64 total_cycles() const { return total_cycles_; }
 
+    // Instructions retired. Only interesting divided into total_cycles(): the
+    // ratio is the one number that says whether this machine's idea of how
+    // long things take resembles the hardware's, and a title that waits on a
+    // timer rather than on a flag will misbehave when it does not.
+    u64 total_instructions() const { return total_instructions_; }
+
 private:
     // --- decode ----------------------------------------------------------
     static Decoded decode(u32 instruction);
@@ -235,6 +241,7 @@ private:
     bool fiq_line_ = false;
 
     u64 total_cycles_ = 0;
+    u64 total_instructions_ = 0;
     u64 irqs_taken_ = 0;
     u64 fiqs_taken_ = 0;
     u64 decodes_ = 0;

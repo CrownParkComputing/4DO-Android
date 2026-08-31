@@ -25,6 +25,16 @@ namespace {
 constexpr u32 kSeq = 1;      // S
 constexpr u32 kNonSeq = 4;   // N
 constexpr u32 kInternal = 1; // I
+
+// Entering an exception - SWI, undefined instruction, a coprocessor that is
+// not there - costs 2S+1N, the same as a taken branch. It is the same event
+// from the pipeline's point of view: the fetched instructions are discarded
+// and refetched from the vector.
+//
+// This was 3, which is not any combination of the machine's cycle types. The
+// OS reaches almost everything through SWI, so undercharging it makes the
+// whole system software run half again as fast as the hardware does.
+constexpr u32 kExceptionCycles = 2 * kSeq + kNonSeq;
 }  // namespace
 namespace {
 
@@ -162,6 +172,7 @@ void Arm60::reset() {
     irq_latched_ = false;
     fiq_line_ = false;
     total_cycles_ = 0;
+    total_instructions_ = 0;
 
     cache_->clear();
 }
@@ -488,6 +499,7 @@ u32 Arm60::step() {
     }
 
     total_cycles_ += cycles;
+    ++total_instructions_;
     check_interrupts();
     return cycles;
 }
@@ -648,16 +660,39 @@ u32 Arm60::exec_multiply(const Decoded& d) {
         cpsr_ = flags;
     }
 
-    // Cost depends on how many significant bytes the multiplier holds: the
-    // Booth's-algorithm early-out that real silicon performs.
+    // How long a multiply takes, and why it is not the familiar answer.
+    //
+    // Nearly every ARM cycle table you will find is the ARM7's: it says a
+    // multiply costs one internal cycle per BYTE of the multiplier that still
+    // holds significant bits, so one to four. That is a real early-out, but it
+    // belongs to a later core.
+    //
+    // The 3DO's ARM60 is an ARM6, whose multiplier is a 2-bit Booth array. It
+    // gets through two bits of the multiplier per cycle and terminates on the
+    // significant BIT count, not the byte count - so the same multiply costs
+    // roughly half the bit length rather than a quarter of it, and a full
+    // 32-bit operand costs sixteen internal cycles where the ARM7 table would
+    // have charged four.
+    //
+    // Getting this wrong makes the CPU four times too fast at exactly the work
+    // 3D titles do most of, and a title that waits on a timer rather than on a
+    // flag notices.
     const u32 operand = regs_[rs];
-    // 1S plus an internal cycle for each byte of the multiplier that still has
-    // significant bits in it - the hardware stops early on small operands.
-    u32 internal = 4;
-    if      ((operand & 0xffffff00u) == 0 || (operand & 0xffffff00u) == 0xffffff00u) internal = 1;
-    else if ((operand & 0xffff0000u) == 0 || (operand & 0xffff0000u) == 0xffff0000u) internal = 2;
-    else if ((operand & 0xff000000u) == 0 || (operand & 0xff000000u) == 0xff000000u) internal = 3;
+    u32 significant_bits = 1;
+    for (u32 v = operand; v != 0; v >>= 1) {
+        ++significant_bits;
+    }
+    if (operand != 0) {
+        --significant_bits;   // the loop counts one past the top set bit
+    }
+    // Two bits a cycle, plus the array's own fixed overhead, capped where the
+    // multiplier runs out of stages to use.
+    u32 internal = ((significant_bits + 5) >> 1) - 1;
+    if (internal > 16) {
+        internal = 16;
+    }
     u32 cycles = kSeq + internal * kInternal;
+    // MLA feeds the accumulator through one extra pass of the array.
     if (accumulate) cycles += kInternal;
     return cycles;
 }
@@ -854,7 +889,9 @@ u32 Arm60::exec_branch(const Decoded& d) {
 u32 Arm60::exec_swi(const Decoded& d) {
     (void)d;
     enter_exception(kVectorSwi, Mode::Supervisor, regs_[15] - 4, false);
-    return 3;
+    // Taking an exception costs what a taken branch costs, for the same reason:
+    // the pipeline is thrown away and refilled from the vector.
+    return kExceptionCycles;
 }
 
 u32 Arm60::exec_swap(const Decoded& d) {
@@ -923,7 +960,7 @@ u32 Arm60::exec_msr(const Decoded& d) {
 u32 Arm60::exec_undefined(const Decoded& d) {
     (void)d;
     enter_exception(kVectorUndefined, Mode::Undefined, regs_[15] - 4, false);
-    return 3;
+    return kExceptionCycles;
 }
 
 }  // namespace retro3do

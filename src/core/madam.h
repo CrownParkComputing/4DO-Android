@@ -300,6 +300,8 @@ public:
     void draw_packed_cel(const Ccb& ccb);
     void draw_unpacked_cel(const Ccb& ccb);
     void draw_lr_cel(const Ccb& ccb);
+    bool cel_is_invisible(const Ccb& ccb, bool packed) const;
+    bool quad_is_wrong_way_round(const Ccb& ccb, s32 wide) const;
     void plot_footprint(const Ccb& ccb, s32 px, s32 py, s32 step_x, s32 step_y,
                         u16 pixel, u16 shade);
     // Turn one source value into a colour, and say what multiplier it carries

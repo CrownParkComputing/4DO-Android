@@ -76,6 +76,18 @@
 #                         4,673 distinct screens is the number that matters.
 #   Wing Commander III d2 will not open at all - suspect a bad dump
 #
+# A second note. The cel floors below came DOWN by about a tenth when the
+# hardware's own visibility tests went in - a cel that permits neither winding,
+# or whose bounding box is off the clip rectangle with the steps leading
+# further off it, or whose corners wind the wrong way, is never drawn at all.
+# The pictures did not change: BattleSport's screen count and busiest-frame
+# pixel count are identical either side of the change, and the frames differ
+# only by where the floating CD logos are in their orbit - the reference
+# differs from our own earlier frame by the same amount for the same reason.
+# Killing Time and Alone in the Dark 2 remain pixel-identical throughout. So
+# this is the same output for a tenth less work, and lowering the numbers
+# records that rather than hiding a loss.
+#
 # A note on the floors below. Alone in the Dark's cel floor went DOWN, which
 # is normally forbidden. It is allowed here because the title is no longer
 # doing the same thing: it used to loop its intro for the whole run, and now
@@ -84,11 +96,11 @@
 #
 # Eleven of twelve draw. The one that does not is a bad file.
 
-Alone in the Dark (USA)       |   16000 | 1900 | 55000
-Alone in the Dark 2           |    7800 | 2300 | 60000
+Alone in the Dark (USA)       |   15500 | 1900 | 55000
+Alone in the Dark 2           |    7600 | 2300 | 60000
 Battle Chess                  |    4500 |  700 | 35000
-BattleSport                   |  180000 |  800 | 65000
-Doom                          |  180000 |  800 | 65000
+BattleSport                   |  168000 |  800 | 65000
+Doom                          |  168000 |  800 | 65000
 Flashback                     |  100000 | 1800 | 60000
 Killing Time                  |   55000 |  800 | 70000
 PGA Tour 96                   |   64000 | 1900 | 70000

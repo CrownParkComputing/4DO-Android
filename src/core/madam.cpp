@@ -1307,6 +1307,148 @@ void Madam::draw_unpacked_cel(const Ccb& ccb) {
     ++stats_.cels_drawn;
 }
 
+// Which way round a quad is wound, given its two step vectors.
+//
+// Returns the flag that names that winding, so it can be compared against the
+// CCB's own pair of flags directly.
+namespace {
+u32 texel_winding(s64 hdx, s64 hdy, s64 vdx, s64 vdy) {
+    return (((hdx + vdx) * (hdy - vdy) + vdx * vdy - hdx * hdy) < 0) ? kCcbAccw
+                                                                     : kCcbAcw;
+}
+}  // namespace
+
+// Whether a cel is thrown away before any of it is drawn.
+//
+// The hardware decides this once, from the CCB alone, and there are four
+// separate reasons it can say no. Drawing anyway is not just wasted work: a
+// title that leans on the winding tests to hide the back faces of its geometry
+// gets those faces drawn over the front ones.
+//
+//   1. A cel that permits neither winding is not drawn at all. Across this
+//      library that never happens - measured, not assumed - but it is the
+//      hardware's first question and costs one test.
+//   2. A bounding box entirely off one edge of the clip rectangle, where the
+//      steps only lead further off it.
+//   3. For a cel that is axis-aligned and not perspective-stepped, the winding
+//      follows from the signs of the steps, and the matching flag must be set.
+//   4. Otherwise the four corners are wound and compared.
+bool Madam::cel_is_invisible(const Ccb& ccb, bool packed) const {
+    if ((ccb.flags & (kCcbAcw | kCcbAccw)) == 0) {
+        return true;
+    }
+
+    // Inclusive, as the register is: the last pixel drawn, not the first
+    // dropped.
+    const s32 clip_x = static_cast<s32>(clip_width_) - 1;
+    const s32 clip_y = static_cast<s32>(clip_height_) - 1;
+    const s32 wide = static_cast<s32>(ccb.width);
+    const s32 high = static_cast<s32>(ccb.height);
+
+    // Wrapping arithmetic on purpose: a cel positioned far outside the screen
+    // overflows these products on the hardware too, and the test is only ever
+    // used to reject, so a wrapped value cannot cause anything to be dropped
+    // that the machine would have drawn.
+    const auto step = [](s32 base, s32 delta, s32 count) {
+        return static_cast<s32>(static_cast<u32>(base) +
+                                static_cast<u32>(delta) * static_cast<u32>(count));
+    };
+
+    if (packed) {
+        // A packed cel's rows are variable length, so only the vertical span
+        // is known ahead of time.
+        const s32 x0 = ccb.x >> 16;
+        const s32 x1 = step(ccb.x, ccb.vdx, high) >> 16;
+        if (x0 < 0 && x1 < 0 && ccb.hdx <= 0 && ccb.hddx <= 0) return true;
+        if (x0 > clip_x && x1 > clip_x && ccb.hdx >= 0 && ccb.hddx >= 0) return true;
+
+        const s32 y0 = ccb.y >> 16;
+        const s32 y1 = step(ccb.y, ccb.vdy, high) >> 16;
+        if (y0 < 0 && y1 < 0 && ccb.hdy <= 0 && ccb.hddy <= 0) return true;
+        if (y0 > clip_y && y1 > clip_y && ccb.hdy >= 0 && ccb.hddy >= 0) return true;
+    } else {
+        const s32 xs[4] = {
+            ccb.x >> 16,
+            step(ccb.x, ccb.hdx, wide) >> 16,
+            step(ccb.x, ccb.vdx, high) >> 16,
+            step(step(ccb.x, ccb.vdx, high), step(ccb.hdx, ccb.hddx, high), wide) >> 16,
+        };
+        if (xs[0] < 0 && xs[1] < 0 && xs[2] < 0 && xs[3] < 0) return true;
+        if (xs[0] > clip_x && xs[1] > clip_x && xs[2] > clip_x && xs[3] > clip_x) {
+            return true;
+        }
+
+        const s32 ys[4] = {
+            ccb.y >> 16,
+            step(ccb.y, ccb.hdy, wide) >> 16,
+            step(ccb.y, ccb.vdy, high) >> 16,
+            step(step(ccb.y, ccb.vdy, high), step(ccb.hdy, ccb.hddy, high), wide) >> 16,
+        };
+        if (ys[0] < 0 && ys[1] < 0 && ys[2] < 0 && ys[3] < 0) return true;
+        if (ys[0] > clip_y && ys[1] > clip_y && ys[2] > clip_y && ys[3] > clip_y) {
+            return true;
+        }
+    }
+
+    if (ccb.hddx == 0 && ccb.hddy == 0) {
+        // Rotated a quarter turn: the horizontal step is vertical and the
+        // vertical step is horizontal.
+        if (ccb.hdx == 0 && ccb.vdy == 0) {
+            const bool clockwise = (ccb.hdy < 0 && ccb.vdx > 0) ||
+                                   (ccb.hdy > 0 && ccb.vdx < 0);
+            return (ccb.flags & (clockwise ? kCcbAcw : kCcbAccw)) == 0;
+        }
+        // Upright, possibly mirrored on either axis.
+        if (ccb.hdy == 0 && ccb.vdx == 0) {
+            const bool counter = (ccb.hdx < 0 && ccb.vdy > 0) ||
+                                 (ccb.hdx > 0 && ccb.vdy < 0);
+            return (ccb.flags & (counter ? kCcbAccw : kCcbAcw)) == 0;
+        }
+    }
+
+    return quad_is_wrong_way_round(ccb, packed ? 2048 : wide);
+}
+
+// The four corners of a perspective-stepped cel, wound and compared.
+//
+// If the four disagree the quad is twisted and is drawn regardless - only a
+// consistently wound one can be rejected.
+bool Madam::quad_is_wrong_way_round(const Ccb& ccb, s32 wide) const {
+    const u32 allowed = ccb.flags & (kCcbAcw | kCcbAccw);
+    if (allowed == (kCcbAcw | kCcbAccw)) {
+        return false;
+    }
+
+    // Single precision, as the hardware model uses: the products here are
+    // large enough that widening them would change which side of zero some
+    // corners land on.
+    const float w = static_cast<float>(wide);
+    const float h = static_cast<float>(ccb.height);
+    const auto add = [](s32 base, s32 delta, float count) {
+        return static_cast<s64>(base + static_cast<s64>(delta * count));
+    };
+
+    const u32 first = texel_winding(ccb.hdx, ccb.hdy, ccb.vdx, ccb.vdy);
+    if (first != texel_winding(ccb.hdx, ccb.hdy,
+                               add(ccb.vdx, ccb.hddx, w),
+                               add(ccb.vdy, ccb.hddy, w))) {
+        return false;
+    }
+    if (first != texel_winding(add(ccb.hdx, ccb.hddx, h),
+                               add(ccb.hdy, ccb.hddy, h),
+                               ccb.vdx, ccb.vdy)) {
+        return false;
+    }
+    if (first != texel_winding(add(ccb.hdx, ccb.hddx, h),
+                               add(ccb.hdy, ccb.hddy, h),
+                               add(ccb.vdx, ccb.hddx, h * w),
+                               add(ccb.vdy, ccb.hddy, h * w))) {
+        return false;
+    }
+
+    return first == allowed;
+}
+
 // One cel. Which of the two source formats it is decides everything else, so
 // the choice is made once here rather than threaded through the drawing.
 void Madam::draw_cel(const Ccb& ccb) {
@@ -1317,6 +1459,9 @@ void Madam::draw_cel(const Ccb& ccb) {
         return;
     }
     begin_cel(ccb);
+    if (cel_is_invisible(ccb, (ccb.flags & kCcbPacked) != 0)) {
+        return;
+    }
     if ((ccb.flags & kCcbPacked) != 0) {
         draw_packed_cel(ccb);
     } else if ((ccb.pre1 & kPre1Lrform) != 0 && cel_bpp_ == 16) {

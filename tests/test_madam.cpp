@@ -39,8 +39,13 @@ void write_ccb(Bus& bus, u32 at, u32 flags, u32 source, u32 plut,
     hddy <<= 4;
     // A cel that wants a palette has to say so; one that does not draws with
     // whatever the last cel left loaded.
+    //
+    // Both winding flags, meaning either way round is acceptable. A CCB with
+    // neither is not drawn by the hardware at all, so a test cel without them
+    // would be testing nothing - and every cel in every title measured here
+    // sets at least one.
     bus.write32(at + 0,  flags | kCcbLast | kCcbNpAbs | kCcbSpAbs | kCcbPpAbs |
-                             kCcbLdPlut);
+                             kCcbLdPlut | kCcbAcw | kCcbAccw);
     bus.write32(at + 4,  0);
     bus.write32(at + 8,  source);
     bus.write32(at + 12, plut);

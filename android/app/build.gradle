@@ -2,6 +2,15 @@ plugins {
      id 'com.android.application'
 }
 
+// The upload key. On a build machine it arrives through KEYSTORE_PATH, and
+// locally it can sit beside the project - but it is never committed, and the
+// only copy of it lives in a CI secret, so BACK IT UP BEFORE RELYING ON IT.
+// Losing this key means never being able to update the Play listing again,
+// by anyone, ever. There is no recovery.
+def localReleaseKeystore = file('../retro3do-release-key.keystore')
+def releaseKeystorePath = System.getenv('KEYSTORE_PATH')
+def releaseKeystoreFile = releaseKeystorePath ? file(releaseKeystorePath) : localReleaseKeystore
+
 android {
     // The namespace is this project's own - it names the Java classes and the
     // generated R, and nothing outside the build cares about it.
@@ -31,8 +40,21 @@ android {
             }
         }
     }
+    signingConfigs {
+        release {
+            // Null when the key is absent, which makes an unsigned release
+            // build fail at signing rather than quietly produce something the
+            // store will reject.
+            storeFile releaseKeystoreFile.exists() ? releaseKeystoreFile : null
+            storePassword System.getenv('KEYSTORE_PASSWORD') ?: 'android'
+            keyAlias System.getenv('KEY_ALIAS') ?: '4do-key'
+            keyPassword System.getenv('KEY_PASSWORD') ?: 'android'
+        }
+    }
+
     buildTypes {
         release {
+            signingConfig signingConfigs.release
             minifyEnabled false
             proguardFiles getDefaultProguardFile('proguard-android-optimize.txt'), 'proguard-rules.pro'
         }

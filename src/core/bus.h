@@ -196,6 +196,13 @@ public:
 
     WriteWatch& write_watch() { return write_watch_; }
 
+    // The cel engine is asked to start by a store, but it does not start
+    // during that store. See run_pending_cel_engine.
+    void request_cel_engine() { cel_pending_ = true; }
+    void cancel_cel_engine() { cel_pending_ = false; }
+    bool cel_engine_pending() const { return cel_pending_; }
+    void run_pending_cel_engine();
+
     // True for any address that belongs to a chip rather than to memory. Byte
     // and halfword accesses to those go through a read-modify-write of the
     // containing word, because the registers are word-wide.
@@ -235,6 +242,7 @@ private:
     Sport* sport_ = nullptr;
 
     WriteWatch write_watch_;
+    bool cel_pending_ = false;
     u64 sport_accesses_ = 0;
 };
 

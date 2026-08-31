@@ -1,8 +1,9 @@
 // XBUS — the Opera Expansion Bus, and the devices on it.
 //
 // Implemented from The 3DO Company's own patent, WO 94/16382 "Expansion Bus",
-// which documents the protocol in full. See docs/CLEANROOM.md; a granted patent
-// is public by construction and on this project's permitted-sources list.
+// which documents the protocol in full - a granted patent is public by
+// construction. The selection model and drive replies were corrected against
+// the reference emulator; see docs/PROVENANCE.md.
 //
 // The model, in the patent's own terms
 // ------------------------------------

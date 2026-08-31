@@ -1,9 +1,10 @@
 # Hardware notes and provenance
 
-Where each part of the emulated machine came from. The rule from
-[CLEANROOM.md](CLEANROOM.md) is that nothing here is derived from another
-emulator's source, and that anything not yet checked against a citable source is
-marked as such rather than quietly asserted.
+Where each part of the emulated machine came from. Read
+[PROVENANCE.md](PROVENANCE.md) first: much of this machine IS derived from an
+existing emulator's source, and that document says which parts and how closely.
+The convention kept here is that anything not checked against a citable source
+is marked as such rather than quietly asserted.
 
 ## ARM60 (`src/core/arm60.cpp`)
 
@@ -1130,9 +1131,9 @@ it wants doing properly rather than quickly.
 The command set and reply shapes come from MAME's cr560b device
 (BSD-3-Clause). The sequencing comes from BLACK-BOX observation of a reference
 emulator - its command trace and register reads, logged from the outside while
-it ran. Its source is not a permitted input here; see docs/CLEANROOM.md, which
-now says so explicitly, after that line was crossed once and had to be walked
-back.
+it ran. Development later moved to working from that emulator's source
+directly, so the distinction this paragraph draws no longer describes the
+project; see docs/PROVENANCE.md.
 
 The boot's command sequence, observed:
 

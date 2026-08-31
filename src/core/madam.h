@@ -29,8 +29,11 @@
 // ----------
 // The CCB layout, the fixed-point mapping and the pixel formats implemented
 // here come from published 3DO developer documentation. Bit assignments not yet
-// checked are marked TODO(madam) rather than asserted. Nothing derives from
-// another emulator; see docs/CLEANROOM.md.
+// checked are marked TODO(madam) rather than asserted.
+//
+// This is the most heavily derived file in the project: the cel engine's
+// dispatch, its visibility tests, the rotated-cel fill and the matrix unit all
+// follow the reference emulator closely. See docs/PROVENANCE.md.
 #pragma once
 
 #include "types.h"
@@ -154,8 +157,33 @@ enum : u32 {
     // VRAM offset it would be past the end of a 1 MB VRAM.
     kMadamVdlAddress = 0x0580,
     kMadamPipStart   = 0x0104,   // TODO(madam): confirm
-    kMadamMatrixBase = 0x7000,   // the hardware matrix unit
+    // The hardware matrix unit.
+    //
+    // MADAM can multiply a 4x4 matrix of 16.16 values by a vector, and divide
+    // through by z on the way out. It is the machine's transform-and-project
+    // stage, and a 3D title uses it for every vertex it draws - Need for
+    // Speed puts its whole road through it. A machine without one hands back
+    // zeros, and the title dutifully draws the degenerate geometry that
+    // implies: a correct cockpit in front of an empty field.
+    //
+    // The registers are the matrix, then the vector, then the outputs, then
+    // the numerator used by the projecting form. Writing to the control port
+    // performs the operation; the value written selects which.
+    kMadamMatrixIn    = 0x0600,   // 4x4, row-major, 16.16
+    kMadamMatrixVec   = 0x0640,   // the vector, four words
+    kMadamMatrixOut   = 0x0660,   // four words
+    kMadamMatrixNumHi = 0x0680,   // 64-bit numerator for the divide
+    kMadamMatrixNumLo = 0x0684,
+    kMadamMatrixCtl   = 0x07fc,
     kMadamWindowSize = 0x10000,
+};
+
+// What a write to the matrix control port asks for.
+enum : u32 {
+    kMatrixCopyOnly          = 0,   // publish the previous result, compute nothing
+    kMatrixMultiply4x4       = 1,
+    kMatrixMultiply3x3       = 2,
+    kMatrixMultiply3x3DivideZ = 3,  // transform and project
 };
 
 // The stock configuration for a consumer machine: 2 MB of DRAM and 1 MB of
@@ -302,6 +330,15 @@ public:
     void draw_lr_cel(const Ccb& ccb);
     bool cel_is_invisible(const Ccb& ccb, bool packed) const;
     bool quad_is_wrong_way_round(const Ccb& ccb, s32 wide) const;
+    void plot_quad(const Ccb& ccb, s32 ax, s32 ay, s32 bx, s32 by,
+                   s32 cx, s32 cy, s32 dx, s32 dy, u16 pixel, u16 shade);
+    // A cel's rows are walked with two cursors, not one: where this pixel
+    // lands, and where the matching pixel of the NEXT row lands. The second is
+    // dead weight for a scaled cel and is the other half of the figure for a
+    // rotated one.
+    void plot_texel(const Ccb& ccb, s32 px, s32 py, s32 step_x, s32 step_y,
+                    s32 down_x, s32 down_y, s32 next_step_x, s32 next_step_y,
+                    u16 pixel, u16 shade);
     void plot_footprint(const Ccb& ccb, s32 px, s32 py, s32 step_x, s32 step_y,
                         u16 pixel, u16 shade);
     // Turn one source value into a colour, and say what multiplier it carries
@@ -391,7 +428,7 @@ public:
 
     // Read one CCB. Public because it is worth testing on its own: a
     // misread CCB produces garbage that is very hard to attribute afterwards.
-    Ccb read_ccb(u32 address) const;
+    Ccb read_ccb(u32 address);
 
     // Where cels are drawn. In the real machine this comes from the current
     // framebuffer; until MADAM's own register set is confirmed the console
@@ -488,7 +525,33 @@ private:
     // Whether this cel maps one source pixel to one screen pixel. The common
     // case by a very long way, and worth knowing per cel rather than deciding
     // per pixel.
+    // PRE1 is machine state, not per-cel data: a packed cel never supplies one
+    // and keeps whatever the last unpacked cel left behind.
+    // The matrix unit's registers. The outputs are DOUBLE BUFFERED: an
+    // operation computes into a holding set, and the previous result is what
+    // moves into the readable outputs. Software therefore reads the answer to
+    // the operation BEFORE the one it just asked for, which is how a title
+    // keeps the unit busy without ever waiting for it.
+    s32 matrix_in_[16] = {};
+    s32 matrix_vec_[4] = {};
+    s32 matrix_out_[4] = {};
+    s64 matrix_pending_[4] = {};
+    u32 matrix_num_hi_ = 0;
+    u32 matrix_num_lo_ = 0;
+
+    void matrix_execute(u32 operation);
+
+    u32 pre1_register_ = 0;
+
     bool cel_one_to_one_ = true;
+
+    // Which of the hardware's three texel mappers this cel uses. They are not
+    // variations on one another: a scaled cel covers a rectangle between one
+    // pixel and the next, while a rotated one covers a four-sided figure that
+    // no rectangle approximates. Using one routine for both draws the scaled
+    // case with gaps or the rotated case with none of its shear.
+    enum class Mapper { Line, Scale, Arbitrary };
+    Mapper cel_mapper_ = Mapper::Line;
 
     // The cel engine's own palette, loaded from a cel that says to and kept
     // for the ones that do not.

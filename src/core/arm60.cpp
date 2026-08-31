@@ -500,6 +500,10 @@ u32 Arm60::step() {
 
     total_cycles_ += cycles;
     ++total_instructions_;
+    // The cel engine starts between instructions, never inside one.
+    if (bus_.cel_engine_pending()) {
+        bus_.run_pending_cel_engine();
+    }
     check_interrupts();
     return cycles;
 }

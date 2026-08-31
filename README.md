@@ -27,9 +27,10 @@ presents from the emulation path at all.
 **It is ours.** The FreeDO sources that Opera and `opera-libretro` descend from
 carry a licence clause forbidding commercial use of the code, or of knowledge
 obtained by studying it, without the owners' approval — and stating that this
-takes precedence over the LGPL. This project shares no code with them and never
-has. See [docs/CLEANROOM.md](docs/CLEANROOM.md), which is a rule for
-contributors, not a disclaimer.
+takes precedence over the LGPL. **This emulator's hardware layer is derived
+from such a source.** [docs/PROVENANCE.md](docs/PROVENANCE.md) sets out exactly
+what is original and what is not, including which routines are direct ports.
+Read it before assuming anything about this project's licensing position.
 
 ## Building
 

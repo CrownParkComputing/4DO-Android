@@ -13,8 +13,8 @@
 // the part this implementation is confident about. Individual register offsets
 // are collected into one table so a correction is a one-line change; those not
 // yet checked against the published hardware documentation are marked
-// TODO(clio). Nothing here is derived from another emulator — see
-// docs/CLEANROOM.md.
+// TODO(clio). Register values, the interrupt banks and the timer rate were
+// taken from the reference emulator; see docs/PROVENANCE.md.
 #pragma once
 
 #include <memory>

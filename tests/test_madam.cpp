@@ -40,12 +40,17 @@ void write_ccb(Bus& bus, u32 at, u32 flags, u32 source, u32 plut,
     // A cel that wants a palette has to say so; one that does not draws with
     // whatever the last cel left loaded.
     //
+    // CCBPRE, because these helpers write the preamble into the CCB. Without
+    // it the hardware takes the preamble from the front of the source data
+    // instead, and the cel would be described by whatever the pixels happen to
+    // begin with.
+    //
     // Both winding flags, meaning either way round is acceptable. A CCB with
     // neither is not drawn by the hardware at all, so a test cel without them
     // would be testing nothing - and every cel in every title measured here
     // sets at least one.
     bus.write32(at + 0,  flags | kCcbLast | kCcbNpAbs | kCcbSpAbs | kCcbPpAbs |
-                             kCcbLdPlut | kCcbAcw | kCcbAccw);
+                             kCcbLdPlut | kCcbAcw | kCcbAccw | kCcbCcbPre);
     bus.write32(at + 4,  0);
     bus.write32(at + 8,  source);
     bus.write32(at + 12, plut);
@@ -133,8 +138,10 @@ TEST(a_relative_pointer_is_taken_from_the_word_after_it) {
     Bus bus;
     Madam madam(bus);
 
-    // Absolute flags cleared, so the source offset is relative.
-    bus.write32(kCcbAt + 0, kCcbLast);
+    // Absolute flags cleared, so the source offset is relative. CCBPRE set, so
+    // the preamble comes from the CCB and does not eat the first words of the
+    // source - which is a separate behaviour with its own test.
+    bus.write32(kCcbAt + 0, kCcbLast | kCcbCcbPre);
     bus.write32(kCcbAt + 8, 0x40);   // source offset
 
     const Ccb ccb = madam.read_ccb(kCcbAt);
@@ -484,6 +491,13 @@ TEST(writing_the_start_register_runs_the_list) {
     bus.write32(kMadamBase + kMadamNextCcb, kCcbAt);
     bus.write32(kMadamBase + kMadamCelStart, 0);
 
+    // Writing the start port does not run the engine - it runs once the CPU
+    // finishes the instruction that asked, which is what lets software write
+    // the CCB after starting it. There is no CPU here, so the test reaches
+    // that boundary itself.
+    CHECK_EQ(console.madam().stats().cels_drawn, 0u);
+    bus.run_pending_cel_engine();
+
     CHECK_EQ(console.madam().stats().cels_drawn, 1u);
     CHECK_EQ(read_target(bus, 5, 5), rgb555(31, 0, 0));
 }
@@ -586,9 +600,14 @@ TEST(a_one_to_one_cel_still_writes_exactly_one_pixel_each) {
     CHECK_EQ(madam.stats().pixels_written, 16u);
 }
 
-TEST(a_rotated_magnified_cel_has_no_holes_along_its_diagonal) {
-    // The footprint follows the step vectors, so it stays correct when the cel
-    // is rotated as well as scaled — a rectangular fill would leave gaps here.
+TEST(a_rotated_cel_lands_as_a_solid_figure_not_a_stack_of_rectangles) {
+    // A rotated cel does not go through the scaling mapper at all. Each source
+    // pixel lands as a four-sided figure, and the hardware fills it by
+    // scanlines - which is the only way to tile the plane without either gaps
+    // between the pixels or overlap along the diagonal.
+    //
+    // Approximating that with an upright rectangle per pixel, as this once
+    // did, is not a small error. It cannot produce the shape below at all.
     Bus bus;
     Madam madam(bus);
     madam.set_clip(320, 240);
@@ -601,17 +620,40 @@ TEST(a_rotated_magnified_cel_has_no_holes_along_its_diagonal) {
         }
     }
 
-    // Roughly 45 degrees, scaled by three.
+    // Forty-five degrees, scaled by two.
     const s32 step = fixed(2);
     write_ccb(bus, kCcbAt, 0, kSourceAt, 0, fixed(40), fixed(40),
               step, step, -step, step,
               pre0_for(kFormatDirect16, 4), pre1_for(4));
     madam.render_cel_list(kCcbAt);
 
-    // Walk the first source row's destination path; every step must be painted.
-    for (int i = 0; i < 6; ++i) {
-        CHECK_EQ(read_target(bus, 40 + i, 40 + i), rgb555(31, 31, 31));
+    // Sixteen source pixels, each covering the parallelogram its two step
+    // vectors span: |hd x vd| = |2*2 - 2*-2| = 8 pixels apiece.
+    CHECK_EQ(madam.stats().pixels_written, 16u * 8u);
+
+    // Solid: every row it touches is one unbroken run. A gap anywhere is the
+    // failure this test exists to catch.
+    int rows_touched = 0;
+    int widest = 0;
+    for (int y = 0; y < 240; ++y) {
+        int first = -1;
+        int last = -1;
+        int painted = 0;
+        for (int x = 0; x < 320; ++x) {
+            if (read_target(bus, x, y) != rgb555(31, 31, 31)) continue;
+            if (first < 0) first = x;
+            last = x;
+            ++painted;
+        }
+        if (first < 0) continue;
+        ++rows_touched;
+        CHECK_EQ(painted, last - first + 1);   // no holes in the run
+        if (painted > widest) widest = painted;
     }
+
+    // A diamond fifteen rows tall and sixteen wide at its middle.
+    CHECK_EQ(rows_touched, 15);
+    CHECK_EQ(widest, 16);
 }
 
 // ---------------------------------------------------------------------------
@@ -677,6 +719,7 @@ TEST(the_start_port_ignores_the_value_written_to_it) {
 
     bus.write32(kMadamBase + kMadamNextCcb, kCcbAt);
     bus.write32(kMadamBase + kMadamCelStart, 0xdeadbeef);
+    bus.run_pending_cel_engine();
     CHECK_EQ(console.madam().stats().cels_drawn, 1u);
 }
 
@@ -692,5 +735,100 @@ TEST(stopping_the_engine_clears_where_it_would_go_next) {
     bus.write32(kMadamBase + kMadamNextCcb, kCcbAt);
     bus.write32(kMadamBase + kMadamCelStop, 0);
     bus.write32(kMadamBase + kMadamCelStart, 0);
+    CHECK_EQ(console.madam().stats().cels_drawn, 0u);
+}
+
+TEST(a_cel_without_ccbpre_takes_its_preamble_from_the_front_of_its_source) {
+    // CCBPRE says the two preamble words are carried in the CCB. Cleared, they
+    // are the first words of the SOURCE DATA and the pixels begin after them,
+    // which is how a title stores a cel as one self-describing blob and points
+    // a bare CCB at it. Reading the CCB's own words in that case picks up
+    // whatever follows the structure in memory, and the cel gets an invented
+    // format and size.
+    Bus bus;
+    Madam madam(bus);
+
+    bus.write32(kCcbAt + 0, kCcbLast | kCcbSpAbs);
+    bus.write32(kCcbAt + 8, kSourceAt);
+    // Deliberately different from the preamble in the source, so a reader that
+    // looks in the wrong place cannot accidentally agree.
+    bus.write32(kCcbAt + 52, pre0_for(kFormatDirect16, 99));
+    bus.write32(kCcbAt + 56, pre1_for(99));
+
+    bus.write32(kSourceAt + 0, pre0_for(kFormatDirect16, 12));
+    bus.write32(kSourceAt + 4, pre1_for(20));
+
+    const Ccb ccb = madam.read_ccb(kCcbAt);
+    CHECK_EQ(ccb.width, 20u);
+    CHECK_EQ(ccb.height, 12u);
+    // And the pixels start after the two words it just consumed.
+    CHECK_EQ(ccb.source_address, kSourceAt + 8u);
+}
+
+TEST(a_packed_cel_keeps_the_width_the_last_unpacked_cel_left_behind) {
+    // PRE1 is a register, not a per-cel value. A packed cel never supplies one
+    // - from the CCB or from its source - because its rows say how long they
+    // are. The register still has to survive, because the next unpacked cel
+    // may not reload it either.
+    Bus bus;
+    Madam madam(bus);
+
+    bus.write32(kCcbAt + 0, kCcbLast | kCcbSpAbs | kCcbCcbPre);
+    bus.write32(kCcbAt + 8, kSourceAt);
+    bus.write32(kCcbAt + 52, pre0_for(kFormatDirect16, 4));
+    bus.write32(kCcbAt + 56, pre1_for(37));
+    CHECK_EQ(madam.read_ccb(kCcbAt).width, 37u);
+
+    // Now a packed cel with a different PRE1 word sitting in the CCB, which it
+    // must ignore.
+    bus.write32(kCcbAt + 0, kCcbLast | kCcbSpAbs | kCcbCcbPre | kCcbPacked);
+    bus.write32(kCcbAt + 56, pre1_for(5));
+    CHECK_EQ(madam.read_ccb(kCcbAt).width, 37u);
+}
+
+TEST(the_engine_reads_the_ccb_as_it_stands_when_the_instruction_ends) {
+    // Software is entitled to start the engine and then finish writing the
+    // very CCB it is about to read, because on the hardware the engine does
+    // not begin until the CPU's current instruction is done. Need for Speed
+    // does exactly this, and a machine that walks the list inside the store
+    // draws the previous frame's geometry - which for that title meant no road
+    // and no terrain at all, just a correct cockpit over the clear colour.
+    Console console;
+    console.reset();
+    Bus& bus = console.bus();
+
+    bus.write16(kSourceAt + 0, rgb555(31, 0, 0));
+    write_ccb(bus, kCcbAt, 0, kSourceAt, 0, fixed(5), fixed(5),
+              fixed(1), 0, 0, fixed(1),
+              pre0_for(kFormatDirect16, 1), pre1_for(1));
+
+    bus.write32(kMadamBase + kMadamNextCcb, kCcbAt);
+    bus.write32(kMadamBase + kMadamCelStart, 0);
+
+    // Still inside the instruction that asked: nothing has been read yet, so
+    // moving the cel now must move where it lands.
+    bus.write32(kCcbAt + 16, static_cast<u32>(fixed(9)));
+    bus.write32(kCcbAt + 20, static_cast<u32>(fixed(9)));
+
+    bus.run_pending_cel_engine();
+
+    CHECK_EQ(console.madam().stats().cels_drawn, 1u);
+    CHECK_EQ(read_target(bus, 9, 9), rgb555(31, 0, 0));
+    CHECK_EQ(read_target(bus, 5, 5), 0u);
+}
+
+TEST(stopping_the_engine_also_cancels_a_start_that_has_not_happened_yet) {
+    Console console;
+    console.reset();
+    Bus& bus = console.bus();
+
+    write_ccb(bus, kCcbAt, 0, kSourceAt, 0, fixed(5), fixed(5),
+              fixed(1), 0, 0, fixed(1),
+              pre0_for(kFormatDirect16, 1), pre1_for(1));
+    bus.write32(kMadamBase + kMadamNextCcb, kCcbAt);
+    bus.write32(kMadamBase + kMadamCelStart, 0);
+    bus.write32(kMadamBase + kMadamCelStop, 0);
+
+    bus.run_pending_cel_engine();
     CHECK_EQ(console.madam().stats().cels_drawn, 0u);
 }

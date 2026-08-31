@@ -13,7 +13,8 @@
 // assignments inside a VDL control word are marked TODO(vdl) — they are the
 // part still to be checked against the published documentation, and until they
 // are, `render_linear` exists as a way to see VRAM on screen without trusting
-// them. Nothing here derives from another emulator; see docs/CLEANROOM.md.
+// them. The VDL walk, the line modulo table and the CLUT-bypass rule came from
+// the reference emulator; see docs/PROVENANCE.md.
 #pragma once
 
 #include "types.h"

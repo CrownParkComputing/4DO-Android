@@ -95,12 +95,36 @@ bool Bus::restore_nvram(const u8* data, size_t size) {
     return true;
 }
 
+// Run the cel engine, if a store has asked for it.
+//
+// Called after each instruction rather than during the store that requests it,
+// because the hardware does exactly that: writing the start port only sets the
+// engine going, and it begins reading CCBs once the CPU's current work is
+// done. Software is entitled to rely on that gap - and Need for Speed does. It
+// starts the engine and then finishes writing the very CCB the engine is about
+// to read, so a machine that walks the list inside the store reads the
+// previous frame's version of it.
+//
+// The effect is not subtle. The road and terrain are drawn from the CCBs
+// written in that gap, so they were missing entirely: a correct cockpit and
+// mirror sitting in front of a flat field of the clear colour.
+void Bus::run_pending_cel_engine() {
+    if (!cel_pending_) {
+        return;
+    }
+    cel_pending_ = false;
+    if (madam_ != nullptr) {
+        madam_->run_cel_engine();
+    }
+}
+
 void Bus::reset() {
     std::fill(dram_.begin(), dram_.end(), u8{0});
     std::fill(vram_.begin(), vram_.end(), u8{0});
     write_watch_.clear();
     sport_accesses_ = 0;
     rom_overlay_ = true;
+    cel_pending_ = false;
     // ROM and NVRAM deliberately survive a reset, as they do in hardware.
 }
 

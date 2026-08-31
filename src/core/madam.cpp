@@ -249,12 +249,94 @@ void Madam::set_clip(u32 width, u32 height) {
 // ---------------------------------------------------------------------------
 // Registers
 // ---------------------------------------------------------------------------
+// The matrix unit.
+//
+// A 4x4 multiply of 16.16 fixed point, with an optional perspective divide.
+// Everything is done in 64 bits and shifted back down, because the products of
+// two 16.16 values overflow 32 bits long before the result does.
+//
+// The outputs are double buffered. An operation computes into a holding set,
+// and it is the PREVIOUS result that moves into the readable outputs as it
+// does so. Software reads the answer to the operation before the one it just
+// asked for - which is how a title keeps the unit fed without ever waiting on
+// it, and is not an optimisation anyone would guess at.
+void Madam::matrix_execute(u32 operation) {
+    const auto m = [this](int row, int col) {
+        return static_cast<s64>(matrix_in_[row * 4 + col]);
+    };
+    const auto v = [this](int index) {
+        return static_cast<s64>(matrix_vec_[index]);
+    };
+
+    // Publish the previous result first, whatever this operation turns out to
+    // be. Operation zero is that and nothing else.
+    for (int i = 0; i < 4; ++i) {
+        matrix_out_[i] = static_cast<s32>(matrix_pending_[i]);
+    }
+
+    switch (operation) {
+        case kMatrixCopyOnly:
+            return;
+
+        case kMatrixMultiply4x4:
+            for (int row = 0; row < 4; ++row) {
+                matrix_pending_[row] = (m(row, 0) * v(0) + m(row, 1) * v(1) +
+                                        m(row, 2) * v(2) + m(row, 3) * v(3)) >> 16;
+            }
+            return;
+
+        case kMatrixMultiply3x3:
+            for (int row = 0; row < 3; ++row) {
+                matrix_pending_[row] = (m(row, 0) * v(0) + m(row, 1) * v(1) +
+                                        m(row, 2) * v(2)) >> 16;
+            }
+            return;
+
+        case kMatrixMultiply3x3DivideZ: {
+            // Transform, then divide x and y by z - the perspective divide,
+            // done in hardware. The numerator is a 64-bit value software loads
+            // separately, so it controls the field of view.
+            s64 numerator = (static_cast<s64>(matrix_num_hi_) << 32) |
+                            static_cast<u32>(matrix_num_lo_);
+
+            matrix_pending_[2] = (m(2, 0) * v(0) + m(2, 1) * v(1) +
+                                  m(2, 2) * v(2)) >> 16;
+            // A vertex exactly on the eye plane would divide by zero. The
+            // hardware leaves the numerator alone rather than trapping.
+            if (matrix_pending_[2] != 0) {
+                numerator /= matrix_pending_[2];
+            }
+
+            matrix_pending_[0] = (m(0, 0) * v(0) + m(0, 1) * v(1) +
+                                  m(0, 2) * v(2)) >> 16;
+            matrix_pending_[1] = (m(1, 0) * v(0) + m(1, 1) * v(1) +
+                                  m(1, 2) * v(2)) >> 16;
+            matrix_pending_[0] = (matrix_pending_[0] * numerator) >> 32;
+            matrix_pending_[1] = (matrix_pending_[1] * numerator) >> 32;
+            return;
+        }
+
+        default:
+            return;
+    }
+}
+
 u32 Madam::read(u32 offset) {
     offset &= (kMadamWindowSize - 1);
     u32 channel = 0;
     bool is_length = false;
     if (dma_slot(offset, &channel, &is_length)) {
         return is_length ? dma_length_[channel] : dma_address_[channel];
+    }
+
+    if (offset >= kMadamMatrixIn && offset < kMadamMatrixIn + 16 * 4) {
+        return static_cast<u32>(matrix_in_[(offset - kMadamMatrixIn) / 4]);
+    }
+    if (offset >= kMadamMatrixVec && offset < kMadamMatrixVec + 4 * 4) {
+        return static_cast<u32>(matrix_vec_[(offset - kMadamMatrixVec) / 4]);
+    }
+    if (offset >= kMadamMatrixOut && offset < kMadamMatrixOut + 4 * 4) {
+        return static_cast<u32>(matrix_out_[(offset - kMadamMatrixOut) / 4]);
     }
 
     if (offset >= kMadamFifoBase && offset < kMadamFifoEnd) {
@@ -284,6 +366,8 @@ u32 Madam::read(u32 offset) {
         case kMadamPbusLength:  return pbus_length_;
         case kMadamPbusPointer: return pbus_pointer_;
         case kMadamCcbCtl0:    return ccb_ctl0_;
+        case kMadamMatrixNumHi: return matrix_num_hi_;
+        case kMadamMatrixNumLo: return matrix_num_lo_;
         case kMadamRegCtl0:    return reg_ctl0_;
         case kMadamRegCtl1:    return reg_ctl1_;
         case kMadamRegCtl2:    return read_base_;
@@ -429,6 +513,20 @@ void Madam::write(u32 offset, u32 value) {
     }
 #endif
     note_write(offset, value);
+
+    if (offset >= kMadamMatrixIn && offset < kMadamMatrixIn + 16 * 4) {
+        matrix_in_[(offset - kMadamMatrixIn) / 4] = static_cast<s32>(value);
+        return;
+    }
+    if (offset >= kMadamMatrixVec && offset < kMadamMatrixVec + 4 * 4) {
+        matrix_vec_[(offset - kMadamMatrixVec) / 4] = static_cast<s32>(value);
+        return;
+    }
+    if (offset >= kMadamMatrixOut && offset < kMadamMatrixOut + 4 * 4) {
+        matrix_out_[(offset - kMadamMatrixOut) / 4] = static_cast<s32>(value);
+        return;
+    }
+
     u32 channel = 0;
     bool is_length = false;
     if (dma_slot(offset, &channel, &is_length)) {
@@ -512,24 +610,36 @@ void Madam::write(u32 offset, u32 value) {
             pbus_pointer_ = value;
             break;
         // The value written to any of these is discarded; the port itself is
-        // the instruction. The real chip runs the walk asynchronously and
-        // raises an interrupt when it finishes; this runs it to completion
-        // immediately, which is indistinguishable to software that waits for
-        // the completion flag and wrong only for software that races it.
+        // the instruction.
+        //
+        // Starting the engine does not run it. It runs once the CPU's current
+        // instruction is finished, which is what the hardware does and what
+        // software is entitled to rely on - Need for Speed starts the engine
+        // and then finishes writing the CCB the engine is about to read.
         case kMadamCelStart:
-            run_cel_engine();
+            bus_.request_cel_engine();
             break;
         case kMadamCelStop:
+            bus_.cancel_cel_engine();
             next_ccb_ = 0;
             break;
         case kMadamCelResume:
-            run_cel_engine();
+            bus_.request_cel_engine();
             break;
         case kMadamCelPause:
             break;
 
         case kMadamCcbCtl0:
             ccb_ctl0_ = value;
+            break;
+        case kMadamMatrixNumHi:
+            matrix_num_hi_ = value;
+            break;
+        case kMadamMatrixNumLo:
+            matrix_num_lo_ = value;
+            break;
+        case kMadamMatrixCtl:
+            matrix_execute(value);
             break;
         case kMadamRegCtl0:
             reg_ctl0_ = value;
@@ -576,7 +686,7 @@ u32 Madam::dma_length(u32 channel) const {
 }
 
 
-Ccb Madam::read_ccb(u32 address) const {
+Ccb Madam::read_ccb(u32 address) {
     Ccb ccb;
 
     u32 words[kCcbWordCount];
@@ -633,8 +743,36 @@ Ccb Madam::read_ccb(u32 address) const {
     ccb.hddy = static_cast<s32>(words[kCcbHddyWord]) >> 4;
 
     ccb.pixc = words[kCcbPixcWord];
-    ccb.pre0 = words[kCcbPre0Word];
-    ccb.pre1 = words[kCcbPre1Word];
+
+    // Where the preamble comes from, which is not always the CCB.
+    //
+    // CCBPRE says the two preamble words are carried in the CCB. Cleared, they
+    // are the first words of the SOURCE DATA instead, and the pixels begin
+    // after them - which is how a title stores a cel as one self-describing
+    // blob and points a bare CCB at it. Reading the CCB's own words in that
+    // case picks up whatever follows the structure in memory, so the cel gets
+    // an invented format and size.
+    //
+    // PRE1 is a register rather than a per-cel value: a packed cel never
+    // supplies one, from either place, and keeps whatever the last unpacked
+    // cel left there. Its own rows say how long they are, so it has no use for
+    // a width - but the register still has to survive, because the next
+    // unpacked cel may not reload it either.
+    if ((ccb.flags & kCcbCcbPre) != 0) {
+        ccb.pre0 = words[kCcbPre0Word];
+        if ((ccb.flags & kCcbPacked) == 0) {
+            pre1_register_ = words[kCcbPre1Word];
+        }
+    } else {
+        Bus& bus = bus_;
+        ccb.pre0 = bus.read32(ccb.source_address);
+        ccb.source_address += 4;
+        if ((ccb.flags & kCcbPacked) == 0) {
+            pre1_register_ = bus.read32(ccb.source_address);
+            ccb.source_address += 4;
+        }
+    }
+    ccb.pre1 = pre1_register_;
 
     ccb.format = cel_format_from_pre0(ccb.pre0);
     ccb.width  = cel_width_from_pre1(ccb.pre1);
@@ -785,6 +923,16 @@ void Madam::begin_cel(const Ccb& ccb) {
                       (ccb.hdx == 0x10000 || ccb.hdx == -0x10000) &&
                       (ccb.vdy == 0x10000 || ccb.vdy == -0x10000) &&
                       ((ccb.x | ccb.y) & 0xffff) == 0;
+
+    // Which mapper. The hardware picks by the same test it uses to decide
+    // visibility: a cel with no perspective stepping that is square-on to one
+    // axis is scaled, and everything else is a four-sided figure.
+    if (ccb.hddx == 0 && ccb.hddy == 0 &&
+        ((ccb.hdx == 0 && ccb.vdy == 0) || (ccb.hdy == 0 && ccb.vdx == 0))) {
+        cel_mapper_ = cel_one_to_one_ ? Mapper::Line : Mapper::Scale;
+    } else {
+        cel_mapper_ = Mapper::Arbitrary;
+    }
 
     cel_bpp_ = bits_per_pixel(ccb.format);
     cel_linear_ = (ccb.pre0 & kPre0Linear) != 0;
@@ -1052,6 +1200,108 @@ void Madam::put_pixel(s32 x, s32 y, u16 pixel, u16 shade) {
 // An empty rectangle draws nothing. That is not a degenerate case to guard
 // against - it is how a cel drawn smaller than its source drops the pixels
 // that do not fit.
+void Madam::plot_texel(const Ccb& ccb, s32 px, s32 py, s32 step_x, s32 step_y,
+                       s32 down_x, s32 down_y, s32 next_step_x, s32 next_step_y,
+                       u16 pixel, u16 shade) {
+    if (cel_mapper_ != Mapper::Arbitrary) {
+        plot_footprint(ccb, px, py, step_x, step_y, pixel, shade);
+        return;
+    }
+    // The four corners, in order round the figure: this pixel, the next one
+    // along this row, the matching one on the next row, and the one below this.
+    plot_quad(ccb, px, py, px + step_x, py + step_y,
+              down_x + next_step_x, down_y + next_step_y, down_x, down_y,
+              pixel, shade);
+}
+
+// One source pixel of a rotated or perspective-stepped cel, which lands as a
+// four-sided figure rather than a rectangle.
+//
+// Filled by scanlines, finding where the figure's edges cross each row. Two
+// details are load-bearing. The first is that an edge is recorded with the
+// direction it was crossed in, and a span is only filled when that direction
+// matches a winding the cel permits - which is how a cel folded over on itself
+// draws its front and not its back. The second is that a figure may be crossed
+// four times on one row rather than twice, and both spans have to be filled or
+// a bowtie loses half of itself.
+void Madam::plot_quad(const Ccb& ccb, s32 ax, s32 ay, s32 bx, s32 by,
+                      s32 cx, s32 cy, s32 dx, s32 dy, u16 pixel, u16 shade) {
+    ax >>= 16; bx >>= 16; cx >>= 16; dx >>= 16;
+    ay >>= 16; by >>= 16; cy >>= 16; dy >>= 16;
+
+    // Collapsed to a line: no area, nothing to fill.
+    if (ax == bx && bx == cx && cx == dx) {
+        return;
+    }
+
+    const s32 max_x = static_cast<s32>(clip_width_);
+    s32 max_y = static_cast<s32>(clip_height_);
+
+    s32 lowest = ay;
+    s32 highest = ay;
+    for (s32 v : {by, cy, dy}) {
+        if (v < lowest) lowest = v;
+        if (v > highest) highest = v;
+    }
+    if (highest < max_y) {
+        max_y = highest;
+    }
+
+    const s32 xs[4] = {ax, bx, cx, dx};
+    const s32 ys[4] = {ay, by, cy, dy};
+
+    for (s32 y = lowest < 0 ? 0 : lowest; y < max_y; ++y) {
+        s32 crossing[4] = {};
+        int downward[4] = {};
+        int count = 0;
+
+        // Each edge in turn, and then the closing edge only if an odd number
+        // of crossings says the figure has not been closed yet.
+        for (int edge = 0; edge < 4 && (edge < 3 || (count & 1)); ++edge) {
+            const int from = edge;
+            const int to = (edge + 1) & 3;
+            if (y >= ys[from] && y < ys[to]) {
+                crossing[count] = (xs[to] - xs[from]) * (y - ys[from]) /
+                                      (ys[to] - ys[from]) + xs[from];
+                downward[count] = 1;
+                if (edge < 3) ++count;
+            } else if (y >= ys[to] && y < ys[from]) {
+                crossing[count] = (xs[from] - xs[to]) * (y - ys[to]) /
+                                      (ys[from] - ys[to]) + xs[to];
+                downward[count] = 0;
+                if (edge < 3) ++count;
+            }
+        }
+
+        if (count == 0) {
+            continue;
+        }
+        if (crossing[0] > crossing[1]) {
+            const s32 t = crossing[0]; crossing[0] = crossing[1]; crossing[1] = t;
+            const int u = downward[0]; downward[0] = downward[1]; downward[1] = u;
+        }
+
+        const auto permitted = [&](int direction) {
+            return (((ccb.flags & kCcbAcw) != 0 && direction == 0) ||
+                    ((ccb.flags & kCcbAccw) != 0 && direction == 1));
+        };
+        const auto fill = [&](s32 from, s32 to) {
+            if (from < 0) from = 0;
+            if (to > max_x) to = max_x;
+            for (s32 x = from; x < to; ++x) {
+                put_pixel(x, y, pixel, shade);
+            }
+        };
+
+        if (count > 2 && permitted(downward[2])) {
+            fill(crossing[2], crossing[3]);
+        }
+        if (permitted(downward[0])) {
+            fill(crossing[0], crossing[1]);
+        }
+    }
+}
+
 void Madam::plot_footprint(const Ccb& ccb, s32 px, s32 py, s32 step_x,
                            s32 step_y, u16 pixel, u16 shade) {
     if (cel_one_to_one_) {
@@ -1059,10 +1309,35 @@ void Madam::plot_footprint(const Ccb& ccb, s32 px, s32 py, s32 step_x,
         return;
     }
 
+    // How far one source pixel reaches, and it is not the horizontal step.
+    //
+    // A magnified cel covers the ground between where this pixel lands and
+    // where the NEXT one would - but "the next one" is displaced by BOTH step
+    // vectors together, not just the horizontal one. The hardware spans
+    // hdx+vdx across and hdy+vdy down.
+    //
+    // Using the horizontal step alone works for an ordinary upright sprite,
+    // where the vertical step contributes nothing across, and fails completely
+    // for the case that matters most: a 1x1 cel stretched into a quad. Need
+    // for Speed paints its road and scenery that way, a hundred stretched 1x1
+    // cels a frame, and many of them have hdx of exactly zero - the quad's
+    // whole width comes from vdx. Every one of those covered a rectangle zero
+    // pixels wide and drew nothing at all, which is why the road was a flat
+    // green field with a correct dashboard sitting on it.
+    s32 span_x = step_x + ccb.vdx;
+    s32 span_y = step_y + ccb.vdy;
+
+    // MARIA limits how far one source pixel may be stretched downwards. It is
+    // there so a cel scaled to the horizon does not smear a single row over
+    // the whole screen.
+    if ((ccb.flags & kCcbMaria) != 0 && span_y > 0x10000) {
+        span_y = 0x10000;
+    }
+
     s32 x0 = px >> 16;
-    s32 x1 = (px + step_x) >> 16;
+    s32 x1 = (px + span_x) >> 16;
     s32 y0 = py >> 16;
-    s32 y1 = (py + ccb.vdy) >> 16;
+    s32 y1 = (py + span_y) >> 16;
     if (x1 < x0) { const s32 t = x0; x0 = x1 + 1; x1 = t + 1; }
     if (y1 < y0) { const s32 t = y0; y0 = y1 + 1; y1 = t + 1; }
 
@@ -1127,6 +1402,13 @@ void Madam::draw_packed_cel(const Ccb& ccb) {
 
         s32 px = row_x;
         s32 py = row_y;
+        // Where the matching pixel of the NEXT row lands, and the step that
+        // row will use. The rotated mapper needs both to know the shape one
+        // source pixel covers; the others ignore them.
+        const s32 next_step_x = step_x + ccb.hddx;
+        const s32 next_step_y = step_y + ccb.hddy;
+        s32 down_x = row_x + ccb.vdx;
+        s32 down_y = row_y + ccb.vdy;
 
         for (;;) {
             u32 type = reader.read(2);
@@ -1153,10 +1435,13 @@ void Madam::draw_packed_cel(const Ccb& ccb) {
                 const u16 pixel = decode_pixel(reader.read(bpp), &shade, &clear);
                 for (u32 i = 0; i < count; ++i) {
                     if (!clear) {
-                        plot_footprint(ccb, px, py, step_x, step_y, pixel, shade);
+                        plot_texel(ccb, px, py, step_x, step_y, down_x, down_y,
+                                   next_step_x, next_step_y, pixel, shade);
                     }
                     px += step_x;
                     py += step_y;
+                    down_x += next_step_x;
+                    down_y += next_step_y;
                 }
                 continue;
             }
@@ -1165,10 +1450,13 @@ void Madam::draw_packed_cel(const Ccb& ccb) {
                 bool clear = false;
                 const u16 pixel = decode_pixel(reader.read(bpp), &shade, &clear);
                 if (!clear) {
-                    plot_footprint(ccb, px, py, step_x, step_y, pixel, shade);
+                    plot_texel(ccb, px, py, step_x, step_y, down_x, down_y,
+                               next_step_x, next_step_y, pixel, shade);
                 }
                 px += step_x;
                 py += step_y;
+                down_x += next_step_x;
+                down_y += next_step_y;
             }
         }
 
@@ -1230,6 +1518,13 @@ void Madam::draw_lr_cel(const Ccb& ccb) {
     for (u32 row = 0; row < height; ++row) {
         s32 px = row_x;
         s32 py = row_y;
+        // Where the matching pixel of the NEXT row lands, and the step that
+        // row will use. The rotated mapper needs both to know the shape one
+        // source pixel covers; the others ignore them.
+        const s32 next_step_x = step_x + ccb.hddx;
+        const s32 next_step_y = step_y + ccb.hddy;
+        s32 down_x = row_x + ccb.vdx;
+        s32 down_y = row_y + ccb.vdy;
 
         for (u32 column = 0; column < ccb.width; ++column) {
             const u32 at = ccb.source_address +
@@ -1242,10 +1537,13 @@ void Madam::draw_lr_cel(const Ccb& ccb) {
             bool clear = false;
             const u16 pixel = decode_pixel(value, &shade, &clear);
             if (!clear) {
-                plot_footprint(ccb, px, py, step_x, step_y, pixel, shade);
+                plot_texel(ccb, px, py, step_x, step_y, down_x, down_y,
+                           next_step_x, next_step_y, pixel, shade);
             }
             px += step_x;
             py += step_y;
+            down_x += next_step_x;
+            down_y += next_step_y;
         }
 
         row_x += ccb.vdx;
@@ -1286,16 +1584,26 @@ void Madam::draw_unpacked_cel(const Ccb& ccb) {
 
         s32 px = row_x;
         s32 py = row_y;
+        // Where the matching pixel of the NEXT row lands, and the step that
+        // row will use. The rotated mapper needs both to know the shape one
+        // source pixel covers; the others ignore them.
+        const s32 next_step_x = step_x + ccb.hddx;
+        const s32 next_step_y = step_y + ccb.hddy;
+        s32 down_x = row_x + ccb.vdx;
+        s32 down_y = row_y + ccb.vdy;
 
         for (u32 column = 0; column < width; ++column) {
             u16 shade = 0;
             bool clear = false;
             const u16 pixel = decode_pixel(reader.read(bpp), &shade, &clear);
             if (!clear) {
-                plot_footprint(ccb, px, py, step_x, step_y, pixel, shade);
+                plot_texel(ccb, px, py, step_x, step_y, down_x, down_y,
+                           next_step_x, next_step_y, pixel, shade);
             }
             px += step_x;
             py += step_y;
+            down_x += next_step_x;
+            down_y += next_step_y;
         }
 
         row_x += ccb.vdx;
@@ -1518,8 +1826,9 @@ void Madam::render_cel_list(u32 address) {
     stats_ = MadamStats{};
     ++engine_runs_;
     if (g_cel_log != nullptr) {
-        std::fprintf(g_cel_log, "RUN %llu head=%06X\n",
-                     (unsigned long long)engine_runs_, address);
+        std::fprintf(g_cel_log, "RUN %llu head=%06X wbase=%06X rbase=%06X wstride=%d\n",
+                     (unsigned long long)engine_runs_, address,
+                     write_base_, read_base_, write_stride_);
     }
 
     if (address == 0) {
@@ -1533,6 +1842,13 @@ void Madam::render_cel_list(u32 address) {
         ++stats_.cels_walked;
         next_ccb_ = ccb.next_address;
         if (g_cel_log != nullptr) {
+            if (stats_.cels_walked <= 3) {
+                std::fprintf(g_cel_log, "    RAW");
+                for (u32 w = 0; w < 17; ++w) {
+                    std::fprintf(g_cel_log, " %08X", bus_.read32(current_ccb_ + w * 4));
+                }
+                std::fprintf(g_cel_log, "\n");
+            }
             std::fprintf(g_cel_log,
                          "CCB %06X flags=%08X pre0=%08X pre1=%08X next=%06X "
                          "src=%06X %ux%u\n",
@@ -1543,18 +1859,21 @@ void Madam::render_cel_list(u32 address) {
         if ((ccb.flags & kCcbSkip) == 0) {
             const u32 before = stats_.cels_drawn;
             const u64 before_pixels = stats_.pixels_written;
+            const bool culled = cel_is_invisible(ccb, (ccb.flags & kCcbPacked) != 0);
             draw_cel(ccb);
             total_cels_drawn_ += stats_.cels_drawn - before;
             if (g_cel_log != nullptr) {
                 std::fprintf(g_cel_log,
-                             "    drew=%u pixels=%llu packed=%d fmt=%d "
-                             "at=%d,%d hd=%d,%d vd=%d,%d\n",
+                             "    drew=%u pixels=%llu packed=%d fmt=%d cull=%d "
+                             "at=%d,%d hd=%d,%d vd=%d,%d hdd=%d,%d\n",
                              stats_.cels_drawn - before,
                              (unsigned long long)(stats_.pixels_written - before_pixels),
                              (ccb.flags & kCcbPacked) != 0 ? 1 : 0,
                              static_cast<int>(ccb.format),
+                             culled ? 1 : 0,
                              ccb.x >> 16, ccb.y >> 16,
-                             ccb.hdx, ccb.hdy, ccb.vdx, ccb.vdy);
+                             ccb.hdx, ccb.hdy, ccb.vdx, ccb.vdy,
+                             ccb.hddx, ccb.hddy);
             }
         }
 

@@ -299,6 +299,7 @@ public:
     void render_cel_list(u32 address);
     void draw_packed_cel(const Ccb& ccb);
     void draw_unpacked_cel(const Ccb& ccb);
+    void draw_lr_cel(const Ccb& ccb);
     void plot_footprint(const Ccb& ccb, s32 px, s32 py, s32 step_x, s32 step_y,
                         u16 pixel, u16 shade);
     // Turn one source value into a colour, and say what multiplier it carries

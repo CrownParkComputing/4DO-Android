@@ -433,7 +433,10 @@ TEST(the_largest_expressible_cel_is_still_bounded) {
     // handling, and a skip of fifteen would quietly move which source pixels
     // are the visible ones.
     bus.write32(kCcbAt + 52, kFormatDirect16 | kPre0Linear | 0x0000ffc0u);
-    bus.write32(kCcbAt + 56, 0xffffffffu);
+    // Every bit except LRFORM. This test is about the size fields, and bit 11
+    // says the source is stored in the framebuffer's interleaved layout - which
+    // is a different question and would change which bytes count as pixels.
+    bus.write32(kCcbAt + 56, 0xffffffffu & ~0x800u);
 
     const Ccb ccb = madam.read_ccb(kCcbAt);
     // Eleven bits of width and ten of height, so these are the largest values

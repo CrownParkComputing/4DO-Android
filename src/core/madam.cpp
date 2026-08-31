@@ -96,6 +96,19 @@ constexpr u32 kPre0HeightShift = 6;
 constexpr u32 kPre0HeightMask  = 0x000003ffu;
 constexpr u32 kPre1WidthMask   = 0x000007ffu;
 
+// Set when a cel's source is stored in the framebuffer's own interleaved
+// left/right layout rather than as a flat bitstream.
+constexpr u32 kPre1Lrform = 0x00000800u;
+
+// Where pixel (x,y) of an interleaved buffer lives, given the byte distance
+// between line PAIRS. Two vertically adjacent lines share each 32-bit word:
+// the even line in the low half, the odd line in the high half. This is the
+// framebuffer's layout and, for an LR-form cel, the source's as well.
+u32 lr_source_offset(s32 x, s32 y, u32 pair_stride) {
+    return static_cast<u32>((y >> 1) * static_cast<s32>(pair_stride)) +
+           static_cast<u32>((y & 1) << 1) + (static_cast<u32>(x) << 2);
+}
+
 u32 cel_height_from_pre0(u32 pre0) {
     // The stored value is one less than the real height, as is usual for a
     // field that must be able to express a full-size cel.
@@ -1180,6 +1193,70 @@ void Madam::draw_packed_cel(const Ccb& ccb) {
 //
 // A row may also begin with pixels to be skipped, and those come off the
 // width as well as off the front.
+// An LR-form cel, whose source is stored the way the FRAMEBUFFER is stored.
+//
+// "LR" is left/right: the source rows are interleaved in pairs, two vertically
+// adjacent lines sharing each 32-bit word, exactly as the display's own
+// framebuffer is laid out. That is the whole point of the format - it lets a
+// title hand the cel engine a buffer it has just rendered or decoded into,
+// with no rearranging in between.
+//
+// Which is why it is not an exotic corner of the hardware. Need for Speed
+// draws 1,047 of its 1,051 unpacked cels this way, because its video decoder
+// writes framebuffer-shaped output and then blits it. Alone in the Dark uses
+// it too. Sending these down the ordinary literal path reads the source as a
+// flat bitstream, so every row comes out of the wrong place.
+//
+// Two things differ from a literal cel, and both follow from the interleave:
+// the height field counts PAIRS of lines, so the real height is twice it plus
+// two; and a pixel is addressed rather than streamed, because consecutive
+// pixels of one line are four bytes apart and the odd lines live in the upper
+// half of each word.
+void Madam::draw_lr_cel(const Ccb& ccb) {
+    const u32 stride_words = (ccb.pre1 >> 16) & 0x3ffu;
+    const u32 row_bytes = (stride_words + 2u) << 2;
+
+    // The height field counts line pairs here, not lines.
+    const u32 height = (((ccb.pre0 >> kPre0HeightShift) & kPre0HeightMask) << 1) + 2u;
+    if (height > kMaxCelDimension) {
+        return;
+    }
+
+    s32 row_x = ccb.x;
+    s32 row_y = ccb.y;
+    s32 step_x = ccb.hdx;
+    s32 step_y = ccb.hdy;
+
+    for (u32 row = 0; row < height; ++row) {
+        s32 px = row_x;
+        s32 py = row_y;
+
+        for (u32 column = 0; column < ccb.width; ++column) {
+            const u32 at = ccb.source_address +
+                           lr_source_offset(static_cast<s32>(column),
+                                            static_cast<s32>(row), row_bytes);
+            const u32 value =
+                (static_cast<u32>(bus_.read8(at)) << 8) | bus_.read8(at + 1);
+
+            u16 shade = 0;
+            bool clear = false;
+            const u16 pixel = decode_pixel(value, &shade, &clear);
+            if (!clear) {
+                plot_footprint(ccb, px, py, step_x, step_y, pixel, shade);
+            }
+            px += step_x;
+            py += step_y;
+        }
+
+        row_x += ccb.vdx;
+        row_y += ccb.vdy;
+        step_x += ccb.hddx;
+        step_y += ccb.hddy;
+    }
+
+    ++stats_.cels_drawn;
+}
+
 void Madam::draw_unpacked_cel(const Ccb& ccb) {
     const unsigned bpp = bits_per_pixel(ccb.format);
     if (bpp == 0 || ccb.height == 0 || ccb.height > kMaxCelDimension) {
@@ -1242,6 +1319,8 @@ void Madam::draw_cel(const Ccb& ccb) {
     begin_cel(ccb);
     if ((ccb.flags & kCcbPacked) != 0) {
         draw_packed_cel(ccb);
+    } else if ((ccb.pre1 & kPre1Lrform) != 0 && cel_bpp_ == 16) {
+        draw_lr_cel(ccb);
     } else {
         draw_unpacked_cel(ccb);
     }
@@ -1287,9 +1366,11 @@ void Madam::render_cel_list(u32 address) {
         ++stats_.cels_walked;
         next_ccb_ = ccb.next_address;
         if (g_cel_log != nullptr) {
-            std::fprintf(g_cel_log, "CCB %06X flags=%08X next=%06X src=%06X %ux%u\n",
-                         current_ccb_, ccb.flags, next_ccb_, ccb.source_address,
-                         ccb.width, ccb.height);
+            std::fprintf(g_cel_log,
+                         "CCB %06X flags=%08X pre0=%08X pre1=%08X next=%06X "
+                         "src=%06X %ux%u\n",
+                         current_ccb_, ccb.flags, ccb.pre0, ccb.pre1, next_ccb_,
+                         ccb.source_address, ccb.width, ccb.height);
         }
 
         if ((ccb.flags & kCcbSkip) == 0) {

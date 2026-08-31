@@ -166,6 +166,11 @@ public:
 
     // --- direct access for the chips --------------------------------------
     // MADAM and the VDLP walk VRAM far too often to pay bus dispatch for it.
+    // Put the NVRAM back to formatted-but-empty. Not the same as zeroing it:
+    // a zeroed NVRAM has no filesystem, and software that finds none reports
+    // it as full rather than formatting it.
+    void format_nvram();
+
     u8* dram() { return dram_.data(); }
     u8* vram() { return vram_.data(); }
     const u8* dram() const { return dram_.data(); }

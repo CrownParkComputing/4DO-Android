@@ -95,3 +95,34 @@ TEST(the_frame_is_the_right_shape_for_the_region) {
     CHECK_EQ(frame.width, 320);
     CHECK_EQ(frame.height, 288);
 }
+
+TEST(the_nvram_comes_up_formatted_rather_than_blank) {
+    // Real hardware is never blank: a console formats its NVRAM the first time
+    // it is switched on and it stays that way. An emulator that comes up
+    // zeroed is not modelling a new console, it is modelling one that has
+    // never been switched on - and the OS only formats it when it reaches its
+    // own shell, so a title booted straight from a disc finds no filesystem
+    // and reports the NVRAM full.
+    Bus bus;
+    CHECK_EQ(bus.read32(kNvramBase + 0 * 4) & 0xffu, 0x01u);   // record type
+    for (u32 i = 1; i <= 5; ++i) {
+        CHECK_EQ(bus.read32(kNvramBase + i * 4) & 0xffu, 0x5au);   // sync
+    }
+
+    // Labelled, and sized as the whole 32 KiB.
+    const char label[] = "nvram";
+    for (u32 i = 0; i < 5; ++i) {
+        CHECK_EQ(bus.read32(kNvramBase + (40 + i) * 4) & 0xffu,
+                 static_cast<u32>(label[i]));
+    }
+    u32 blocks = 0;
+    for (u32 i = 0; i < 4; ++i) {
+        blocks = (blocks << 8) | (bus.read32(kNvramBase + (80 + i) * 4) & 0xffu);
+    }
+    CHECK_EQ(blocks, 32768u);
+
+    // And a reset does not wipe it, any more than switching a console off does.
+    bus.write32(kNvramBase + 200 * 4, 0x5au);
+    bus.reset();
+    CHECK_EQ(bus.read32(kNvramBase + 200 * 4) & 0xffu, 0x5au);
+}

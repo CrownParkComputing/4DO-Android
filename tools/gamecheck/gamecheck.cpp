@@ -47,6 +47,11 @@ using namespace retro3do;
 
 namespace {
 
+// How often to press start, and for how long. Slow enough not to skip past
+// anything, long enough to be noticed.
+constexpr int kPressPeriod = 180;   // three seconds
+constexpr int kPressHold = 8;
+
 struct Result {
     std::string name;
     u64 commands = 0;
@@ -102,6 +107,21 @@ Result run(const fs::path& bios, const fs::path& disc, int frames,
 
     const auto started = std::chrono::steady_clock::now();
     for (int frame = 0; frame < frames; ++frame) {
+        // Press start, periodically.
+        //
+        // A title sitting on its own menu waiting to be told to begin is not
+        // stuck, but it looks exactly like it from the outside: no cels, no
+        // sectors, nothing changing. Need for Speed sat at thirty-three cels
+        // for sixty thousand frames here and ran perfectly well on a device
+        // where somebody pressed a button.
+        //
+        // Held for a few frames because a title that samples the pad once a
+        // frame can still miss a press that lasts one.
+        Joypad pad;
+        const int phase = frame % kPressPeriod;
+        pad.play = phase < kPressHold;
+        console.set_joypad(pad);
+
         console.run_frame();
 
         const Frame image = console.framebuffer();

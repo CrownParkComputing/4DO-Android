@@ -9,6 +9,23 @@
 #include "bus.h"
 
 namespace retro3do {
+
+// What a memory cycle costs.
+//
+// The ARM's own timings are quoted in these three: a sequential access, a
+// non-sequential one, and an internal cycle with no bus activity at all. On
+// this machine a non-sequential access is four times a sequential one, and
+// that ratio is most of what decides how fast the emulated CPU runs.
+//
+// Charging one cycle for everything makes the processor about twice as fast as
+// the real one - which does not look like a bug, because everything still
+// works. It looks like a game whose animation is a little quick and whose
+// timing never quite matches a reference machine's.
+namespace {
+constexpr u32 kSeq = 1;      // S
+constexpr u32 kNonSeq = 4;   // N
+constexpr u32 kInternal = 1; // I
+}  // namespace
 namespace {
 
 // Banked-register slots. User and System share the user bank.
@@ -461,7 +478,7 @@ u32 Arm60::step() {
     regs_[15] = address + 8;
     pc_written_ = false;
 
-    u32 cycles = 1;
+    u32 cycles = kSeq;
     if (condition_passes(d.cond)) {
         cycles = execute(d);
     }
@@ -516,7 +533,7 @@ u32 Arm60::exec_data_processing(const Decoded& d) {
             // A register-specified shift costs an extra cycle, and PC reads as
             // twelve ahead rather than eight because of the extra pipeline slot.
             if (rm == 15) rm_value += 4;
-            cycles += 1;
+            cycles += kInternal;   // the shift amount comes from a register
         } else {
             amount = (instruction >> 7) & 0x1fu;
         }
@@ -593,7 +610,7 @@ u32 Arm60::exec_data_processing(const Decoded& d) {
     if (opcode_writes_result(opcode)) {
         if (rd == 15) {
             write_pc(result);
-            cycles += 2;  // pipeline refill
+            cycles += kSeq + kNonSeq;   // pipeline refill
         } else {
             regs_[rd] = result;
         }
@@ -634,12 +651,14 @@ u32 Arm60::exec_multiply(const Decoded& d) {
     // Cost depends on how many significant bytes the multiplier holds: the
     // Booth's-algorithm early-out that real silicon performs.
     const u32 operand = regs_[rs];
-    u32 cycles = 2;
-    if      ((operand & 0xffffff00u) == 0 || (operand & 0xffffff00u) == 0xffffff00u) cycles = 2;
-    else if ((operand & 0xffff0000u) == 0 || (operand & 0xffff0000u) == 0xffff0000u) cycles = 3;
-    else if ((operand & 0xff000000u) == 0 || (operand & 0xff000000u) == 0xff000000u) cycles = 4;
-    else                                                                            cycles = 5;
-    if (accumulate) cycles += 1;
+    // 1S plus an internal cycle for each byte of the multiplier that still has
+    // significant bits in it - the hardware stops early on small operands.
+    u32 internal = 4;
+    if      ((operand & 0xffffff00u) == 0 || (operand & 0xffffff00u) == 0xffffff00u) internal = 1;
+    else if ((operand & 0xffff0000u) == 0 || (operand & 0xffff0000u) == 0xffff0000u) internal = 2;
+    else if ((operand & 0xff000000u) == 0 || (operand & 0xff000000u) == 0xff000000u) internal = 3;
+    u32 cycles = kSeq + internal * kInternal;
+    if (accumulate) cycles += kInternal;
     return cycles;
 }
 
@@ -672,7 +691,7 @@ u32 Arm60::exec_single_data_transfer(const Decoded& d) {
         address = add ? base + offset : base - offset;
     }
 
-    u32 cycles = 3;
+    u32 cycles = kSeq + kNonSeq + kInternal;
 
     if (load) {
         u32 value;
@@ -695,7 +714,7 @@ u32 Arm60::exec_single_data_transfer(const Decoded& d) {
 
         if (rd == 15) {
             write_pc(value);
-            cycles += 2;
+            cycles += kSeq + kNonSeq;
         } else {
             regs_[rd] = value;
         }
@@ -715,7 +734,7 @@ u32 Arm60::exec_single_data_transfer(const Decoded& d) {
         } else if (write_back) {
             regs_[rn] = address;
         }
-        cycles = 2;
+        cycles = 2 * kNonSeq;
     }
 
     return cycles;
@@ -808,8 +827,9 @@ u32 Arm60::exec_block_data_transfer(const Decoded& d) {
         switch_mode(saved_mode);
     }
 
-    u32 cycles = count + 2;
-    if (load && pc_in_list) cycles += 2;
+    u32 cycles = load ? (count * kSeq + kNonSeq + kInternal)
+                      : ((count > 0 ? count - 1 : 0) * kSeq + 2 * kNonSeq);
+    if (load && pc_in_list) cycles += kSeq + kNonSeq;
     return cycles;
 }
 
@@ -827,7 +847,7 @@ u32 Arm60::exec_branch(const Decoded& d) {
         regs_[14] = regs_[15] - 4;
     }
     write_pc(static_cast<u32>(static_cast<s32>(regs_[15]) + offset));
-    return 3;
+    return 2 * kSeq + kNonSeq;
 }
 
 // --- SWI, SWP, MRS, MSR, undefined ----------------------------------------

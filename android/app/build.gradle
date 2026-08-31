@@ -3,15 +3,26 @@ plugins {
 }
 
 android {
+    // The namespace is this project's own - it names the Java classes and the
+    // generated R, and nothing outside the build cares about it.
     namespace = "com.crownparkcomputing.retro3do"
     compileSdk 36
     ndkVersion = "28.2.13676358"
     defaultConfig {
-        applicationId "com.crownparkcomputing.retro3do"
+        // The application id is the app's identity on Play, and it has to stay
+        // what the existing listing already is. A different id is not a new
+        // version of this app, it is a second app: the installs, the reviews
+        // and the rating all stay behind with the old id, and there is no way
+        // to move them afterwards.
+        //
+        // It does NOT have to match the namespace above, and here it does not.
+        applicationId "com.fourdo.android"
         minSdk 24
         targetSdk 36
-        versionCode 1
-        versionName "1.0"
+        // Above what is on Play (13 / 2.0.11), or the store refuses the
+        // upload and the device refuses the install.
+        versionCode 14
+        versionName "2.1.0"
         externalNativeBuild {
             cmake {
                 arguments "-DANDROID_PLATFORM=android-24", "-DANDROID_STL=c++_static"

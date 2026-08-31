@@ -76,6 +76,14 @@
 #                         4,673 distinct screens is the number that matters.
 #   Wing Commander III d2 will not open at all - suspect a bad dump
 #
+# A third note. Alone in the Dark 2's cel floor went from 7,600 to 350,000 and
+# PGA Tour's from 64,000 to 230,000 when MADAM's matrix unit went in. That unit
+# is the machine's transform-and-project stage and we did not have one at all,
+# so every title doing 3D was being handed zeros and drawing the degenerate
+# geometry that implies. The rotated-cel mapper and the CCBPRE preamble fix
+# landed at the same time. Killing Time and Alone in the Dark 2 stayed
+# pixel-identical to the reference throughout.
+#
 # A second note. The cel floors below came DOWN by about a tenth when the
 # hardware's own visibility tests went in - a cel that permits neither winding,
 # or whose bounding box is off the clip rectangle with the steps leading
@@ -96,13 +104,13 @@
 #
 # Eleven of twelve draw. The one that does not is a bad file.
 
-Alone in the Dark (USA)       |   15500 | 1900 | 55000
-Alone in the Dark 2           |    7600 | 2300 | 60000
+Alone in the Dark (USA)       |   15000 | 2000 | 60000
+Alone in the Dark 2           |  350000 | 3500 | 60000
 Battle Chess                  |    4500 |  700 | 35000
 BattleSport                   |  168000 |  800 | 65000
 Doom                          |  168000 |  800 | 65000
 Flashback                     |  100000 | 1800 | 60000
 Killing Time                  |   55000 |  800 | 70000
-PGA Tour 96                   |   64000 | 1900 | 70000
+PGA Tour 96                   |  230000 | 2300 | 70000
 Road & Track Presents         |   13000 | 2500 | 70000
 Wing Commander III            |     300 | 4000 | 45000

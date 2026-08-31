@@ -1053,12 +1053,17 @@ void Madam::plot_footprint(const Ccb& ccb, s32 px, s32 py, s32 step_x,
     if (x1 < x0) { const s32 t = x0; x0 = x1 + 1; x1 = t + 1; }
     if (y1 < y0) { const s32 t = y0; y0 = y1 + 1; y1 = t + 1; }
 
-    // A cel can be enormous when a CCB is malformed, and filling what it asks
-    // for would take longer than the frame it is part of.
-    if (x1 - x0 > static_cast<s32>(kMaxCelDimension) ||
-        y1 - y0 > static_cast<s32>(kMaxCelDimension)) {
-        return;
-    }
+    // Clip the rectangle before walking it, not inside the loop.
+    //
+    // A single source pixel of a heavily magnified cel can cover more of the
+    // plane than the screen holds, and most of that is off it. Testing each
+    // one against the clip as it comes still costs a loop iteration per
+    // invisible pixel - which on one title turned twenty thousand frames from
+    // eighty-eight seconds into four hundred and thirteen.
+    if (x0 < 0) x0 = 0;
+    if (y0 < 0) y0 = 0;
+    if (x1 > static_cast<s32>(clip_width_)) x1 = static_cast<s32>(clip_width_);
+    if (y1 > static_cast<s32>(clip_height_)) y1 = static_cast<s32>(clip_height_);
 
     for (s32 y = y0; y < y1; ++y) {
         for (s32 x = x0; x < x1; ++x) {

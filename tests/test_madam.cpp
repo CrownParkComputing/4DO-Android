@@ -92,7 +92,9 @@ u32 row_bytes(u32 width, u32 bpp) { return row_words(width, bpp) * 4u; }
 u32 pre1_for(u32 width, u32 bpp = 16) {
     const u32 offset = row_words(width, bpp) - 2u;
     const u32 field = bpp < 8 ? (offset << 24) : (offset << 16);
-    return (width - 1u) | field;
+    // TLLSB mode 1 is the ordinary pass-through mode: source blue bit zero
+    // remains the blue LSB after the decoder has saved it as the H bit.
+    return (width - 1u) | field | 0x00001000u;
 }
 
 constexpr u32 kFormatDirect16 = 6;
@@ -382,6 +384,62 @@ TEST(a_four_bit_indexed_cel_unpacks_two_pixels_per_byte) {
 
     CHECK_EQ(read_target(bus, 0, 0), rgb555(31, 0, 0));
     CHECK_EQ(read_target(bus, 1, 0), rgb555(0, 0, 31));
+}
+
+TEST(the_decoder_substitutes_the_blue_lsb_selected_by_pre1) {
+    Bus bus;
+    Madam madam(bus);
+    madam.set_clip(320, 240);
+    madam.set_target(kVramBase, 320 * 2);
+
+    // Mode 0 forces zero, mode 2 copies PDC bit 4, and mode 3 copies PDC bit
+    // 5. These bits are inputs to the pixel processor, not merely metadata.
+    const u16 inputs[] = {
+        rgb555(0, 0, 3),
+        rgb555(0, 0, 16),
+        rgb555(0, 1, 0),
+    };
+    const u32 modes[] = {0x00000000u, 0x00002000u, 0x00003000u};
+    const u16 expected[] = {
+        rgb555(0, 0, 2),
+        rgb555(0, 0, 17),
+        rgb555(0, 1, 1),
+    };
+
+    for (u32 i = 0; i < 3; ++i) {
+        bus.write16(kSourceAt + i * 8u, inputs[i]);
+        write_ccb(bus, kCcbAt, 0, kSourceAt + i * 8u, 0,
+                  fixed(static_cast<int>(i)), 0, fixed(1), 0, 0, fixed(1),
+                  pre0_for(kFormatDirect16, 1),
+                  (pre1_for(1) & ~0x00003000u) | modes[i]);
+        madam.render_cel_list(kCcbAt);
+        CHECK_EQ(read_target(bus, static_cast<int>(i), 0), expected[i]);
+    }
+}
+
+TEST(pdc_mfonly_uses_each_pixel_channels_multiplier_and_the_pixc_divider) {
+    Bus bus;
+    Madam madam(bus);
+    madam.set_clip(320, 240);
+
+    // Configure the real read/write framebuffer path. 0x50 decodes to the
+    // 1280-byte distance between row pairs for a 320-pixel field.
+    madam.write(kMadamRegCtl0, 0x00005050u);
+    madam.write(kMadamRegCtl2, kVramBase);
+    madam.write(kMadamRegCtl3, kVramBase);
+    madam.write(kMadamCcbCtl0, kCtl0B15Pdc | kCtl0B0Ppmp);
+
+    bus.write16(kSourceAt, rgb555(28, 12, 4));
+    write_ccb(bus, kCcbAt, 0, kSourceAt, 0, 0, 0,
+              fixed(1), 0, 0, fixed(1),
+              pre0_for(kFormatDirect16, 1), pre1_for(1));
+
+    // MS=3 (PDC_MFONLY), DV1=2. Multipliers are therefore 8, 4 and 2
+    // from the source channel high bits, all divided by four.
+    bus.write32(kCcbAt + 48, 0x00006200u);
+    madam.render_cel_list(kCcbAt);
+
+    CHECK_EQ(read_target(bus, 0, 0), rgb555(31, 12, 2));
 }
 
 // ---------------------------------------------------------------------------
@@ -683,9 +741,11 @@ TEST(a_rotated_cel_lands_as_a_solid_figure_not_a_stack_of_rectangles) {
               pre0_for(kFormatDirect16, 4), pre1_for(4));
     madam.render_cel_list(kCcbAt);
 
-    // Sixteen source pixels, each covering the parallelogram its two step
-    // vectors span: |hd x vd| = |2*2 - 2*-2| = 8 pixels apiece.
-    CHECK_EQ(madam.stats().pixels_written, 16u * 8u);
+    // The CEL engine includes both horizontal edge intersections. For this
+    // diamond that is three pixels on each of four scanlines, not the
+    // mathematical area of eight. Keeping this exact rule closes the
+    // one-pixel seams between perspective-stretched road texels.
+    CHECK_EQ(madam.stats().pixels_written, 16u * 12u);
 
     // Solid: every row it touches is one unbroken run. A gap anywhere is the
     // failure this test exists to catch.
@@ -707,9 +767,9 @@ TEST(a_rotated_cel_lands_as_a_solid_figure_not_a_stack_of_rectangles) {
         if (painted > widest) widest = painted;
     }
 
-    // A diamond fifteen rows tall and sixteen wide at its middle.
-    CHECK_EQ(rows_touched, 15);
-    CHECK_EQ(widest, 16);
+    // Inclusive spans also preserve the collapsed one-pixel tips.
+    CHECK_EQ(rows_touched, 16);
+    CHECK_EQ(widest, 17);
 }
 
 TEST(a_transparent_run_advances_both_edges_of_a_rotated_packed_cel) {
@@ -723,6 +783,8 @@ TEST(a_transparent_run_advances_both_edges_of_a_rotated_packed_cel) {
     Madam madam(bus);
     madam.set_clip(320, 240);
     madam.set_target(kVramBase, 320 * 2);
+    // Packed cels take their blue-LSB substitution mode from CECONTROL.
+    madam.write(kMadamCcbCtl0, 0x00100000u);
 
     // One eight-byte packed row: three transparent pixels, then one literal
     // palette index, then end-of-row. The zero length field names an
@@ -742,8 +804,9 @@ TEST(a_transparent_run_advances_both_edges_of_a_rotated_packed_cel) {
     madam.render_cel_list(kCcbAt);
 
     // Only the final source texel is visible, so it covers one 2x2-rotated
-    // diamond (determinant eight), not a bridge back to the row origin.
-    CHECK_EQ(madam.stats().pixels_written, 8u);
+    // diamond (three pixels on each of four scanlines under the hardware's
+    // inclusive-span rule), not a bridge back to the row origin.
+    CHECK_EQ(madam.stats().pixels_written, 12u);
     CHECK_EQ(read_target(bus, 20, 23), 0u);
     CHECK_EQ(read_target(bus, 26, 27), rgb555(31, 31, 31));
 }

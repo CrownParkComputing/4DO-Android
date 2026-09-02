@@ -859,7 +859,8 @@ Ccb Madam::read_ccb(u32 address) {
 // an index reads two hundred and fifty-six entries out of a palette that holds
 // thirty-two - so most of a cel's colours come from whatever happens to follow
 // the palette in memory.
-u16 Madam::decode_pixel(u32 value, u16* multiplier, bool* transparent) const {
+u16 Madam::decode_pixel(u32 value, u16* multiplier, bool* transparent,
+                        u16* raw_vh) const {
     // The default multiplier is one in each of three channels, which is what
     // an uncoded pixel wants.
     u16 amv = 0x49;
@@ -920,6 +921,26 @@ u16 Madam::decode_pixel(u32 value, u16* multiplier, bool* transparent) const {
     if (transparent != nullptr) {
         *transparent = ((result & 0x7fffu) == 0) && cel_transparent_mask_;
     }
+
+    // Bit zero has two jobs. The decoder first saves it as the source H
+    // sub-position bit, then replaces it with the blue LSB selected by PRE1
+    // (unpacked/LR cels) or CECONTROL (packed cels) before PIXC sees the
+    // colour. Leaving the position bit in the colour makes decoded blue values
+    // depend on source-position metadata instead of the selected LSB rule.
+    if (raw_vh != nullptr) {
+        *raw_vh = result & 0x8001u;
+    }
+    const u32 blue_mode = (cel_flags_ & kCcbPacked) != 0
+                              ? ((ccb_ctl0_ >> 20) & 3u)
+                              : ((cel_pre1_ >> 12) & 3u);
+    u16 blue_lsb = 0;
+    switch (blue_mode) {
+        case 1: blue_lsb = result & 1u; break;
+        case 2: blue_lsb = (result >> 4) & 1u; break;
+        case 3: blue_lsb = (result >> 5) & 1u; break;
+        default: break;
+    }
+    result = static_cast<u16>((result & ~1u) | blue_lsb);
     return result;
 }
 
@@ -1053,7 +1074,7 @@ void Madam::begin_cel(const Ccb& ccb) {
 // sets the two sub-position bits. Writing the source straight out instead is
 // not a subtle difference: it is the whole of a cel's brightness and all of
 // its blending.
-void Madam::process_pixel(s32 x, s32 y, u16 source, u16 amv) {
+void Madam::process_pixel(s32 x, s32 y, u16 source, u16 amv, u16 raw_vh) {
     if (x < 0 || y < 0 || static_cast<u32>(x) >= clip_width_ ||
         static_cast<u32>(y) >= clip_height_) {
         return;
@@ -1130,11 +1151,18 @@ void Madam::process_pixel(s32 x, s32 y, u16 source, u16 amv) {
             first_b = g_scale[pb >> 2][pb & 3][blue(input)];
             break;
         }
-        default:
-            first_r = g_scale[4][dv1][red(input)];
-            first_g = g_scale[4][dv1][green(input)];
-            first_b = g_scale[4][dv1][blue(input)];
+        default: {
+            // PDC_MFONLY takes each channel's multiplier from that channel's
+            // upper three PDC bits, but keeps the common PIXC divide field.
+            // Treating it as a fixed factor of five is an old Opera bug and
+            // corrupts precisely the shaded direct-colour textures that use
+            // this mode.
+            const u32 pr = red(pixel), pg = green(pixel), pb = blue(pixel);
+            first_r = g_scale[pr >> 2][dv1][red(input)];
+            first_g = g_scale[pg >> 2][dv1][green(input)];
+            first_b = g_scale[pb >> 2][dv1][blue(input)];
             break;
+        }
     }
 
     // The masks are applied a byte at a time on the hardware, and every byte
@@ -1188,7 +1216,10 @@ void Madam::process_pixel(s32 x, s32 y, u16 source, u16 amv) {
     }
 
     // The projector decides the two sub-position bits.
-    u32 vh = ((cel_flags_ & kCcbPlutPos) != 0) ? (source & 0x8001u) : cel_origin_vh_;
+    if (raw_vh == 0xffffu) {
+        raw_vh = source & 0x8001u;
+    }
+    u32 vh = ((cel_flags_ & kCcbPlutPos) != 0) ? raw_vh : cel_origin_vh_;
     if ((ccb_ctl0_ & kCtl0SwapHv) != 0 && (cel_pre1_ & kPre1NoSwap) == 0) {
         vh = (vh >> 15) | ((vh & 1u) << 15);
     }
@@ -1210,12 +1241,12 @@ void Madam::process_pixel(s32 x, s32 y, u16 source, u16 amv) {
     ++stats_.pixels_written;
 }
 
-void Madam::put_pixel(s32 x, s32 y, u16 pixel, u16 shade) {
+void Madam::put_pixel(s32 x, s32 y, u16 pixel, u16 shade, u16 raw_vh) {
     // Once software has programmed the framebuffer registers, every pixel goes
     // through the processor. Before that - which is only ever a test - fall
     // back to a plain store so the pixel conversion can be checked alone.
     if (framebuffer_configured_) {
-        process_pixel(x, y, pixel, shade);
+        process_pixel(x, y, pixel, shade, raw_vh);
         return;
     }
     if (pixel == 0) {
@@ -1269,29 +1300,32 @@ void Madam::put_pixel(s32 x, s32 y, u16 pixel, u16 shade) {
 // that do not fit.
 void Madam::plot_texel(const Ccb& ccb, s32 px, s32 py, s32 step_x, s32 step_y,
                        s32 down_x, s32 down_y, s32 next_step_x, s32 next_step_y,
-                       u16 pixel, u16 shade) {
+                       u16 pixel, u16 shade, u16 raw_vh) {
     if (cel_mapper_ != Mapper::Arbitrary) {
-        plot_footprint(ccb, px, py, step_x, step_y, pixel, shade);
+        plot_footprint(ccb, px, py, step_x, step_y, pixel, shade, raw_vh);
         return;
     }
     // The four corners, in order round the figure: this pixel, the next one
     // along this row, the matching one on the next row, and the one below this.
     plot_quad(ccb, px, py, px + step_x, py + step_y,
               down_x + next_step_x, down_y + next_step_y, down_x, down_y,
-              pixel, shade);
+              pixel, shade, raw_vh);
 }
 
 // One source pixel of a rotated or perspective-stepped cel, which lands as a
 // four-sided figure rather than a rectangle.
 //
-// Filled by a conventional active-edge scan conversion. Each non-horizontal
-// edge contributes on [min_y,max_y), the usual top-inclusive/bottom-exclusive
-// rule that lets adjacent texels share an edge without both painting it. Edge
-// direction retains the CCB's clockwise/counter-clockwise face selection. A
-// folded quad can yield four crossings, so sorted crossings are consumed in
-// pairs rather than assuming every row has exactly one span.
+// Filled with the CEL engine's edge rules. Vertical edges are top-inclusive
+// and bottom-exclusive, while a permitted horizontal span includes BOTH edge
+// intersections. That final pixel is intentional hardware behaviour: omitting
+// it opens one-pixel holes between perspective-stretched texels, visible as
+// short streaks in road surfaces. Edge direction retains the CCB's
+// clockwise/counter-clockwise face selection. A folded quad can yield four
+// crossings, so sorted crossings are consumed in pairs rather than assuming
+// every row has exactly one span.
 void Madam::plot_quad(const Ccb& ccb, s32 ax, s32 ay, s32 bx, s32 by,
-                      s32 cx, s32 cy, s32 dx, s32 dy, u16 pixel, u16 shade) {
+                      s32 cx, s32 cy, s32 dx, s32 dy, u16 pixel, u16 shade,
+                      u16 raw_vh) {
     ax >>= 16; bx >>= 16; cx >>= 16; dx >>= 16;
     ay >>= 16; by >>= 16; cy >>= 16; dy >>= 16;
 
@@ -1353,9 +1387,13 @@ void Madam::plot_quad(const Ccb& ccb, s32 ax, s32 ay, s32 bx, s32 by,
         };
         const auto fill = [&](s32 from, s32 to) {
             if (from < 0) from = 0;
-            if (to > max_x) to = max_x;
+            // The right intersection is painted too. Express the inclusive
+            // hardware limit as a clipped half-open C++ loop without risking
+            // an overflow at INT_MAX.
+            if (to < max_x) ++to;
+            else to = max_x;
             for (s32 x = from; x < to; ++x) {
-                put_pixel(x, y, pixel, shade);
+                put_pixel(x, y, pixel, shade, raw_vh);
             }
         };
 
@@ -1368,9 +1406,9 @@ void Madam::plot_quad(const Ccb& ccb, s32 ax, s32 ay, s32 bx, s32 by,
 }
 
 void Madam::plot_footprint(const Ccb& ccb, s32 px, s32 py, s32 step_x,
-                           s32 step_y, u16 pixel, u16 shade) {
+                           s32 step_y, u16 pixel, u16 shade, u16 raw_vh) {
     if (cel_one_to_one_) {
-        put_pixel(px >> 16, py >> 16, pixel, shade);
+        put_pixel(px >> 16, py >> 16, pixel, shade, raw_vh);
         return;
     }
 
@@ -1420,7 +1458,7 @@ void Madam::plot_footprint(const Ccb& ccb, s32 px, s32 py, s32 step_x,
 
     for (s32 y = y0; y < y1; ++y) {
         for (s32 x = x0; x < x1; ++x) {
-            put_pixel(x, y, pixel, shade);
+            put_pixel(x, y, pixel, shade, raw_vh);
         }
     }
 }
@@ -1505,12 +1543,14 @@ void Madam::draw_packed_cel(const Ccb& ccb) {
             }
             if (type == 3) {
                 u16 shade = 0;
+                u16 raw_vh = 0;
                 bool clear = false;
-                const u16 pixel = decode_pixel(reader.read(bpp), &shade, &clear);
+                const u16 pixel =
+                    decode_pixel(reader.read(bpp), &shade, &clear, &raw_vh);
                 for (u32 i = 0; i < count; ++i) {
                     if (!clear) {
                         plot_texel(ccb, px, py, step_x, step_y, down_x, down_y,
-                                   next_step_x, next_step_y, pixel, shade);
+                                   next_step_x, next_step_y, pixel, shade, raw_vh);
                     }
                     px += step_x;
                     py += step_y;
@@ -1521,11 +1561,13 @@ void Madam::draw_packed_cel(const Ccb& ccb) {
             }
             for (u32 i = 0; i < count; ++i) {
                 u16 shade = 0;
+                u16 raw_vh = 0;
                 bool clear = false;
-                const u16 pixel = decode_pixel(reader.read(bpp), &shade, &clear);
+                const u16 pixel =
+                    decode_pixel(reader.read(bpp), &shade, &clear, &raw_vh);
                 if (!clear) {
                     plot_texel(ccb, px, py, step_x, step_y, down_x, down_y,
-                               next_step_x, next_step_y, pixel, shade);
+                               next_step_x, next_step_y, pixel, shade, raw_vh);
                 }
                 px += step_x;
                 py += step_y;
@@ -1601,11 +1643,13 @@ void Madam::draw_lr_cel(const Ccb& ccb) {
                 const u16 source_pixel = bus_.read16(at);
 
                 u16 shade = 0;
+                u16 raw_vh = 0;
                 bool clear = false;
-                const u16 pixel = decode_pixel(source_pixel, &shade, &clear);
+                const u16 pixel =
+                    decode_pixel(source_pixel, &shade, &clear, &raw_vh);
                 if (!clear) {
                     plot_texel(ccb, px, py, step_x, step_y, down_x, down_y,
-                               next_step_x, next_step_y, pixel, shade);
+                               next_step_x, next_step_y, pixel, shade, raw_vh);
                 }
                 px += step_x;
                 py += step_y;
@@ -1662,11 +1706,13 @@ void Madam::draw_unpacked_cel(const Ccb& ccb) {
 
         for (u32 column = 0; column < width; ++column) {
             u16 shade = 0;
+            u16 raw_vh = 0;
             bool clear = false;
-            const u16 pixel = decode_pixel(reader.read(bpp), &shade, &clear);
+            const u16 pixel =
+                decode_pixel(reader.read(bpp), &shade, &clear, &raw_vh);
             if (!clear) {
                 plot_texel(ccb, px, py, step_x, step_y, down_x, down_y,
-                           next_step_x, next_step_y, pixel, shade);
+                           next_step_x, next_step_y, pixel, shade, raw_vh);
             }
             px += step_x;
             py += step_y;

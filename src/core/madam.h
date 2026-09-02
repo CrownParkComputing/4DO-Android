@@ -351,16 +351,17 @@ public:
     bool cel_is_invisible(const Ccb& ccb, bool packed) const;
     bool quad_is_wrong_way_round(const Ccb& ccb, s32 wide) const;
     void plot_quad(const Ccb& ccb, s32 ax, s32 ay, s32 bx, s32 by,
-                   s32 cx, s32 cy, s32 dx, s32 dy, u16 pixel, u16 shade);
+                   s32 cx, s32 cy, s32 dx, s32 dy, u16 pixel, u16 shade,
+                   u16 raw_vh);
     // A cel's rows are walked with two cursors, not one: where this pixel
     // lands, and where the matching pixel of the NEXT row lands. The second is
     // dead weight for a scaled cel and is the other half of the figure for a
     // rotated one.
     void plot_texel(const Ccb& ccb, s32 px, s32 py, s32 step_x, s32 step_y,
                     s32 down_x, s32 down_y, s32 next_step_x, s32 next_step_y,
-                    u16 pixel, u16 shade);
+                    u16 pixel, u16 shade, u16 raw_vh);
     void plot_footprint(const Ccb& ccb, s32 px, s32 py, s32 step_x, s32 step_y,
-                        u16 pixel, u16 shade);
+                        u16 pixel, u16 shade, u16 raw_vh);
     // Turn one source value into a colour, and say what multiplier it carries
     // and whether it is transparent.
     //
@@ -370,14 +371,16 @@ public:
     // index reads two hundred and fifty-six entries out of a palette that has
     // thirty-two, which is most of a cel's colours coming from whatever
     // follows it in memory.
-    u16  decode_pixel(u32 value, u16* multiplier, bool* transparent) const;
+    u16  decode_pixel(u32 value, u16* multiplier, bool* transparent,
+                      u16* raw_vh = nullptr) const;
 
     // The pixel processor. Every pixel the engine writes goes through it: it
     // scales the source, optionally mixes it with what is already in the
     // framebuffer, and decides the two sub-position bits. Writing the source
     // straight out instead is not a subtle difference - it is the whole of a
     // cel's brightness and all of its blending.
-    void process_pixel(s32 x, s32 y, u16 source, u16 amv);
+    void process_pixel(s32 x, s32 y, u16 source, u16 amv,
+                       u16 raw_vh = 0xffffu);
     void begin_cel(const Ccb& ccb);
     void run_cel_engine();
 
@@ -480,7 +483,8 @@ private:
     // formats via the PLUT and the direct format without it.
     u16 sample(const Ccb& ccb, u32 sx, u32 sy) const;
 
-    void put_pixel(s32 x, s32 y, u16 pixel, u16 shade = 0);
+    void put_pixel(s32 x, s32 y, u16 pixel, u16 shade = 0,
+                   u16 raw_vh = 0xffffu);
 
     Bus& bus_;
 

@@ -7,6 +7,7 @@
 
 #include "core/pad_layout.h"
 #include "core/settings.h"
+#include "platform/platform.h"
 
 namespace retro3do {
 namespace {
@@ -71,7 +72,7 @@ void draw_circle(SDL_Renderer* renderer, float cx, float cy, float r) {
 
 TouchPad::TouchPad() : controls_(default_touch_layout(1280, 720)) {
     // Default on where there is no alternative, off where there is.
-#if defined(__ANDROID__) || defined(__APPLE__)
+#if RETRO3DO_MOBILE
     visible_ = true;
 #else
     visible_ = false;

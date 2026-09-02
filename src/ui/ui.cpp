@@ -15,6 +15,7 @@
 #include "core/console.h"
 #include "imgui.h"
 #include "platform/android_storage.h"
+#include "platform/platform.h"
 
 namespace retro3do {
 namespace {
@@ -121,7 +122,9 @@ bool Ui::init(SDL_Window* window, SDL_Renderer* renderer) {
 
     ImGuiIO& io = ImGui::GetIO();
     io.ConfigFlags |= ImGuiConfigFlags_NavEnableGamepad;
-#if defined(__ANDROID__)
+#if RETRO3DO_MOBILE
+    // iPad and iPhone want this for the same reason Android does: it widens
+    // ImGui's hit areas to finger size. Not on macOS, which has a pointer.
     io.ConfigFlags |= ImGuiConfigFlags_IsTouchScreen;
 #endif
     io.IniFilename = nullptr;

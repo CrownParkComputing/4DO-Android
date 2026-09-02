@@ -3,6 +3,7 @@
 #include <SDL3/SDL.h>
 
 #include "core/path.h"
+#include "platform/platform.h"
 
 namespace retro3do {
 namespace {
@@ -46,10 +47,22 @@ std::string Storage::writable_directory() {
 std::vector<StorageLocation> Storage::browse_roots() {
     std::vector<StorageLocation> roots;
 
-    // The app's own directory first: on iOS this is what the Files app shows
-    // and the only place a user can put a disc image without a computer.
+#if RETRO3DO_PLATFORM_IOS
+    // On iOS the FIRST root has to be Documents, not the app's writable
+    // directory. SDL_GetPrefPath returns Library/Application Support, and
+    // UIFileSharingEnabled exposes Documents ONLY - so Application Support is
+    // exactly the one folder a user cannot put a file into. Offer it second,
+    // for anyone looking for the settings and NVRAM the app wrote there.
+    //
+    // Get this the wrong way round and the app looks broken in a way nobody can
+    // diagnose: the BIOS is visibly there in the Files app and the emulator's
+    // own browser cannot see it.
+    add_user_folder(roots, "Documents (Files app)", SDL_FOLDER_DOCUMENTS);
+    add_if_present(roots, "App storage", writable_directory().c_str());
+#else
     const std::string writable = writable_directory();
     add_if_present(roots, "App storage", writable.c_str());
+#endif
 
 #if defined(__ANDROID__)
     // Shared storage, where a file manager or a download will have left things.

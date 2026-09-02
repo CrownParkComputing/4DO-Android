@@ -17,6 +17,9 @@ android/.cxx/
 # iOS / macOS
 ios/build/
 ios/Pods/
+macos/build/
+*.xcarchive
+*.ipa
 *.xcuserdatad
 xcuserdata/
 .DS_Store

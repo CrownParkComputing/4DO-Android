@@ -1,0 +1,29 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<!-- Template. build-ios-macos.sh substitutes the team and writes the real
+	     file into the build directory; this one is never passed to xcodebuild. -->
+	<key>teamID</key>
+	<string>TEAM_ID_PLACEHOLDER</string>
+
+	<!-- app-store-connect covers both TestFlight and a release: they are the
+	     same upload, and which testers or which store see it is decided in App
+	     Store Connect afterwards. Change to "development" or "ad-hoc" for a
+	     build that installs straight onto known devices. -->
+	<key>method</key>
+	<string>app-store-connect</string>
+
+	<key>signingStyle</key>
+	<string>automatic</string>
+
+	<!-- Bitcode has been removed from the toolchain; leaving this on produces a
+	     warning on every export and, on older Xcodes, a rejected binary. -->
+	<key>uploadBitcode</key>
+	<false/>
+	<key>uploadSymbols</key>
+	<true/>
+	<key>destination</key>
+	<string>export</string>
+</dict>
+</plist>

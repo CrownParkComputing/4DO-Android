@@ -6,16 +6,17 @@
 // next entry. Walking that list is how a field gets drawn, and it is how games
 // change palette or buffer partway down the screen.
 //
-// Confidence
-// ----------
-// The pixel format (16-bit RGB555 in VRAM, two pixels per 32-bit big-endian
-// word) and the shape of the list are implemented here. The exact bit
-// assignments inside a VDL control word are marked TODO(vdl) — they are the
-// part still to be checked against the published documentation, and until they
-// are, `render_linear` exists as a way to see VRAM on screen without trusting
-// them. The VDL walk, the line modulo table and the CLUT-bypass rule came from
-// the reference emulator; see docs/PROVENANCE.md.
+// Specification basis
+// -------------------
+// The architecture and line order come from the official 3DO Graphics
+// Programming Guide, "Creating a Custom VDL", and US patent 5,502,462. They
+// specify that an entry is read during horizontal blank, that the following
+// line is displayed with the resulting state, and that bitmap pointers tick at
+// line end. `render_linear` remains an isolated pixel-conversion diagnostic.
+// See docs/HARDWARE.md for the exact source trail.
 #pragma once
+
+#include <vector>
 
 #include "types.h"
 
@@ -25,11 +26,13 @@ class Bus;
 
 // A VDL control word.
 //
-// The line count is how many lines this entry PERSISTS for, and zero is a
-// perfectly ordinary value: it means the next entry is picked up on the very
-// next line. A list with one entry per line is normal, and treating a zero as
-// "the rest of the field" renders the whole screen out of the first entry's
-// buffer - which for a title that puts a blank buffer first is a black screen.
+// The raw line count is the delay until another entry can be fetched. Zero is
+// used in real low-level lists and permits a following entry to replace it
+// before a scanline is displayed. The SDK's user-level SubmitVDL rules describe
+// a final zero as "to end of screen", but those rules validate and rewrite a
+// task's submitted list; they do not describe every raw list the hardware sees.
+// Game traces establish the raw transition used here. Opera was consulted only
+// to resolve that documentation ambiguity and agrees with the observed result.
 enum : u32 {
     kVdlPersistMask     = 0x000001ffu,
     kVdlControlCountShift = 9,
@@ -68,7 +71,10 @@ enum : u32 {
 // Fields of a display-control word.
 enum : u32 {
     kVdlDisplayColoursOnly = 1u << 1,
+    kVdlDisplayHorizontalInterp = 1u << 2,
+    kVdlDisplayVerticalInterp   = 1u << 3,
     kVdlDisplayClutBypass  = 1u << 25,
+    kVdlDisplayDisableVerticalOnce = 1u << 0,
 };
 
 // How far apart the lines of a framebuffer are, selected by the control word.
@@ -105,10 +111,24 @@ public:
     // hold width * height pixels in XRGB8888.
     void render_field(u32* out, int width, int height);
 
+    // Hardware path: latch the VDL root at the field boundary, then process
+    // one line at each horizontal blank. Pixel and CLUT values are captured
+    // into the logical field at that instant, so CPU/CEL/SPORT writes later in
+    // the field cannot retroactively change lines already displayed.
+    void begin_field(int width, int height);
+    void process_scanline(u32 field_line);
+    void finish_field_2x(u32* out, int width, int height);
+
+    // The physical display generator always expands the logical framebuffer
+    // to twice its width and height. With interpolation enabled the three
+    // subpixels away from a pixel's cornerweight are colour averages; with it
+    // disabled they are copies (the hardware's "crispy pixels" mode).
+    // `out` must hold (width * 2) * (height * 2) pixels.
+    void render_field_2x(u32* out, int width, int height);
+
     // Read VRAM as a plain RGB555 framebuffer at `vram_offset`, ignoring the
-    // display list entirely. This is not how the hardware works; it is how we
-    // get a picture on screen while the VDL control bits are still unconfirmed,
-    // and it is what the tests use to check the pixel conversion in isolation.
+    // display list entirely. This is a test/diagnostic path for checking pixel
+    // conversion in isolation, not the hardware display path.
     void render_linear(u32* out, int width, int height, u32 vram_offset);
 
     // Which line of the framebuffer ends up at the top of the screen. The list
@@ -158,9 +178,32 @@ private:
     // default in every title.
     u32 background_ = 0;
     bool clut_bypass_ = false;
+    bool horizontal_interp_ = false;
+    bool vertical_interp_ = false;
+    bool disable_vertical_once_ = false;
+
+    // Scratch storage is retained between fields so interpolation has no
+    // per-frame allocation cost.
+    std::vector<u32> logical_frame_;
+    std::vector<u8> line_interp_modes_;
+
+    // Per-field VDLP registers. The official system documentation specifies
+    // the repeating order as: read entry in horizontal blank, display line,
+    // then tick bitmap pointers. Keeping these as explicit state lets the
+    // console execute that order as CLIO crosses each scanline.
+    u32 field_entry_ = 0;
+    u32 field_buffer_ = 0;
+    s32 field_persist_ = 0;
+    int field_width_ = 0;
+    int field_height_ = 0;
+    bool field_have_buffer_ = false;
+    bool field_dma_enabled_ = false;
+    bool field_list_ended_ = true;
+    bool field_active_ = false;
 
     void reset_clut();
     void process_control_words(u32 address, u32 count);
+    void take_field_entry();
     u32  shade(u16 pixel) const;
 
     // Defaults to no blanking at all - the first line the list runs for is the

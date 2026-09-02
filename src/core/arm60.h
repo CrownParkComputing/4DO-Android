@@ -3,8 +3,8 @@
 // The ARM60 is an ARM6-family core running the ARMv3 instruction set at
 // 12.5 MHz: 32-bit data, 32-bit addressing, no Thumb, no long multiply, no
 // coprocessor 15 to speak of. The instruction behaviour comes from ARM's own
-// publicly documented architecture; the cycle model was matched against the
-// reference emulator. See docs/PROVENANCE.md.
+// publicly documented architecture and ARM's published ARM6 instruction
+// timing material. See docs/PROVENANCE.md.
 //
 // Design note — why this is not a plain switch interpreter
 // -------------------------------------------------------

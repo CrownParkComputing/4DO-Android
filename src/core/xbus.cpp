@@ -112,13 +112,13 @@ void CdRomDevice::build_reply(u8 command) {
             break;
 
         case kCmdReadCapacity: {
-            // The same total the disc-info reply carries, and the same
-            // two-second pre-gap on top of the one already in the MSF
-            // conversion. Reporting the session end here instead makes the
-            // driver believe the disc is two seconds shorter than it is, and
-            // the mount it does next fails on the last extent.
+            // The lead-out is the first LBA after the final sector. Converting
+            // that LBA to MSF adds the standard 150-frame lead-in exactly once.
+            // Adding another 150 here reports a fictitious two seconds after
+            // the physical lead-out; DIPIR rejects discs whose authored size
+            // reaches that boundary (Road Rash is one of them).
             pending_reply_.push_back(kCmdReadCapacity);
-            const u32 lead_out = lba_to_msf(disc_sectors() + kMsfBiasFrames);
+            const u32 lead_out = lba_to_msf(disc_sectors());
             pending_reply_.push_back(0x00);
             pending_reply_.push_back(u8(lead_out >> 16));
             pending_reply_.push_back(u8(lead_out >> 8));
@@ -139,10 +139,9 @@ void CdRomDevice::build_reply(u8 command) {
                 break;
             }
             motor_on_ = true;
-            // The lead-out carries the two-second pre-gap on TOP of the one
-            // already in the MSF conversion. Report it without and the driver
-            // computes a disc two seconds short of the one it is holding.
-            const u32 lead_out = lba_to_msf(disc_sectors() + kMsfBiasFrames);
+            // lba_to_msf() supplies the CD lead-in; the sector count already
+            // names the physical lead-out and must not be biased a second time.
+            const u32 lead_out = lba_to_msf(disc_sectors());
             pending_reply_.push_back(0x00);              // disc type: CD-ROM
             pending_reply_.push_back(0x01);              // first track
             pending_reply_.push_back(u8(last_track()));
@@ -411,9 +410,11 @@ void CdRomDevice::reset() {
     sector_size_ = kSectorUserBytes;
     data_.clear();
     data_pos_ = 0;
+    sector_delay_ = 0;
 
     commands_ = 0;
     last_command_ = 0;
+    last_command_bytes_.clear();
 }
 
 #include <cstdio>

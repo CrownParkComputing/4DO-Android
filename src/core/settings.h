@@ -55,7 +55,23 @@ constexpr const char* kBiosName = "bios.name";
 constexpr const char* kDiscPath = "disc.path";
 constexpr const char* kDiscName = "disc.name";
 constexpr const char* kRegion = "machine.region";
+constexpr const char* kCpuScale = "machine.cpu_scale_percent";
 constexpr const char* kTouchControls = "input.touch_controls";
+constexpr const char* kPerformanceHud = "ui.performance_hud";
+constexpr const char* kRendererBackend = "video.renderer";
+constexpr const char* kAspectWidescreen = "video.aspect_widescreen";
+constexpr const char* kBezel = "video.bezel";
+constexpr const char* kCrtEffect = "video.crt_effect";
+constexpr const char* kRetroMediaCardType = "media.retromedia.card_type";
+constexpr const char* kGpuDriverName = "video.gpu_driver.name";
+constexpr const char* kGpuDriverDirectory = "video.gpu_driver.directory";
+constexpr const char* kGpuDriverLibrary = "video.gpu_driver.library";
+constexpr const char* kLibraryCount = "library.count";
+constexpr const char* kSetupComplete = "setup.complete";
+constexpr const char* kBiosFolderPath = "setup.bios_folder.path";
+constexpr const char* kBiosFolderName = "setup.bios_folder.name";
+constexpr const char* kGamesFolderPath = "setup.games_folder.path";
+constexpr const char* kGamesFolderName = "setup.games_folder.name";
 }  // namespace settings_key
 
 }  // namespace retro3do

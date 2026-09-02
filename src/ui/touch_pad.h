@@ -30,7 +30,14 @@ public:
     // Touch controls are on by default only where there is no other way to
     // play. On a desktop they are off unless asked for.
     void set_visible(bool visible) { visible_ = visible; }
-    bool visible() const { return visible_; }
+
+    // visible_ is the saved user preference.  The effective state also takes
+    // the host hardware into account so plugging in a controller does not
+    // overwrite that preference: unplugging it restores the glass controls
+    // exactly as the user left them.
+    bool enabled() const { return visible_; }
+    bool visible() const { return visible_ && !gamepad_present_; }
+    bool physical_gamepad_present() const { return gamepad_present_; }
 
     // A gamepad appearing is a good reason to get the controls out of the way,
     // and its disappearing a good reason to bring them back.

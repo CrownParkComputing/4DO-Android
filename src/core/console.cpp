@@ -65,6 +65,11 @@ Console::Console() : cpu_(bus_), clio_(cpu_), vdlp_(bus_), madam_(bus_), sport_(
             static_cast<Console*>(context)->service_expansion_dma();
         },
         this);
+    clio_.set_scanline_handler(
+        [](void* context, u32 line) {
+            static_cast<Console*>(context)->vdlp_.process_scanline(line);
+        },
+        this);
     madam_.set_pbus_handler(
         [](void* context) {
             static_cast<Console*>(context)->service_pbus_dma();
@@ -114,7 +119,12 @@ bool Console::load_bios(const std::string& path) {
 }
 
 bool Console::load_disc(const std::string& path) {
+    // A disc replacement is an eject/insert transition, not a machine reset.
+    // Software waiting at a "please insert disc" prompt observes the same
+    // media-change interrupt that physical hardware raises.
+    if (disc_.is_open()) clio_.cdrom().set_disc_present(false);
     if (!disc_.open(path)) {
+        clio_.cdrom().attach_disc(nullptr);
         last_error_ = disc_.last_error();
         return false;
     }
@@ -128,7 +138,9 @@ bool Console::load_disc(const std::string& path) {
 }
 
 bool Console::load_disc_fd(int fd, const std::string& display_name) {
+    if (disc_.is_open()) clio_.cdrom().set_disc_present(false);
     if (!disc_.open_fd(fd, display_name)) {
+        clio_.cdrom().attach_disc(nullptr);
         last_error_ = disc_.last_error();
         return false;
     }
@@ -201,7 +213,12 @@ void Console::set_region(Region region) {
     // time, so the picture that reaches the screen starts some way into the
     // buffer rather than at the top of it.
     vdlp_.set_field_shape(21, region == Region::Pal ? 312u : 262u);
-    framebuffer_.assign(static_cast<size_t>(frame_width_) * frame_height_, 0xff000000u);
+    // CLIO's display generator always turns the logical 320-wide framebuffer
+    // into a 640-wide video signal (and doubles the height likewise), either
+    // by interpolation or by pixel replication.
+    framebuffer_.assign(static_cast<size_t>(frame_width_ * 2) *
+                            (frame_height_ * 2),
+                        0xff000000u);
 }
 
 void Console::reset() {
@@ -210,9 +227,19 @@ void Console::reset() {
     clio_.reset();
     vdlp_.reset();
     madam_.reset();
+    // Region is front-end configuration, not volatile chip state. MADAM's
+    // hardware reset restores its own NTSC-sized clip defaults, so put the
+    // selected machine geometry back afterwards (notably 288-line PAL).
+    madam_.set_clip(static_cast<u32>(frame_width_),
+                    static_cast<u32>(frame_height_));
+    madam_.set_target(kVramBase, static_cast<u32>(frame_width_) * 2u);
     sport_.reset();
     pads_.reset();
     audio_.reset();
+    sample_accumulator_ = 0;
+    last_sample_ = 0;
+    samples_.clear();
+    expansion_dma_count_ = 0;
     frame_count_ = 0;
     std::fill(framebuffer_.begin(), framebuffer_.end(), 0xff000000u);
 }
@@ -404,6 +431,13 @@ void Console::service_expansion_dma() {
 
 u32 Console::run_frame() {
     const u32 budget = cycles_per_frame(region_);
+    const u32 cpu_scale = cpu_scale_percent_.load(std::memory_order_acquire);
+
+    // The VDL root is latched at the field boundary. Each subsequent line is
+    // sampled by the CLIO scanline callback during horizontal blank, matching
+    // the order documented by the official 3DO Graphics Programming Guide.
+    vdlp_.set_list_address(madam_.vdl_address());
+    vdlp_.begin_field(frame_width_, frame_height_);
 
     // Run the CPU in slices, and keep a slice SHORTER THAN A SCANLINE.
     //
@@ -418,31 +452,57 @@ u32 Console::run_frame() {
     // lines long it simply never sees them and waits forever. Half a scanline
     // guarantees every line is observable.
     const u32 kSliceCycles = cycles_per_scanline(region_) / 2;
-    u32 spent = 0;
-    while (spent < budget) {
-        const u32 slice = (budget - spent) < kSliceCycles ? (budget - spent)
-                                                          : kSliceCycles;
-        const u32 ran = cpu_.run(slice);
-        spent += ran;
-        clio_.tick(ran);
-        tick_dsp(ran);
-        apply_write_watch();
+    u32 cpu_spent = 0;
+    if (cpu_scale == 100u) {
+        // Keep the hardware-accurate path exactly as it was. In particular,
+        // peripherals see the few cycles by which the last ARM instruction in
+        // a slice overshoots its target.
+        while (cpu_spent < budget) {
+            const u32 slice = (budget - cpu_spent) < kSliceCycles
+                                  ? (budget - cpu_spent)
+                                  : kSliceCycles;
+            const u32 ran = cpu_.run(slice);
+            cpu_spent += ran;
+            clio_.tick(ran);
+            tick_dsp(ran);
+            apply_write_watch();
 
-        // A field boundary ends the frame even if the cycle budget has not run
-        // out. The video hardware, not the arithmetic, decides when a frame is
-        // finished; running past it would drift the two apart.
-        if (clio_.field_complete()) {
-            clio_.clear_field_complete();
-            break;
+            if (clio_.field_complete()) {
+                clio_.clear_field_complete();
+                break;
+            }
+        }
+    } else {
+        // CPU boost is deliberately a second clock domain. `hardware_spent`
+        // advances video, timers and the DSP at the stock 12.5 MHz cadence;
+        // only the ARM receives the scaled instruction budget. Cumulative
+        // targets carry rounding and instruction overshoot into the next slice
+        // instead of compounding an error hundreds of times per field.
+        u32 hardware_spent = 0;
+        while (hardware_spent < budget) {
+            const u32 slice = (budget - hardware_spent) < kSliceCycles
+                                  ? (budget - hardware_spent)
+                                  : kSliceCycles;
+            hardware_spent += slice;
+            const u32 cpu_target = static_cast<u32>(
+                (static_cast<u64>(hardware_spent) * cpu_scale) / 100u);
+            if (cpu_spent < cpu_target) {
+                cpu_spent += cpu_.run(cpu_target - cpu_spent);
+            }
+
+            clio_.tick(slice);
+            tick_dsp(slice);
+            apply_write_watch();
+
+            if (clio_.field_complete()) {
+                clio_.clear_field_complete();
+                break;
+            }
         }
     }
 
-    // Audio for this frame. The DSP does not exist yet, so the machine is
-    // silent — but the ring is filled with the right number of samples anyway,
-    // so that the pacing and underrun behaviour are exercised from the start
-    // rather than appearing for the first time when sound is switched on.
-    //
-    // These are the DSP's own DAC words, one pair per pass of its program.
+    // Audio for this frame. These are the DSP's own DAC words, one pair per
+    // pass of its program.
     // If it is stopped, or its program never writes them, the pairs are zero
     // and the machine is silent - which is the truth rather than a stand-in.
     if (!samples_.empty()) {
@@ -450,24 +510,19 @@ u32 Console::run_frame() {
         samples_.clear();
     }
 
-    // The machine tells the display where its list is by writing a MADAM
-    // register; the display reads it each field rather than being pushed to.
-    vdlp_.set_list_address(madam_.vdl_address());
-
-    // The field has ended, so draw it. This is the only place the framebuffer
-    // is produced, and it happens after emulation rather than during it — the
-    // console still does not present, it only fills a buffer.
-    vdlp_.render_field(framebuffer_.data(), frame_width_, frame_height_);
+    // Scanlines are already latched. The field boundary only expands the
+    // logical signal to the hardware's 2x output; it does not reread VRAM.
+    vdlp_.finish_field_2x(framebuffer_.data(), frame_width_, frame_height_);
 
     ++frame_count_;
-    return spent;
+    return cpu_spent;
 }
 
 Frame Console::framebuffer() const {
     Frame frame;
     frame.pixels = framebuffer_.data();
-    frame.width  = frame_width_;
-    frame.height = frame_height_;
+    frame.width  = frame_width_ * 2;
+    frame.height = frame_height_ * 2;
     return frame;
 }
 

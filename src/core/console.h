@@ -7,6 +7,7 @@
 // machine appeared to run slow when it was really being throttled.
 #pragma once
 
+#include <atomic>
 #include <memory>
 #include <string>
 #include <vector>
@@ -68,6 +69,20 @@ public:
 
     void set_region(Region region);
     Region region() const { return region_; }
+
+    // Give the ARM more work per real video field without advancing any of the
+    // machine's other clocks. This is an optional slowdown-reduction aid, not
+    // fast-forward: CLIO, the DSP, CD timing and the 50/60 Hz field cadence all
+    // remain at hardware speed. Values outside the supported range are
+    // clamped so a damaged settings file cannot create an unusable machine.
+    void set_cpu_scale_percent(u32 percent) {
+        if (percent < 100u) percent = 100u;
+        if (percent > 150u) percent = 150u;
+        cpu_scale_percent_.store(percent, std::memory_order_release);
+    }
+    u32 cpu_scale_percent() const {
+        return cpu_scale_percent_.load(std::memory_order_acquire);
+    }
 
     void reset();
 
@@ -162,6 +177,7 @@ private:
     std::string last_error_;
 
     u64 frame_count_ = 0;
+    std::atomic<u32> cpu_scale_percent_{100};
 };
 
 }  // namespace retro3do

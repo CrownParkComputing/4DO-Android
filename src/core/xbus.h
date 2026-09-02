@@ -2,8 +2,10 @@
 //
 // Implemented from The 3DO Company's own patent, WO 94/16382 "Expansion Bus",
 // which documents the protocol in full - a granted patent is public by
-// construction. The selection model and drive replies were corrected against
-// the reference emulator; see docs/PROVENANCE.md.
+// construction. The bus protocol is implemented directly from that
+// description. Device command shapes use the SDK CD definitions, the
+// BSD-licensed CR-560B device documentation and boot-ROM observations; see
+// docs/PROVENANCE.md.
 //
 // The model, in the patent's own terms
 // ------------------------------------

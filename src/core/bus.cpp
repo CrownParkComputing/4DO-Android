@@ -172,9 +172,9 @@ u32 Bus::read32(u32 address) {
     if (madam_ != nullptr && addr >= kMadamBase && addr < kMadamBase + kMadamSize) {
         return madam_->read(addr - kMadamBase);
     }
-    // Reading an unmapped region returns zero rather than aborting. That is
-    // scaffolding: it should become a real data abort once enough of the
-    // machine exists that an unmapped read is definitely a bug.
+    // Compatibility boundary: hardware raises a data abort for an unmapped
+    // access. Returning zero keeps current software running but must not be
+    // mistaken for full ARM/bus parity; see docs/OPERA_AUDIT.md.
     return 0;
 }
 

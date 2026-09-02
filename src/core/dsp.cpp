@@ -83,21 +83,155 @@ bool sub_overflow(u32 a, u32 b, u32 y) {
     return ((a & ~b & ~y & kTopBit) != 0) || ((~a & b & y & kTopBit) != 0);
 }
 
-// The four ALU flags live one to a byte, and the branch table is indexed by a
-// value squeezed out of them with a multiply. Kept in exactly that form rather
-// than as four bools, because the packing is what the table was built around.
+// The status latch described in the DSPP patent. Keep the flags as flags: the
+// hardware condition modes are much easier to audit in these terms than when
+// encoded into host byte lanes and recovered with a multiplication trick.
 struct Flags {
-    u32 raw = 0;
-    void set_zero(bool v)     { raw = (raw & ~0x000000ffu) | (v ? 1u : 0u); }
-    void set_negative(bool v) { raw = (raw & ~0x0000ff00u) | (v ? 0x100u : 0u); }
-    void set_carry(bool v)    { raw = (raw & ~0x00ff0000u) | (v ? 0x10000u : 0u); }
-    void set_overflow(bool v) { raw = (raw & ~0xff000000u) | (v ? 0x1000000u : 0u); }
-    bool zero() const     { return (raw & 0x000000ffu) != 0; }
-    bool negative() const  { return (raw & 0x0000ff00u) != 0; }
-    bool carry() const     { return (raw & 0x00ff0000u) != 0; }
-    bool overflow() const  { return (raw & 0xff000000u) != 0; }
-    u32 index() const      { return (raw * 0x10080402u) >> 24; }
+    bool z = false;
+    bool n = false;
+    bool c = false;
+    bool v = false;
+    void set_zero(bool value)     { z = value; }
+    void set_negative(bool value) { n = value; }
+    void set_carry(bool value)    { c = value; }
+    void set_overflow(bool value) { v = value; }
+    bool zero() const     { return z; }
+    bool negative() const { return n; }
+    bool carry() const    { return c; }
+    bool overflow() const { return v; }
 };
+
+u32 flag_index(const Flags& flags, bool exact) {
+    return (flags.zero() ? 1u : 0u) |
+           (flags.negative() ? 2u : 0u) |
+           (flags.carry() ? 4u : 0u) |
+           (flags.overflow() ? 8u : 0u) |
+           (exact ? 16u : 0u);
+}
+
+// Decode the patent's three conditional modes directly.
+//
+//   mode 1: every selected flag must be one
+//   mode 2: every selected flag must be zero
+//   mode 3: signed N/V/Z, unsigned C/Z, or exactness comparisons
+//
+// In modes 1/2 mask bit 1 controls status 0 (N or C) and mask bit 0
+// controls status 1 (V or Z). Mode 1 with neither mask bit is the documented
+// all-zero / not-all-zero pair, selected by S.
+bool branch_condition(u32 condition, const Flags& flags, bool exact) {
+    const bool mask0 = (condition & 0x01u) != 0;
+    const bool mask1 = (condition & 0x02u) != 0;
+    const bool select_cz = (condition & 0x04u) != 0;
+    const u32 mode = (condition >> 3) & 3u;
+
+    if (mode == 0) return false;
+
+    if (mode == 1 && !mask0 && !mask1) {
+        const bool all_twenty_bits_zero = flags.zero() && exact;
+        return select_cz ? !all_twenty_bits_zero : all_twenty_bits_zero;
+    }
+
+    if (mode == 1 || mode == 2) {
+        const bool wanted = mode == 1;
+        const bool status0 = select_cz ? flags.carry() : flags.negative();
+        const bool status1 = select_cz ? flags.zero() : flags.overflow();
+        return (!mask1 || status0 == wanted) &&
+               (!mask0 || status1 == wanted);
+    }
+
+    if (!select_cz) {
+        // Signed comparisons: N xor V means less-than; mask0 includes equal,
+        // and mask1 complements the result.
+        return (((flags.negative() != flags.overflow()) ||
+                 (flags.zero() && mask0)) != mask1);
+    }
+    if (!mask1) {
+        // Unsigned high is C && !Z; mask0 selects it or its complement.
+        return ((flags.carry() && !flags.zero()) != mask0);
+    }
+    // Exact / not-exact.
+    return exact != mask0;
+}
+
+struct AluResult {
+    u32 value = 0;
+    bool carry = false;
+    bool overflow = false;
+};
+
+// The patent's sixteen ASEL operations, expressed as an ordinary arithmetic
+// unit. Carry and overflow are meaningful only for the arithmetic half; the
+// logical operations clear both latches.
+AluResult evaluate_alu(u32 operation, u32 a, u32 b) {
+    AluResult result;
+    switch (operation & 0x0fu) {
+        case 0: result.value = a; break;
+        case 1:
+            result.value = 0u - b;
+            result.carry = sub_carry(0, b, result.value);
+            result.overflow = sub_overflow(0, b, result.value);
+            break;
+        case 2: case 3:
+            result.value = a + b;
+            result.carry = add_carry(a, b, result.value);
+            result.overflow = add_overflow(a, b, result.value);
+            break;
+        case 4: case 5:
+            result.value = a - b;
+            result.carry = sub_carry(a, b, result.value);
+            result.overflow = sub_overflow(a, b, result.value);
+            break;
+        case 6:
+            result.value = a + 0x1000u;
+            result.carry = add_carry(a, 0x1000u, result.value);
+            result.overflow = add_overflow(a, 0x1000u, result.value);
+            break;
+        case 7:
+            result.value = a - 0x1000u;
+            result.carry = sub_carry(a, 0x1000u, result.value);
+            result.overflow = sub_overflow(a, 0x1000u, result.value);
+            break;
+        case 8:  result.value = a; break;
+        case 9:  result.value = ~a; break;
+        case 10: result.value = a & b; break;
+        case 11: result.value = ~(a & b); break;
+        case 12: result.value = a | b; break;
+        case 13: result.value = ~(a | b); break;
+        case 14: result.value = a ^ b; break;
+        case 15: result.value = ~(a ^ b); break;
+    }
+    return result;
+}
+
+u32 apply_barrel_shift(u8 operation, u32 value, Flags& flags) {
+    static constexpr u8 left_amount[7]  = {0, 1, 2, 3, 4, 5, 8};
+    static constexpr u8 right_amount[7] = {16, 8, 5, 4, 3, 2, 1};
+
+    const u8 low = operation & 0x0fu;
+    if ((operation < 16 || operation >= 17) && low >= 1 && low <= 6) {
+        return value << left_amount[low];
+    }
+    if (operation == 7 || operation == 23) {
+        if (flags.overflow()) {
+            return flags.negative() ? 0x7ffff000u : 0x80000000u;
+        }
+        return value;
+    }
+    if (operation == 8 || operation == 24) {
+        const bool shifted_out = (value & 0x80000000u) != 0;
+        flags.set_carry(shifted_out);
+        return ((value << 1) & 0xfffe0000u) |
+               (shifted_out ? (1u << 16) : 0u) | (value & 0xf000u);
+    }
+    if (operation >= 9 && operation <= 15) {
+        return static_cast<u32>(static_cast<s32>(value) >>
+                                right_amount[operation - 9]);
+    }
+    if (operation >= 25 && operation <= 31) {
+        return value >> right_amount[operation - 25];
+    }
+    return value;
+}
 
 }  // namespace
 
@@ -144,59 +278,18 @@ Dsp::Dsp() {
             static_cast<u8>(aif_bs(word) | ((aif_alu(word) & 8) << 1));
     }
 
-    // Whether each conditional branch is taken, for every flag state. This is
-    // combinational logic on the real chip; here it is a table, because
-    // evaluating it per branch is the same work done a million times a second.
-    for (u32 word = 0xa000; word <= 0xffff; word += 1024) {
-        const u32 bits = branch_bits(word);
-        const bool flagm0  = field(word, 10, 1) != 0;
-        const bool flagm1  = field(word, 11, 1) != 0;
-        const bool flagsel = field(word, 12, 1) != 0;
-        const bool mode0   = field(word, 13, 1) != 0;
-        const bool mode1   = field(word, 14, 1) != 0;
-
-        for (u32 packed = 0; packed < 16; ++packed) {
+    // The real chip evaluates this as combinational logic. Precompute the same
+    // 32 conditions by 32 status states from the readable decoder above.
+    for (u32 condition = 0; condition < 32; ++condition) {
+        for (u32 packed = 0; packed < 32; ++packed) {
             Flags flags;
             flags.set_zero((packed & 1) != 0);
             flags.set_negative((packed & 2) != 0);
             flags.set_carry((packed & 4) != 0);
             flags.set_overflow((packed & 8) != 0);
-
-            for (u32 exact = 0; exact < 2; ++exact) {
-                const bool md1 = !mode1 && mode0;
-                const bool md2 = mode1 && !mode0;
-                const bool md3 = mode1 && mode0;
-
-                const bool stat0 = (flagsel && flags.carry()) ||
-                                   (!flagsel && flags.negative());
-                const bool stat1 = (flagsel && flags.zero()) ||
-                                   (!flagsel && flags.overflow());
-                const bool nstat0 = stat0 != md2;
-                const bool nstat1 = stat1 != md2;
-
-                const bool dcare1 = !flagm1 || nstat0;
-                const bool dcare0 = !flagm0 || nstat1;
-                const bool no_care = !flagm1 && !flagm0;
-
-                const bool md12s = dcare1 && dcare0 && (mode1 != mode0) && !no_care;
-
-                const bool super0 = md1 && !flagsel && no_care;
-                const bool super1 = md1 && flagsel && no_care;
-                const bool all_zero = super0 && flags.zero() && exact != 0;
-                const bool not_all_zero = super1 && !(flags.zero() && exact != 0);
-                const bool sds = all_zero || not_all_zero;
-
-                const bool nv_test =
-                    ((((flags.negative() != flags.overflow()) ||
-                       (flags.zero() && flagm0)) != flagm1) && !flagsel);
-                const bool tmpcs = flags.carry() && !flags.zero();
-                const bool cz_test = (tmpcs != flagm0) && flagsel && !flagm1;
-                const bool exact_test = ((exact != 0) != flagm0) && flagsel && flagm1;
-                const bool md3s = (nv_test || cz_test || exact_test) && md3;
-
-                branch_taken_[bits][exact + flags.index()] =
-                    static_cast<u8>(md12s || md3s || sds);
-            }
+            const bool exact = (packed & 16u) != 0;
+            branch_taken_[condition][packed] =
+                static_cast<u8>(branch_condition(condition, flags, exact));
         }
     }
 
@@ -334,115 +427,129 @@ void Dsp::write(u32 address, u16 value) {
     data_[shifted < 0x200 ? (shifted | 0x100) : (shifted + 0x100)] = value;
 }
 
-u16 Dsp::load_one_operand() {
-    const u32 operand = program_[pc_++ & 0x3ff];
-    switch (op_type(operand)) {
-        case 0: case 1: case 2: case 3: {
-            const u16 value = read(register_map_[register_map_index_][r3_r3(operand)] ^
-                                   register_base_x4_);
-            return r3_r3_di(operand) ? read(value) : value;
-        }
-        case 4: {
-            const u16 value = read(nrof_address(operand));
-            return nrof_indirect(operand) ? read(value) : value;
-        }
-        case 5: {
-            const u16 value = read(register_map_[register_map_index_][r2_r1(operand)] ^
-                                   register_base_x4_);
-            return r2_r1_di(operand) ? read(value) : value;
-        }
+u16 Dsp::next_program_word() {
+    return program_[pc_++ & 0x3ff];
+}
+
+u16 Dsp::mapped_register(u32 reg) const {
+    return static_cast<u16>(register_map_[register_map_index_][reg & 0x0f] ^
+                            register_base_x4_);
+}
+
+u16 Dsp::operand_value(u16 address, bool indirect) {
+    const u16 first = read(address);
+    return indirect ? read(first) : first;
+}
+
+// A MOVE consumes one source even when the following word uses the packed
+// two- or three-register spelling.  In those spellings the source is the last
+// register field, as specified by the control-instruction operand diagram.
+u16 Dsp::move_source() {
+    const u16 word = next_program_word();
+    switch (op_type(word)) {
+        case 0: case 1: case 2: case 3:
+            return operand_value(mapped_register(r3_r3(word)), r3_r3_di(word));
+        case 4:
+            return operand_value(static_cast<u16>(nrof_address(word)),
+                                 nrof_indirect(word));
+        case 5:
+            return operand_value(mapped_register(r2_r1(word)), r2_r1_di(word));
         default:
-            return static_cast<u16>(immediate_value(operand));
+            return static_cast<u16>(immediate_value(word));
     }
 }
 
-void Dsp::load_operands(int requested) {
-    writeback_ = 0;
+// Turn one operand word into the ordered values it contributes.  Destination
+// selection is kept alongside the group instead of mutating the execution
+// state while each field is decoded; this mirrors the hardware packet and
+// makes the write-back rule explicit at the caller.
+Dsp::OperandGroup Dsp::decode_operand_group(u16 word) {
+    OperandGroup group;
 
-    if (requested == 0) {
-        if (requests_ == 0) {
-            return;
+    auto append_register = [&](u32 reg, bool indirect) {
+        const u16 address = mapped_register(reg);
+        group.values[group.count++] = operand_value(address, indirect);
+        return address;
+    };
+
+    switch (op_type(word)) {
+        case 0: case 1: case 2: case 3:
+            append_register(r3_r3(word), r3_r3_di(word));
+            append_register(r3_r2(word), r3_r2_di(word));
+            group.destination = append_register(r3_r1(word), r3_r1_di(word));
+            break;
+
+        case 4: {
+            const u16 address = static_cast<u16>(nrof_address(word));
+            group.values[group.count++] = operand_value(address, nrof_indirect(word));
+            group.destination = address;
+            if (nrof_wb1(word)) group.marked_destination = address;
+            break;
         }
+
+        case 5: {
+            auto append_writable_register = [&](u32 reg, bool indirect, bool marked) {
+                u16 address = mapped_register(reg);
+                if (indirect) address = read(address);
+                group.values[group.count++] = read(address);
+                group.destination = address;
+                if (marked) group.marked_destination = address;
+            };
+            if (r2_numregs(word)) {
+                append_writable_register(r2_r2(word), r2_r2_di(word), r2_wb2(word));
+            }
+            append_writable_register(r2_r1(word), r2_r1_di(word), r2_wb1(word));
+            break;
+        }
+
+        default:
+            group.values[0] = static_cast<u16>(immediate_value(word));
+            group.count = 1;
+            group.destination = group.values[0];
+            break;
+    }
+    return group;
+}
+
+void Dsp::gather_arithmetic_operands(unsigned requested) {
+    writeback_ = 0;
+    if (requested == 0) {
+        if (requests_ == 0) return;
         requested = 4;
     }
 
-    u16 operands[8] = {};
-    int count = 0;
-    u16 deferred_writeback = 0;
+    std::array<u16, 8> values{};
+    unsigned value_count = 0;
+    u16 last_destination = 0;
+    u16 marked_destination = 0;
 
     do {
-        const u32 operand = program_[pc_++ & 0x3ff];
-        switch (op_type(operand)) {
-            case 0: case 1: case 2: case 3:
-                operands[count] = read(register_map_[register_map_index_][r3_r3(operand)] ^
-                                       register_base_x4_);
-                if (r3_r3_di(operand)) operands[count] = read(operands[count]);
-                ++count;
-
-                operands[count] = read(register_map_[register_map_index_][r3_r2(operand)] ^
-                                       register_base_x4_);
-                if (r3_r2_di(operand)) operands[count] = read(operands[count]);
-                ++count;
-
-                // Only the first register can be written back to.
-                writeback_ = static_cast<u16>(
-                    register_map_[register_map_index_][r3_r1(operand)] ^ register_base_x4_);
-                operands[count] = read(writeback_);
-                if (r3_r1_di(operand)) operands[count] = read(operands[count]);
-                ++count;
-                break;
-
-            case 4:
-                writeback_ = static_cast<u16>(nrof_address(operand));
-                operands[count] = read(writeback_);
-                if (nrof_indirect(operand)) operands[count] = read(operands[count]);
-                ++count;
-                if (nrof_wb1(operand)) deferred_writeback = writeback_;
-                break;
-
-            case 5:
-                if (r2_numregs(operand)) {
-                    writeback_ = static_cast<u16>(
-                        register_map_[register_map_index_][r2_r2(operand)] ^ register_base_x4_);
-                    if (r2_r2_di(operand)) writeback_ = read(writeback_);
-                    operands[count++] = read(writeback_);
-                    if (r2_wb2(operand)) deferred_writeback = writeback_;
-                }
-                writeback_ = static_cast<u16>(
-                    register_map_[register_map_index_][r2_r1(operand)] ^ register_base_x4_);
-                if (r2_r1_di(operand)) writeback_ = read(writeback_);
-                operands[count++] = read(writeback_);
-                if (r2_wb1(operand)) deferred_writeback = writeback_;
-                break;
-
-            default:
-                operands[count] = static_cast<u16>(immediate_value(operand));
-                writeback_ = operands[count++];
-                break;
+        const OperandGroup group = decode_operand_group(next_program_word());
+        for (u8 i = 0; i < group.count; ++i) {
+            values[value_count++] = group.values[i];
         }
-    } while (count < requested && count < 6);
+        last_destination = group.destination;
+        if (group.marked_destination != 0) {
+            marked_destination = group.marked_destination;
+        }
+    } while (value_count < requested && value_count < 6);
 
-    // The operand mask lets a program suppress slots it does not want filled
-    // this time round.
+    // Requested slots have a fixed consumption order in the arithmetic data
+    // path.  MASK suppresses a slot without changing the packed value order.
     requests_ &= static_cast<u8>(operand_mask_);
+    unsigned consumed = 0;
+    if (requests_ & kNeedMult1) mult1_ = values[consumed++];
+    if (requests_ & kNeedMult2) mult2_ = values[consumed++];
+    if (requests_ & kNeedAlu1)  alu1_  = values[consumed++];
+    if (requests_ & kNeedAlu2)  alu2_  = values[consumed++];
+    if (requests_ & kNeedShift) barrel_shift_ = values[consumed++];
 
-    int index = 0;
-    if (requests_ & kNeedMult1) mult1_ = operands[index++];
-    if (requests_ & kNeedMult2) mult2_ = operands[index++];
-    if (requests_ & kNeedAlu1)  alu1_  = operands[index++];
-    if (requests_ & kNeedAlu2)  alu2_  = operands[index++];
-    if (requests_ & kNeedShift) barrel_shift_ = operands[index++];
-
-    // If the instruction consumed fewer operands than were fetched, the extra
-    // one carries the write-back; otherwise the deferred one does, even when
-    // that is nothing.
-    if (count != index) {
-        if (deferred_writeback != 0) {
-            writeback_ = deferred_writeback;
-        }
-    } else {
-        writeback_ = deferred_writeback;
-    }
+    // An explicit WB bit wins.  Without one, an unused trailing value makes
+    // the packet's natural destination writable; a fully consumed packet has
+    // no destination.
+    writeback_ = marked_destination != 0
+                     ? marked_destination
+                     : (value_count != consumed ? last_destination : 0);
 }
 
 u32 Dsp::run() {
@@ -503,7 +610,7 @@ u32 Dsp::run() {
                 default:
                     if (opcode >= 32 && opcode <= 47) {
                         // Move to a register-addressed destination.
-                        const u16 value = load_one_operand();
+                        const u16 value = move_source();
                         u16 address = static_cast<u16>(
                             register_map_[register_map_index_][r2_r1(instruction)] ^
                             register_base_x4_);
@@ -511,12 +618,12 @@ u32 Dsp::run() {
                         write(address, value);
                     } else if (opcode >= 48 && opcode <= 63) {
                         // Move to a directly addressed destination.
-                        const u16 value = load_one_operand();
+                        const u16 value = move_source();
                         u16 address = static_cast<u16>(cif_address(instruction));
                         if (nrof_indirect(instruction)) address = read(address);
                         write(address, value);
                     } else if (branch_taken_[branch_bits(instruction)]
-                                            [(exact ? 1u : 0u) + flags.index()] != 0) {
+                                            [flag_index(flags, exact)] != 0) {
                         pc_ = cif_address(instruction);
                     }
                     break;
@@ -527,7 +634,7 @@ u32 Dsp::run() {
         // Arithmetic.
         requests_ = decoded_[instruction].requests;
         barrel_shift_ = decoded_[instruction].shift;
-        load_operands(static_cast<int>(aif_numops(instruction)));
+        gather_arithmetic_operands(aif_numops(instruction));
 
         const u32 alu = aif_alu(instruction);
         // ACSBU: two of the ALU operations take the carry as their second
@@ -572,93 +679,15 @@ u32 Dsp::run() {
             }
         }
 
-        bool carry = false;
-        bool overflow = false;
-        u32 y = 0;
-        switch (alu) {
-            case 0: y = a; break;
-            case 1:
-                y = 0u - b;
-                carry = sub_carry(0, b, y);
-                overflow = sub_overflow(0, b, y);
-                break;
-            case 2: case 3:
-                y = a + b;
-                carry = add_carry(a, b, y);
-                overflow = add_overflow(a, b, y);
-                break;
-            case 4: case 5:
-                y = a - b;
-                carry = sub_carry(a, b, y);
-                overflow = sub_overflow(a, b, y);
-                break;
-            case 6:
-                y = a + 0x1000u;
-                carry = add_carry(a, 0x1000u, y);
-                overflow = add_overflow(a, 0x1000u, y);
-                break;
-            case 7:
-                y = a - 0x1000u;
-                carry = sub_carry(a, 0x1000u, y);
-                overflow = sub_overflow(a, 0x1000u, y);
-                break;
-            case 8:  y = a; break;
-            case 9:  y = ~a; break;
-            case 10: y = a & b; break;
-            case 11: y = ~(a & b); break;
-            case 12: y = a | b; break;
-            case 13: y = ~(a | b); break;
-            case 14: y = a ^ b; break;
-            default: y = ~(a ^ b); break;
-        }
-        flags.set_carry(carry);
-        flags.set_overflow(overflow);
+        const AluResult alu_result = evaluate_alu(alu, a, b);
+        u32 y = alu_result.value;
+        flags.set_carry(alu_result.carry);
+        flags.set_overflow(alu_result.overflow);
         flags.set_zero((y & 0xffff0000u) == 0);
         flags.set_negative((y >> 31) != 0);
         exact = (y & 0x0000f000u) == 0;
 
-        // The barrel shifter. Cases below sixteen are arithmetic, above are
-        // logical, and two of them are neither: 7 and 23 clip a saturated
-        // result, 8 and 24 shift one bit out into the carry.
-        switch (barrel_shift_) {
-            case 1:  case 17: y <<= 1; break;
-            case 2:  case 18: y <<= 2; break;
-            case 3:  case 19: y <<= 3; break;
-            case 4:  case 20: y <<= 4; break;
-            case 5:  case 21: y <<= 5; break;
-            case 6:  case 22: y <<= 8; break;
-
-            case 9:  y = static_cast<u32>(static_cast<s32>(y) >> 16); break;
-            case 10: y = static_cast<u32>(static_cast<s32>(y) >> 8);  break;
-            case 11: y = static_cast<u32>(static_cast<s32>(y) >> 5);  break;
-            case 12: y = static_cast<u32>(static_cast<s32>(y) >> 4);  break;
-            case 13: y = static_cast<u32>(static_cast<s32>(y) >> 3);  break;
-            case 14: y = static_cast<u32>(static_cast<s32>(y) >> 2);  break;
-            case 15: y = static_cast<u32>(static_cast<s32>(y) >> 1);  break;
-
-            case 7: case 23:
-                if (flags.overflow()) {
-                    y = flags.negative() ? 0x7ffff000u : 0x80000000u;
-                }
-                break;
-
-            case 8: case 24: {
-                const bool shifted_out = (static_cast<s32>(y) < 0);
-                flags.set_carry(shifted_out);
-                y = ((y << 1) & 0xfffe0000u) | (shifted_out ? (1u << 16) : 0u) |
-                    (y & 0xf000u);
-                break;
-            }
-
-            case 25: y >>= 16; break;
-            case 26: y >>= 8;  break;
-            case 27: y >>= 5;  break;
-            case 28: y >>= 4;  break;
-            case 29: y >>= 3;  break;
-            case 30: y >>= 2;  break;
-            case 31: y >>= 1;  break;
-            default: break;
-        }
+        y = apply_barrel_shift(static_cast<u8>(barrel_shift_), y, flags);
 
         accumulator = y;
         if (writeback_ != 0) {

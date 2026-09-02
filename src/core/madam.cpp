@@ -72,22 +72,11 @@ enum : u32 {
     kCcbPlutWord    = 3,
     kCcbXWord       = 4,
     kCcbYWord       = 5,
-    kCcbHdxWord     = 6,
-    kCcbHdyWord     = 7,
-    kCcbVdxWord     = 8,
-    kCcbVdyWord     = 9,
-    kCcbHddxWord    = 10,
-    kCcbHddyWord    = 11,
-    kCcbPixcWord    = 12,
-    kCcbPre0Word    = 13,
-    kCcbPre1Word    = 14,
-    kCcbWordCount   = 15,
 };
 
-// TODO(madam): the PRE0/PRE1 bit assignments below are the commonly published
-// ones and have NOT been checked against the hardware documentation. They are
-// isolated in these two functions precisely so that correcting them is a local
-// change rather than a hunt through the renderer.
+// PRE0/PRE1 fields from the official 3DO hardware.h and Graphics Programming
+// Guide. Keep the extraction here so the DMA-facing layout stays separate from
+// the renderer's internal Ccb representation.
 constexpr u32 kPre0FormatMask  = 0x00000007u;
 // Set when a pixel carries its colour directly instead of an index into the
 // palette. Bit FOUR, not the top bit - the top bit is something else entirely.
@@ -99,15 +88,6 @@ constexpr u32 kPre1WidthMask   = 0x000007ffu;
 // Set when a cel's source is stored in the framebuffer's own interleaved
 // left/right layout rather than as a flat bitstream.
 constexpr u32 kPre1Lrform = 0x00000800u;
-
-// Where pixel (x,y) of an interleaved buffer lives, given the byte distance
-// between line PAIRS. Two vertically adjacent lines share each 32-bit word:
-// the even line in the low half, the odd line in the high half. This is the
-// framebuffer's layout and, for an LR-form cel, the source's as well.
-u32 lr_source_offset(s32 x, s32 y, u32 pair_stride) {
-    return static_cast<u32>((y >> 1) * static_cast<s32>(pair_stride)) +
-           static_cast<u32>((y & 1) << 1) + (static_cast<u32>(x) << 2);
-}
 
 u32 cel_height_from_pre0(u32 pre0) {
     // The stored value is one less than the real height, as is usual for a
@@ -177,22 +157,6 @@ unsigned bits_per_pixel(CelFormat format) {
     }
 }
 
-// How many destination samples one step vector needs so that consecutive
-// samples land on adjacent pixels. A step of one pixel or less needs one; a
-// step of three needs three, or the fill leaves gaps.
-u32 footprint_steps(s32 dx, s32 dy) {
-    const s32 ax = dx < 0 ? -dx : dx;
-    const s32 ay = dy < 0 ? -dy : dy;
-    const s32 longest = ax > ay ? ax : ay;
-    // Round up to whole pixels; 16.16, so one pixel is 1 << 16.
-    const u32 steps = static_cast<u32>((longest + 0xffff) >> 16);
-    if (steps < 1) return 1;
-    // A step this large means a corrupt CCB rather than a real magnification.
-    if (steps > 256) return 256;
-    return steps;
-}
-
-
 // Is this offset inside the DMA channel array, and if so which channel and
 // which half of the pair?
 bool dma_slot(u32 offset, u32* channel, bool* is_length) {
@@ -224,8 +188,13 @@ Madam::Madam(Bus& bus) : bus_(bus) {
 }
 
 void Madam::reset() {
-    revision_ = 0;
+    revision_ = kMadamRevisionGreen;
     mem_config_ = kMadamMemConfigStock;
+    dma_enable_ = 0;
+    dma_channel_enable_ = 0;
+    xbus_dma_address_ = 0;
+    xbus_dma_length_ = 0;
+    xbus_dma_pending_ = false;
     vdl_address_ = 0;
     for (u32 i = 0; i < kMadamDmaChannels; ++i) {
         dma_address_[i] = 0;
@@ -235,9 +204,56 @@ void Madam::reset() {
     clip_height_ = 240;
     target_address_ = kVramBase;
     framebuffer_configured_ = false;
+    reg_ctl0_ = 0;
+    reg_ctl1_ = 0;
     read_base_ = 0;
     write_base_ = 0;
+    read_stride_ = 320 * 4;
+    write_stride_ = 320 * 4;
     target_stride_bytes_ = 320 * 2;
+    pbus_address_ = 0;
+    pbus_length_ = 0;
+    pbus_pointer_ = 0;
+    current_ccb_ = 0;
+    next_ccb_ = 0;
+    cel_engine_state_ = CelEngineState::Idle;
+    cel_walk_started_ = false;
+    ccb_ctl0_ = 0;
+    cel_flags_ = 0;
+    cel_pixc_ = 0;
+    cel_pre1_ = 0;
+    cel_pxor1_ = 0xffffffffu;
+    cel_pxor2_ = 0;
+    cel_pmode_or_ = 0;
+    cel_pmode_and_ = 0xffffu;
+    cel_origin_vh_ = 0;
+    cel_bpp_ = 0;
+    cel_linear_ = false;
+    cel_pluta_ = 0;
+    cel_pixel_mask_ = 0;
+    cel_transparent_mask_ = true;
+    ccb_x_register_ = 0;
+    ccb_y_register_ = 0;
+    ccb_hdx_register_ = 0;
+    ccb_hdy_register_ = 0;
+    ccb_vdx_register_ = 0;
+    ccb_vdy_register_ = 0;
+    ccb_hddx_register_ = 0;
+    ccb_hddy_register_ = 0;
+    ccb_pixc_register_ = 0;
+    pre0_register_ = 0;
+    pre1_register_ = 0;
+    for (Fifo& fifo : input_fifo_) fifo = Fifo{};
+    for (Fifo& fifo : output_fifo_) fifo = Fifo{};
+    for (u16& entry : plut_) entry = 0;
+    for (s32& value : matrix_in_) value = 0;
+    for (s32& value : matrix_vec_) value = 0;
+    for (s32& value : matrix_out_) value = 0;
+    for (s64& value : matrix_pending_) value = 0;
+    matrix_num_hi_ = 0;
+    matrix_num_lo_ = 0;
+    engine_runs_ = 0;
+    total_cels_drawn_ = 0;
     stats_ = MadamStats{};
 }
 
@@ -261,18 +277,24 @@ void Madam::set_clip(u32 width, u32 height) {
 // asked for - which is how a title keeps the unit fed without ever waiting on
 // it, and is not an optimisation anyone would guess at.
 void Madam::matrix_execute(u32 operation) {
-    const auto m = [this](int row, int col) {
-        return static_cast<s64>(matrix_in_[row * 4 + col]);
-    };
-    const auto v = [this](int index) {
-        return static_cast<s64>(matrix_vec_[index]);
-    };
-
     // Publish the previous result first, whatever this operation turns out to
     // be. Operation zero is that and nothing else.
     for (int i = 0; i < 4; ++i) {
         matrix_out_[i] = static_cast<s32>(matrix_pending_[i]);
     }
+
+    // The SDK defines these operations as row/vector dot products on signed
+    // 16.16 values. Accumulate at full precision, then discard the low sixteen
+    // fractional bits once, after the sum. Shifting each product separately
+    // loses up to one unit per column.
+    const auto dot = [this](int row, int columns) {
+        s64 sum = 0;
+        for (int column = 0; column < columns; ++column) {
+            sum += static_cast<s64>(matrix_in_[row * 4 + column]) *
+                   static_cast<s64>(matrix_vec_[column]);
+        }
+        return sum >> 16;
+    };
 
     switch (operation) {
         case kMatrixCopyOnly:
@@ -280,15 +302,13 @@ void Madam::matrix_execute(u32 operation) {
 
         case kMatrixMultiply4x4:
             for (int row = 0; row < 4; ++row) {
-                matrix_pending_[row] = (m(row, 0) * v(0) + m(row, 1) * v(1) +
-                                        m(row, 2) * v(2) + m(row, 3) * v(3)) >> 16;
+                matrix_pending_[row] = dot(row, 4);
             }
             return;
 
         case kMatrixMultiply3x3:
             for (int row = 0; row < 3; ++row) {
-                matrix_pending_[row] = (m(row, 0) * v(0) + m(row, 1) * v(1) +
-                                        m(row, 2) * v(2)) >> 16;
+                matrix_pending_[row] = dot(row, 3);
             }
             return;
 
@@ -299,18 +319,15 @@ void Madam::matrix_execute(u32 operation) {
             s64 numerator = (static_cast<s64>(matrix_num_hi_) << 32) |
                             static_cast<u32>(matrix_num_lo_);
 
-            matrix_pending_[2] = (m(2, 0) * v(0) + m(2, 1) * v(1) +
-                                  m(2, 2) * v(2)) >> 16;
+            matrix_pending_[2] = dot(2, 3);
             // A vertex exactly on the eye plane would divide by zero. The
             // hardware leaves the numerator alone rather than trapping.
             if (matrix_pending_[2] != 0) {
                 numerator /= matrix_pending_[2];
             }
 
-            matrix_pending_[0] = (m(0, 0) * v(0) + m(0, 1) * v(1) +
-                                  m(0, 2) * v(2)) >> 16;
-            matrix_pending_[1] = (m(1, 0) * v(0) + m(1, 1) * v(1) +
-                                  m(1, 2) * v(2)) >> 16;
+            matrix_pending_[0] = dot(0, 3);
+            matrix_pending_[1] = dot(1, 3);
             matrix_pending_[0] = (matrix_pending_[0] * numerator) >> 32;
             matrix_pending_[1] = (matrix_pending_[1] * numerator) >> 32;
             return;
@@ -359,6 +376,14 @@ u32 Madam::read(u32 offset) {
         case kMadamRevision:  return revision_;
         case kMadamMemConfig:  return mem_config_;
         case kMadamDmaEnable:        return dma_enable_;
+        case kMadamCelStatus:
+            switch (cel_engine_state_) {
+                case CelEngineState::Idle:       return 0;
+                case CelEngineState::InProcess:  return kMadamCelRunning;
+                case CelEngineState::Suspended:  return kMadamCelRunning |
+                                                        kMadamCelPaused;
+            }
+            return 0;
         case kMadamXbusDmaAddress:   return xbus_dma_address_;
         case kMadamXbusDmaLength:    return xbus_dma_length_;
         case kMadamVdlAddress: return vdl_address_;
@@ -568,7 +593,9 @@ void Madam::write(u32 offset, u32 value) {
 
     switch (offset) {
         case kMadamRevision:
-            revision_ = value;
+            // Read-only chip identification. Some boot code probes low MADAM
+            // ports with writes; accepting one would make the machine change
+            // revision while it is running.
             break;
         case kMadamMemConfig:
             // Read-only: it reports how much memory is FITTED, which software
@@ -586,6 +613,9 @@ void Madam::write(u32 offset, u32 value) {
             if ((dma_enable_ & kMadamPbusStart) != 0 && pbus_handler_ != nullptr) {
                 pbus_handler_(pbus_context_);
             }
+            break;
+        case kMadamCelStatus:
+            // Read-only engine state.
             break;
         case kMadamXbusDmaAddress:
             xbus_dma_address_ = value;
@@ -617,16 +647,32 @@ void Madam::write(u32 offset, u32 value) {
         // software is entitled to rely on - Need for Speed starts the engine
         // and then finishes writing the CCB the engine is about to read.
         case kMadamCelStart:
-            bus_.request_cel_engine();
+            if (cel_engine_state_ == CelEngineState::Idle) {
+                cel_engine_state_ = CelEngineState::InProcess;
+                cel_walk_started_ = false;
+                bus_.request_cel_engine();
+            }
             break;
         case kMadamCelStop:
+            cel_engine_state_ = CelEngineState::Idle;
+            cel_walk_started_ = false;
             bus_.cancel_cel_engine();
             next_ccb_ = 0;
             break;
         case kMadamCelResume:
-            bus_.request_cel_engine();
+            if (cel_engine_state_ == CelEngineState::Suspended) {
+                cel_engine_state_ = CelEngineState::InProcess;
+                bus_.request_cel_engine();
+            }
             break;
         case kMadamCelPause:
+            if (cel_engine_state_ == CelEngineState::InProcess) {
+                cel_engine_state_ = CelEngineState::Suspended;
+                // This catches a pause in the same multi-store instruction as
+                // START. Once rendering has actually seized the data bus, the
+                // CPU cannot issue this write until the engine yields.
+                bus_.cancel_cel_engine();
+            }
             break;
 
         case kMadamCcbCtl0:
@@ -688,13 +734,9 @@ u32 Madam::dma_length(u32 channel) const {
 
 Ccb Madam::read_ccb(u32 address) {
     Ccb ccb;
+    Bus& bus = bus_;
 
-    u32 words[kCcbWordCount];
-    for (u32 i = 0; i < kCcbWordCount; ++i) {
-        words[i] = const_cast<Bus&>(bus_).read32(address + i * 4);
-    }
-
-    ccb.flags  = words[kCcbFlagsWord];
+    ccb.flags = bus.read32(address + kCcbFlagsWord * 4);
 
     // Pointers are stored either absolutely or relative to the word after the
     // field that holds them. Getting the relative base wrong shifts every cel
@@ -709,40 +751,62 @@ Ccb Madam::read_ccb(u32 address) {
     // address, and the walk marches off through whatever memory happens to
     // follow - four thousand one-pixel cels out of cleared RAM before the
     // safety limit stops it.
-    const u32 next_raw = words[kCcbNextWord] & kCcbAddressMask;
+    const u32 next_raw = bus.read32(address + kCcbNextWord * 4) &
+                         kCcbAddressMask;
     ccb.next_address = next_raw == 0
                            ? 0u
                            : ((ccb.flags & kCcbNpAbs) ? next_raw
                                                       : next_base + next_raw);
 
-    const u32 source_raw = words[kCcbSourceWord] & kCcbAddressMask;
+    const u32 source_raw = bus.read32(address + kCcbSourceWord * 4) &
+                           kCcbAddressMask;
     ccb.source_address = (ccb.flags & kCcbSpAbs) ? source_raw
                                                  : source_base + source_raw;
 
-    const u32 plut_raw = words[kCcbPlutWord] & kCcbAddressMask;
+    const u32 plut_raw = bus.read32(address + kCcbPlutWord * 4) &
+                         kCcbAddressMask;
     ccb.plut_address = (ccb.flags & kCcbPpAbs) ? plut_raw
                                                : plut_base + plut_raw;
 
-    ccb.x = static_cast<s32>(words[kCcbXWord]);
-    ccb.y = static_cast<s32>(words[kCcbYWord]);
+    // The first six words always occupy space, but the rest of a CCB is a
+    // compact stream feeding load-controlled hardware registers. When a load
+    // flag is clear the field is absent and the preceding cel's register value
+    // remains live. Treating every CCB as a fixed 15-word structure consumes
+    // PRE0/PIXC data as transform deltas and shreds linked sprites into strips.
+    u32 cursor = address + (kCcbYWord + 1) * 4;
+    if ((ccb.flags & kCcbSkip) == 0 && (ccb.flags & kCcbYoxy) != 0) {
+        ccb_x_register_ = static_cast<s32>(bus.read32(address + kCcbXWord * 4));
+        ccb_y_register_ = static_cast<s32>(bus.read32(address + kCcbYWord * 4));
+    }
 
-    // The two step vectors are stored in DIFFERENT fixed-point formats, which
-    // is the sort of thing that reads as a scaling bug rather than a parsing
-    // one. The horizontal steps and their derivatives are 12.20; the vertical
-    // pair is already 16.16. Using the horizontal ones raw magnifies every cel
-    // sixteen times across, so a full-screen background lands as a smear a
-    // sixteenth of the way through its own artwork.
-    //
-    // The shift is arithmetic: these are signed, and a cel drawn right-to-left
-    // has a negative step.
-    ccb.hdx  = static_cast<s32>(words[kCcbHdxWord]) >> 4;
-    ccb.hdy  = static_cast<s32>(words[kCcbHdyWord]) >> 4;
-    ccb.vdx  = static_cast<s32>(words[kCcbVdxWord]);
-    ccb.vdy  = static_cast<s32>(words[kCcbVdyWord]);
-    ccb.hddx = static_cast<s32>(words[kCcbHddxWord]) >> 4;
-    ccb.hddy = static_cast<s32>(words[kCcbHddyWord]) >> 4;
+    // Horizontal vectors and their derivatives are stored as 12.20 and become
+    // 16.16 here. Vertical vectors are already 16.16.
+    if ((ccb.flags & kCcbLdSize) != 0) {
+        ccb_hdx_register_ = static_cast<s32>(bus.read32(cursor)) >> 4;
+        ccb_hdy_register_ = static_cast<s32>(bus.read32(cursor + 4)) >> 4;
+        ccb_vdx_register_ = static_cast<s32>(bus.read32(cursor + 8));
+        ccb_vdy_register_ = static_cast<s32>(bus.read32(cursor + 12));
+        cursor += 16;
+    }
+    if ((ccb.flags & kCcbLdPrs) != 0) {
+        ccb_hddx_register_ = static_cast<s32>(bus.read32(cursor)) >> 4;
+        ccb_hddy_register_ = static_cast<s32>(bus.read32(cursor + 4)) >> 4;
+        cursor += 8;
+    }
+    if ((ccb.flags & kCcbLdPpmp) != 0) {
+        ccb_pixc_register_ = bus.read32(cursor);
+        cursor += 4;
+    }
 
-    ccb.pixc = words[kCcbPixcWord];
+    ccb.x = ccb_x_register_;
+    ccb.y = ccb_y_register_;
+    ccb.hdx = ccb_hdx_register_;
+    ccb.hdy = ccb_hdy_register_;
+    ccb.vdx = ccb_vdx_register_;
+    ccb.vdy = ccb_vdy_register_;
+    ccb.hddx = ccb_hddx_register_;
+    ccb.hddy = ccb_hddy_register_;
+    ccb.pixc = ccb_pixc_register_;
 
     // Where the preamble comes from, which is not always the CCB.
     //
@@ -759,24 +823,27 @@ Ccb Madam::read_ccb(u32 address) {
     // a width - but the register still has to survive, because the next
     // unpacked cel may not reload it either.
     if ((ccb.flags & kCcbCcbPre) != 0) {
-        ccb.pre0 = words[kCcbPre0Word];
+        pre0_register_ = bus.read32(cursor);
+        cursor += 4;
         if ((ccb.flags & kCcbPacked) == 0) {
-            pre1_register_ = words[kCcbPre1Word];
+            pre1_register_ = bus.read32(cursor);
+            cursor += 4;
         }
     } else {
-        Bus& bus = bus_;
-        ccb.pre0 = bus.read32(ccb.source_address);
+        pre0_register_ = bus.read32(ccb.source_address);
         ccb.source_address += 4;
         if ((ccb.flags & kCcbPacked) == 0) {
             pre1_register_ = bus.read32(ccb.source_address);
             ccb.source_address += 4;
         }
     }
+    ccb.pre0 = pre0_register_;
     ccb.pre1 = pre1_register_;
 
     ccb.format = cel_format_from_pre0(ccb.pre0);
     ccb.width  = cel_width_from_pre1(ccb.pre1);
     ccb.height = cel_height_from_pre0(ccb.pre0);
+    ccb.fetch_end_address = cursor;
 
     return ccb;
 }
@@ -1217,13 +1284,12 @@ void Madam::plot_texel(const Ccb& ccb, s32 px, s32 py, s32 step_x, s32 step_y,
 // One source pixel of a rotated or perspective-stepped cel, which lands as a
 // four-sided figure rather than a rectangle.
 //
-// Filled by scanlines, finding where the figure's edges cross each row. Two
-// details are load-bearing. The first is that an edge is recorded with the
-// direction it was crossed in, and a span is only filled when that direction
-// matches a winding the cel permits - which is how a cel folded over on itself
-// draws its front and not its back. The second is that a figure may be crossed
-// four times on one row rather than twice, and both spans have to be filled or
-// a bowtie loses half of itself.
+// Filled by a conventional active-edge scan conversion. Each non-horizontal
+// edge contributes on [min_y,max_y), the usual top-inclusive/bottom-exclusive
+// rule that lets adjacent texels share an edge without both painting it. Edge
+// direction retains the CCB's clockwise/counter-clockwise face selection. A
+// folded quad can yield four crossings, so sorted crossings are consumed in
+// pairs rather than assuming every row has exactly one span.
 void Madam::plot_quad(const Ccb& ccb, s32 ax, s32 ay, s32 bx, s32 by,
                       s32 cx, s32 cy, s32 dx, s32 dy, u16 pixel, u16 shade) {
     ax >>= 16; bx >>= 16; cx >>= 16; dx >>= 16;
@@ -1235,7 +1301,6 @@ void Madam::plot_quad(const Ccb& ccb, s32 ax, s32 ay, s32 bx, s32 by,
     }
 
     const s32 max_x = static_cast<s32>(clip_width_);
-    s32 max_y = static_cast<s32>(clip_height_);
 
     s32 lowest = ay;
     s32 highest = ay;
@@ -1243,42 +1308,43 @@ void Madam::plot_quad(const Ccb& ccb, s32 ax, s32 ay, s32 bx, s32 by,
         if (v < lowest) lowest = v;
         if (v > highest) highest = v;
     }
-    if (highest < max_y) {
-        max_y = highest;
-    }
+    const s32 first_y = lowest < 0 ? 0 : lowest;
+    const s32 last_y = highest < static_cast<s32>(clip_height_)
+                           ? highest
+                           : static_cast<s32>(clip_height_);
 
     const s32 xs[4] = {ax, bx, cx, dx};
     const s32 ys[4] = {ay, by, cy, dy};
 
-    for (s32 y = lowest < 0 ? 0 : lowest; y < max_y; ++y) {
-        s32 crossing[4] = {};
-        int downward[4] = {};
+    struct Crossing { s32 x; bool downward; };
+    for (s32 y = first_y; y < last_y; ++y) {
+        Crossing crossing[4] = {};
         int count = 0;
 
-        // Each edge in turn, and then the closing edge only if an odd number
-        // of crossings says the figure has not been closed yet.
-        for (int edge = 0; edge < 4 && (edge < 3 || (count & 1)); ++edge) {
+        for (int edge = 0; edge < 4; ++edge) {
             const int from = edge;
             const int to = (edge + 1) & 3;
-            if (y >= ys[from] && y < ys[to]) {
-                crossing[count] = (xs[to] - xs[from]) * (y - ys[from]) /
-                                      (ys[to] - ys[from]) + xs[from];
-                downward[count] = 1;
-                if (edge < 3) ++count;
-            } else if (y >= ys[to] && y < ys[from]) {
-                crossing[count] = (xs[from] - xs[to]) * (y - ys[to]) /
-                                      (ys[from] - ys[to]) + xs[to];
-                downward[count] = 0;
-                if (edge < 3) ++count;
-            }
+            if (ys[from] == ys[to]) continue;
+            const s32 min_y = ys[from] < ys[to] ? ys[from] : ys[to];
+            const s32 max_edge_y = ys[from] < ys[to] ? ys[to] : ys[from];
+            if (y < min_y || y >= max_edge_y) continue;
+
+            const s64 numerator = static_cast<s64>(xs[to] - xs[from]) *
+                                  static_cast<s64>(y - ys[from]);
+            crossing[count++] = {
+                xs[from] + static_cast<s32>(numerator / (ys[to] - ys[from])),
+                ys[to] > ys[from],
+            };
         }
 
-        if (count == 0) {
-            continue;
-        }
-        if (crossing[0] > crossing[1]) {
-            const s32 t = crossing[0]; crossing[0] = crossing[1]; crossing[1] = t;
-            const int u = downward[0]; downward[0] = downward[1]; downward[1] = u;
+        for (int i = 1; i < count; ++i) {
+            const Crossing value = crossing[i];
+            int j = i;
+            while (j > 0 && crossing[j - 1].x > value.x) {
+                crossing[j] = crossing[j - 1];
+                --j;
+            }
+            crossing[j] = value;
         }
 
         const auto permitted = [&](int direction) {
@@ -1293,11 +1359,10 @@ void Madam::plot_quad(const Ccb& ccb, s32 ax, s32 ay, s32 bx, s32 by,
             }
         };
 
-        if (count > 2 && permitted(downward[2])) {
-            fill(crossing[2], crossing[3]);
-        }
-        if (permitted(downward[0])) {
-            fill(crossing[0], crossing[1]);
+        for (int i = 0; i + 1 < count; i += 2) {
+            if (permitted(crossing[i].downward ? 1 : 0)) {
+                fill(crossing[i].x, crossing[i + 1].x);
+            }
         }
     }
 }
@@ -1427,6 +1492,15 @@ void Madam::draw_packed_cel(const Ccb& ccb) {
             if (type == 2) {
                 px += step_x * static_cast<s32>(count);
                 py += step_y * static_cast<s32>(count);
+                // The arbitrary mapper tracks both the top and bottom edge of
+                // each source texel. A transparent packet consumes source
+                // columns just like a literal packet, so both edges must move
+                // past them. Advancing only the top edge makes the next
+                // visible texel span backwards across the transparent run;
+                // rotated packed sprites then fan out into horizontal strips
+                // (the leaned rider in Road Rash is a direct example).
+                down_x += next_step_x * static_cast<s32>(count);
+                down_y += next_step_y * static_cast<s32>(count);
                 continue;
             }
             if (type == 3) {
@@ -1495,18 +1569,15 @@ void Madam::draw_packed_cel(const Ccb& ccb) {
 // it too. Sending these down the ordinary literal path reads the source as a
 // flat bitstream, so every row comes out of the wrong place.
 //
-// Two things differ from a literal cel, and both follow from the interleave:
-// the height field counts PAIRS of lines, so the real height is twice it plus
-// two; and a pixel is addressed rather than streamed, because consecutive
-// pixels of one line are four bytes apart and the odd lines live in the upper
-// half of each word.
+// The official guide defines the storage directly: VCNT counts row pairs, and
+// each 32-bit source word is [row 2n pixel x, row 2n+1 pixel x]. Work in those
+// pairs here instead of adapting the ordinary row-stream decoder.
 void Madam::draw_lr_cel(const Ccb& ccb) {
     const u32 stride_words = (ccb.pre1 >> 16) & 0x3ffu;
-    const u32 row_bytes = (stride_words + 2u) << 2;
-
-    // The height field counts line pairs here, not lines.
-    const u32 height = (((ccb.pre0 >> kPre0HeightShift) & kPre0HeightMask) << 1) + 2u;
-    if (height > kMaxCelDimension) {
+    const u32 pair_stride = (stride_words + 2u) * sizeof(u32);
+    const u32 pair_count =
+        ((ccb.pre0 >> kPre0HeightShift) & kPre0HeightMask) + 1u;
+    if (pair_count * 2u > kMaxCelDimension) {
         return;
     }
 
@@ -1515,41 +1586,38 @@ void Madam::draw_lr_cel(const Ccb& ccb) {
     s32 step_x = ccb.hdx;
     s32 step_y = ccb.hdy;
 
-    for (u32 row = 0; row < height; ++row) {
-        s32 px = row_x;
-        s32 py = row_y;
-        // Where the matching pixel of the NEXT row lands, and the step that
-        // row will use. The rotated mapper needs both to know the shape one
-        // source pixel covers; the others ignore them.
-        const s32 next_step_x = step_x + ccb.hddx;
-        const s32 next_step_y = step_y + ccb.hddy;
-        s32 down_x = row_x + ccb.vdx;
-        s32 down_y = row_y + ccb.vdy;
+    for (u32 pair = 0; pair < pair_count; ++pair) {
+        const u32 pair_base = ccb.source_address + pair * pair_stride;
+        for (u32 half = 0; half < 2; ++half) {
+            s32 px = row_x;
+            s32 py = row_y;
+            const s32 next_step_x = step_x + ccb.hddx;
+            const s32 next_step_y = step_y + ccb.hddy;
+            s32 down_x = row_x + ccb.vdx;
+            s32 down_y = row_y + ccb.vdy;
 
-        for (u32 column = 0; column < ccb.width; ++column) {
-            const u32 at = ccb.source_address +
-                           lr_source_offset(static_cast<s32>(column),
-                                            static_cast<s32>(row), row_bytes);
-            const u32 value =
-                (static_cast<u32>(bus_.read8(at)) << 8) | bus_.read8(at + 1);
+            for (u32 column = 0; column < ccb.width; ++column) {
+                const u32 at = pair_base + column * sizeof(u32) + half * sizeof(u16);
+                const u16 source_pixel = bus_.read16(at);
 
-            u16 shade = 0;
-            bool clear = false;
-            const u16 pixel = decode_pixel(value, &shade, &clear);
-            if (!clear) {
-                plot_texel(ccb, px, py, step_x, step_y, down_x, down_y,
-                           next_step_x, next_step_y, pixel, shade);
+                u16 shade = 0;
+                bool clear = false;
+                const u16 pixel = decode_pixel(source_pixel, &shade, &clear);
+                if (!clear) {
+                    plot_texel(ccb, px, py, step_x, step_y, down_x, down_y,
+                               next_step_x, next_step_y, pixel, shade);
+                }
+                px += step_x;
+                py += step_y;
+                down_x += next_step_x;
+                down_y += next_step_y;
             }
-            px += step_x;
-            py += step_y;
-            down_x += next_step_x;
-            down_y += next_step_y;
-        }
 
-        row_x += ccb.vdx;
-        row_y += ccb.vdy;
-        step_x += ccb.hddx;
-        step_y += ccb.hddy;
+            row_x += ccb.vdx;
+            row_y += ccb.vdy;
+            step_x += ccb.hddx;
+            step_y += ccb.hddy;
+        }
     }
 
     ++stats_.cels_drawn;
@@ -1621,8 +1689,9 @@ void Madam::draw_unpacked_cel(const Ccb& ccb) {
 // CCB's own pair of flags directly.
 namespace {
 u32 texel_winding(s64 hdx, s64 hdy, s64 vdx, s64 vdy) {
-    return (((hdx + vdx) * (hdy - vdy) + vdx * vdy - hdx * hdy) < 0) ? kCcbAccw
-                                                                     : kCcbAcw;
+    // Sign of the 2-D cross product. In screen coordinates +Y points down, so
+    // a positive determinant is the hardware's counter-clockwise permission.
+    return (hdx * vdy - hdy * vdx) > 0 ? kCcbAccw : kCcbAcw;
 }
 }  // namespace
 
@@ -1727,13 +1796,14 @@ bool Madam::quad_is_wrong_way_round(const Ccb& ccb, s32 wide) const {
         return false;
     }
 
-    // Single precision, as the hardware model uses: the products here are
-    // large enough that widening them would change which side of zero some
-    // corners land on.
-    const float w = static_cast<float>(wide);
-    const float h = static_cast<float>(ccb.height);
-    const auto add = [](s32 base, s32 delta, float count) {
-        return static_cast<s64>(base + static_cast<s64>(delta * count));
+    // P(x,y) = origin + x*(H + y*DD) + y*V. The local horizontal and
+    // vertical tangents therefore change as H+y*DD and V+x*DD. Test their
+    // cross product at all four corners; if the signs disagree the surface is
+    // folded and cannot be rejected as one back-facing quad.
+    const s64 w = wide;
+    const s64 h = ccb.height;
+    const auto add = [](s32 base, s32 delta, s64 count) {
+        return static_cast<s64>(base) + static_cast<s64>(delta) * count;
     };
 
     const u32 first = texel_winding(ccb.hdx, ccb.hdy, ccb.vdx, ccb.vdy);
@@ -1749,8 +1819,8 @@ bool Madam::quad_is_wrong_way_round(const Ccb& ccb, s32 wide) const {
     }
     if (first != texel_winding(add(ccb.hdx, ccb.hddx, h),
                                add(ccb.hdy, ccb.hddy, h),
-                               add(ccb.vdx, ccb.hddx, h * w),
-                               add(ccb.vdy, ccb.hddy, h * w))) {
+                               add(ccb.vdx, ccb.hddx, w),
+                               add(ccb.vdy, ccb.hddy, w))) {
         return false;
     }
 
@@ -1766,7 +1836,6 @@ void Madam::draw_cel(const Ccb& ccb) {
     if (ccb.width > kMaxCelDimension || ccb.height > kMaxCelDimension) {
         return;
     }
-    begin_cel(ccb);
     if (cel_is_invisible(ccb, (ccb.flags & kCcbPacked) != 0)) {
         return;
     }
@@ -1801,14 +1870,6 @@ void Madam::draw_cel(const Ccb& ccb) {
     }
 }
 
-// Walk from NEXTCCB, which is where the hardware starts and where it leaves
-// off. The walk consumes NEXTCCB as it goes, so software that starts the
-// engine twice without reloading it draws nothing the second time - which is
-// what the hardware does.
-void Madam::run_cel_engine() {
-    render_cel_list(next_ccb_);
-}
-
 namespace {
 
 // The walk, one line per cel, off unless CELLOG names a file.
@@ -1822,73 +1883,111 @@ std::FILE* const g_cel_log = [] {
 }();
 }  // namespace
 
-void Madam::render_cel_list(u32 address) {
+void Madam::begin_cel_walk(u32 address) {
     stats_ = MadamStats{};
     ++engine_runs_;
+    cel_walk_started_ = true;
+    next_ccb_ = address;
     if (g_cel_log != nullptr) {
         std::fprintf(g_cel_log, "RUN %llu head=%06X wbase=%06X rbase=%06X wstride=%d\n",
                      (unsigned long long)engine_runs_, address,
                      write_base_, read_base_, write_stride_);
     }
+}
 
-    if (address == 0) {
-        return;
+// Consume one CCB. Keeping this as a single-list-element primitive makes the
+// DMA cursor, inheritance and termination rules testable without treating a
+// CCB boundary as permission for the ARM to take the shared data bus.
+bool Madam::step_cel_walk() {
+    if (next_ccb_ == 0) {
+        return false;
+    }
+    if (stats_.cels_walked >= kMaxCels) {
+        stats_.list_truncated = 1;
+        return false;
     }
 
-    next_ccb_ = address;
-    while (stats_.cels_walked < kMaxCels) {
-        current_ccb_ = next_ccb_;
-        const Ccb ccb = read_ccb(current_ccb_);
-        ++stats_.cels_walked;
-        next_ccb_ = ccb.next_address;
+    const u32 ccb_address = next_ccb_;
+    current_ccb_ = ccb_address;
+    const Ccb ccb = read_ccb(ccb_address);
+    current_ccb_ = ccb.fetch_end_address;
+    ++stats_.cels_walked;
+    next_ccb_ = ccb.next_address;
+    if (g_cel_log != nullptr) {
+        if (stats_.cels_walked <= 3) {
+            std::fprintf(g_cel_log, "    RAW");
+            for (u32 w = 0; w < 17; ++w) {
+                std::fprintf(g_cel_log, " %08X", bus_.read32(ccb_address + w * 4));
+            }
+            std::fprintf(g_cel_log, "\n");
+        }
+        std::fprintf(g_cel_log,
+                     "CCB %06X flags=%08X pre0=%08X pre1=%08X next=%06X "
+                     "src=%06X %ux%u\n",
+                     ccb_address, ccb.flags, ccb.pre0, ccb.pre1, next_ccb_,
+                     ccb.source_address, ccb.width, ccb.height);
+    }
+
+    // SKIP suppresses projection, not CCB loading. The official CCB load bits
+    // update the shared decoder/projector state first, allowing an invisible
+    // CCB to prepare a compact follower.
+    const bool valid_cel = ccb.format != CelFormat::Unknown &&
+                           ccb.width != 0 && ccb.height != 0 &&
+                           ccb.width <= kMaxCelDimension &&
+                           ccb.height <= kMaxCelDimension;
+    if (valid_cel) {
+        begin_cel(ccb);
+    }
+
+    if ((ccb.flags & kCcbSkip) == 0) {
+        const u32 before = stats_.cels_drawn;
+        const u64 before_pixels = stats_.pixels_written;
+        const bool culled = cel_is_invisible(ccb, (ccb.flags & kCcbPacked) != 0);
+        draw_cel(ccb);
+        total_cels_drawn_ += stats_.cels_drawn - before;
         if (g_cel_log != nullptr) {
-            if (stats_.cels_walked <= 3) {
-                std::fprintf(g_cel_log, "    RAW");
-                for (u32 w = 0; w < 17; ++w) {
-                    std::fprintf(g_cel_log, " %08X", bus_.read32(current_ccb_ + w * 4));
-                }
-                std::fprintf(g_cel_log, "\n");
-            }
             std::fprintf(g_cel_log,
-                         "CCB %06X flags=%08X pre0=%08X pre1=%08X next=%06X "
-                         "src=%06X %ux%u\n",
-                         current_ccb_, ccb.flags, ccb.pre0, ccb.pre1, next_ccb_,
-                         ccb.source_address, ccb.width, ccb.height);
-        }
-
-        if ((ccb.flags & kCcbSkip) == 0) {
-            const u32 before = stats_.cels_drawn;
-            const u64 before_pixels = stats_.pixels_written;
-            const bool culled = cel_is_invisible(ccb, (ccb.flags & kCcbPacked) != 0);
-            draw_cel(ccb);
-            total_cels_drawn_ += stats_.cels_drawn - before;
-            if (g_cel_log != nullptr) {
-                std::fprintf(g_cel_log,
-                             "    drew=%u pixels=%llu packed=%d fmt=%d cull=%d "
-                             "at=%d,%d hd=%d,%d vd=%d,%d hdd=%d,%d\n",
-                             stats_.cels_drawn - before,
-                             (unsigned long long)(stats_.pixels_written - before_pixels),
-                             (ccb.flags & kCcbPacked) != 0 ? 1 : 0,
-                             static_cast<int>(ccb.format),
-                             culled ? 1 : 0,
-                             ccb.x >> 16, ccb.y >> 16,
-                             ccb.hdx, ccb.hdy, ccb.vdx, ccb.vdy,
-                             ccb.hddx, ccb.hddy);
-            }
-        }
-
-        if (ccb.flags & kCcbLast) {
-            return;
-        }
-        if (next_ccb_ == 0 || next_ccb_ == current_ccb_) {
-            return;
+                         "    drew=%u pixels=%llu packed=%d fmt=%d cull=%d "
+                         "at=%d,%d hd=%d,%d vd=%d,%d hdd=%d,%d\n",
+                         stats_.cels_drawn - before,
+                         (unsigned long long)(stats_.pixels_written - before_pixels),
+                         (ccb.flags & kCcbPacked) != 0 ? 1 : 0,
+                         static_cast<int>(ccb.format),
+                         culled ? 1 : 0,
+                         ccb.x >> 16, ccb.y >> 16,
+                         ccb.hdx, ccb.hdy, ccb.vdx, ccb.vdy,
+                         ccb.hddx, ccb.hddy);
         }
     }
 
-    // Ran out of patience rather than reaching the end. Recorded rather than
-    // silently ignored: a truncated list is the difference between "this game
-    // draws nothing" and "this game draws most of a frame".
-    stats_.list_truncated = 1;
+    if ((ccb.flags & kCcbLast) != 0 || next_ccb_ == 0 || next_ccb_ == ccb_address) {
+        return false;
+    }
+    if (stats_.cels_walked >= kMaxCels) {
+        stats_.list_truncated = 1;
+        return false;
+    }
+    return true;
+}
+
+// Walk a complete list for focused rendering tests.
+void Madam::render_cel_list(u32 address) {
+    begin_cel_walk(address);
+    while (step_cel_walk()) {}
+    cel_walk_started_ = false;
+}
+
+// Walk from NEXTCCB while the CEL owns the data bus. The start itself is
+// deferred until the triggering ARM instruction completes, but once DMA has
+// begun the ARM cannot interleave ordinary memory instructions between CCBs.
+void Madam::run_cel_engine() {
+    if (cel_engine_state_ != CelEngineState::InProcess) return;
+    if (!cel_walk_started_) begin_cel_walk(next_ccb_);
+
+    while (step_cel_walk()) {}
+    cel_engine_state_ = CelEngineState::Idle;
+    cel_walk_started_ = false;
+    bus_.cancel_cel_engine();
 }
 
 }  // namespace retro3do

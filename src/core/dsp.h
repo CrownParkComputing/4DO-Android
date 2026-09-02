@@ -96,8 +96,19 @@ private:
     u16  read(u32 address);
     void write(u32 address, u16 value);
 
-    u16  load_one_operand();
-    void load_operands(int requested);
+    struct OperandGroup {
+        std::array<u16, 3> values{};
+        u8 count = 0;
+        u16 destination = 0;
+        u16 marked_destination = 0;
+    };
+
+    u16 next_program_word();
+    u16 mapped_register(u32 reg) const;
+    u16 operand_value(u16 address, bool indirect);
+    u16 move_source();
+    OperandGroup decode_operand_group(u16 word);
+    void gather_arithmetic_operands(unsigned requested);
 
     // A pass runs until SLEEP, so the program's own structure bounds it - but
     // a program with a loop and no SLEEP would spin for ever inside one audio

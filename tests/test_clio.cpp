@@ -166,6 +166,39 @@ TEST(clio_registers_are_reachable_through_the_bus) {
     CHECK_EQ(c.bus.read32(kClioBase + kClioIrq0Pending), kTimer3Irq);
 }
 
+TEST(clio_reports_a_fixed_read_only_hardware_revision) {
+    Chip c;
+    CHECK_EQ(c.clio.read(kClioRevision), 0x02020000u);
+    c.clio.write(kClioRevision, 0xdeadbeefu);
+    CHECK_EQ(c.clio.read(kClioRevision), 0x02020000u);
+    c.clio.reset();
+    CHECK_EQ(c.clio.read(kClioRevision), 0x02020000u);
+}
+
+TEST(ordinary_low_clio_registers_latch_and_reset_as_read_write_hardware) {
+    Chip c;
+    const struct {
+        u32 offset;
+        u32 value;
+    } registers[] = {
+        {kClioAudioIn,  0x10203040u},
+        {kClioAudioOut, 0x21314151u},
+        {kClioSpare,    0x32425262u},
+        {kClioHDelay,   0x43536373u},
+        {kClioAdbctl,   0x54647484u},
+    };
+
+    for (const auto& reg : registers) {
+        c.clio.write(reg.offset, reg.value);
+        CHECK_EQ(c.clio.read(reg.offset), reg.value);
+    }
+
+    c.clio.reset();
+    for (const auto& reg : registers) {
+        CHECK_EQ(c.clio.read(reg.offset), 0u);
+    }
+}
+
 // ---------------------------------------------------------------------------
 // Video timing
 // ---------------------------------------------------------------------------
@@ -185,6 +218,26 @@ TEST(the_line_counter_advances_and_wraps) {
     }
     CHECK(c.clio.field_complete());
     CHECK(c.clio.scanline() < 263u);
+}
+
+TEST(the_scanline_callback_runs_at_each_horizontal_blank) {
+    Chip c;
+    struct Seen {
+        u32 count = 0;
+        u32 line = 0;
+    } seen;
+    c.clio.set_scanline_handler(
+        [](void* context, u32 line) {
+            Seen* value = static_cast<Seen*>(context);
+            ++value->count;
+            value->line = line;
+        },
+        &seen);
+
+    c.clio.set_scanlines_per_field(263);
+    c.clio.tick(800);
+    CHECK_EQ(seen.count, 1u);
+    CHECK_EQ(seen.line, 1u);
 }
 
 TEST(a_configured_scanline_raises_the_vertical_blank_interrupt) {
@@ -328,12 +381,23 @@ TEST(a_reset_silences_everything) {
     c.clio.write(kClioIrq0Enable, kIrqVerticalBlank0);
     c.clio.raise(kIrqVerticalBlank0);
     c.clio.write(kClioTimerConfigSet0, timer_config(3, kTimerDecrement));
+    c.clio.write(kClioControl, 0x22u);
+    c.clio.write(kClioXbusSelect, 7u);
+    c.clio.write(kClioXbusDirection, 0x280u);
+    c.clio.write(kClioXbusType0, 0x1234u);
+    c.clio.write(kClioDmaRequestSet, kClioDmaXbusBit);
 
     c.clio.reset();
 
     CHECK_EQ(c.clio.read(kClioIrq0Pending), 0u);
     CHECK_EQ(c.clio.read(kClioIrq0Enable) & ~kIrqSecondaryBank, 0u);
     CHECK_EQ(c.clio.read(kClioTimerConfigSet0), 0u);
+    CHECK_EQ(c.clio.read(kClioControl), 0u);
+    CHECK_EQ(c.clio.read(kClioXbusSelect), 0u);
+    CHECK_EQ(c.clio.read(kClioXbusDirection), 0u);
+    CHECK_EQ(c.clio.read(kClioXbusType0), 0u);
+    CHECK_EQ(c.clio.read(kClioDmaRequestClear), 0u);
+    CHECK(!c.clio.xbus_dma_requested());
     CHECK_EQ(c.clio.scanline(), 0u);
 }
 
@@ -596,11 +660,10 @@ TEST(read_capacity_reports_the_lead_out_in_msf) {
     const u32 m = c.clio.read(kClioXbusCommand);
     const u32 s = c.clio.read(kClioXbusCommand);
     c.clio.read(kClioXbusCommand);                       // frames
-    // An empty drive still answers. Its lead-out is the two-second pre-gap
-    // twice over: once from the MSF conversion and once because the total
-    // carries the gap on top of it.
+    // An empty drive still answers. LBA zero is MSF 00:02:00, so the lead-in is
+    // present once. The sector count itself already names the lead-out.
     CHECK_EQ(m, 0u);
-    CHECK_EQ(s, 4u);
+    CHECK_EQ(s, 2u);
 }
 
 TEST(a_read_transfers_sector_bytes_through_the_data_fifo) {

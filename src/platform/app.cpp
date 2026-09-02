@@ -2,7 +2,8 @@
 
 #include <SDL3/SDL.h>
 
-#include <cstring>
+#include <algorithm>
+#include <cctype>
 
 #include "core/console.h"
 #include "core/frame_mailbox.h"
@@ -17,47 +18,64 @@
 namespace retro3do {
 namespace {
 
+#if defined(__ANDROID__)
+extern "C" bool retro3do_configure_vulkan_driver(
+    const char* private_directory, const char* native_library_directory,
+    const char* driver_directory, const char* driver_library);
+#endif
+
 constexpr int kDefaultWindowWidth  = 1280;
-constexpr int kDefaultWindowHeight = 960;
-
-// Fill VRAM with a colour ramp and build a one-entry display list over it, so
-// the machine draws something without a BIOS. This goes through the real bus
-// and the real VDLP: if it appears, the whole video path works.
-void write_test_pattern(Console& console) {
-    Bus& bus = console.bus();
-    const Frame frame = console.framebuffer();
-
-    for (int y = 0; y < frame.height; ++y) {
-        for (int x = 0; x < frame.width; ++x) {
-            const unsigned r = static_cast<unsigned>(x * 31 / (frame.width - 1));
-            const unsigned g = static_cast<unsigned>(y * 31 / (frame.height - 1));
-            const unsigned b = 31u - r;
-            const u16 pixel = static_cast<u16>((r << 10) | (g << 5) | b);
-
-            const u32 offset = static_cast<u32>(y * frame.width + x) * 2u;
-            bus.write16(kVramBase + offset, pixel);
-        }
-    }
-
-    // A display list in DRAM pointing at the start of VRAM.
-    const u32 list = 0x1000u;
-    bus.write32(list + 0, static_cast<u32>(frame.height));
-    bus.write32(list + 4, kVramBase);
-    bus.write32(list + 8, kVramBase);
-    bus.write32(list + 12, 0);
-    console.vdlp().set_list_address(list);
-}
+constexpr int kDefaultWindowHeight = 720;
 
 // One NVRAM, shared by every title, exactly as a console has one. Keeping a
 // separate image per disc would be tidier to reason about, but it is not what
 // the hardware does and it would break the titles that read each other's saves.
 constexpr const char* kNvramFile = "nvram.bin";
 
+std::string library_key(int index, const std::string& field) {
+    return "library." + std::to_string(index) + "." + field;
+}
+
+std::string lowercased(std::string text) {
+    std::transform(text.begin(), text.end(), text.begin(), [](unsigned char c) {
+        return static_cast<char>(std::tolower(c));
+    });
+    return text;
+}
+
+bool has_disc_extension(const std::string& name) {
+    const std::string lower = lowercased(name);
+    static constexpr const char* kExtensions[] = {
+        ".chd", ".iso", ".bin", ".cue", ".img"
+    };
+    for (const char* extension : kExtensions) {
+        const size_t length = std::char_traits<char>::length(extension);
+        if (lower.size() > length &&
+            lower.compare(lower.size() - length, length, extension) == 0) {
+            return true;
+        }
+    }
+    return false;
+}
+
+bool has_bios_extension(const std::string& name, bool allow_bin) {
+    const std::string lower = lowercased(name);
+    if (lower.size() > 4 && lower.compare(lower.size() - 4, 4, ".rom") == 0) {
+        return true;
+    }
+    return allow_bin && lower.size() > 4 &&
+           lower.compare(lower.size() - 4, 4, ".bin") == 0;
+}
+
 }  // namespace
 
 App::App() = default;
 
 App::~App() {
+    if (lifecycle_watch_registered_) {
+        SDL_RemoveEventWatch(&App::lifecycle_event_watch, this);
+        lifecycle_watch_registered_ = false;
+    }
     // Stop emulating before anything it touches goes away.
     if (settings_ && touch_ && console_) {
         save_settings();
@@ -90,6 +108,49 @@ bool App::init() {
         last_error_ = std::string("SDL could not start: ") + SDL_GetError();
         return false;
     }
+    lifecycle_watch_registered_ =
+        SDL_AddEventWatch(&App::lifecycle_event_watch, this);
+
+    // Renderer selection is a start-up decision, so read just the flat
+    // settings file before a window exists. load_settings() runs later once
+    // the UI and machine are available and fills in everything else.
+    settings_ = std::make_unique<Settings>();
+    settings_->load(Storage::join(Storage::writable_directory(), "settings.cfg"));
+
+    const std::string requested_renderer =
+        settings_->get(settings_key::kRendererBackend, "auto");
+    std::string render_hint = requested_renderer == "vulkan" ? "vulkan" : "";
+
+#if defined(__ANDROID__)
+    const std::string driver_directory =
+        settings_->get(settings_key::kGpuDriverDirectory);
+    const std::string driver_library =
+        settings_->get(settings_key::kGpuDriverLibrary);
+    const bool custom_driver =
+        !driver_directory.empty() && !driver_library.empty() &&
+        Storage::exists(Storage::join(driver_directory, driver_library));
+    if (custom_driver) {
+        const std::string native_libraries =
+            AndroidStorage::native_library_directory();
+        const std::string private_storage = Storage::writable_directory();
+        if (retro3do_configure_vulkan_driver(
+                private_storage.c_str(), native_libraries.c_str(),
+                driver_directory.c_str(), driver_library.c_str())) {
+            SDL_SetHint(SDL_HINT_VULKAN_LIBRARY,
+                        Storage::join(native_libraries,
+                                      "libretro3do_vulkan_loader.so").c_str());
+            render_hint = "vulkan";
+        } else {
+            renderer_startup_message_ =
+                "Custom driver unavailable; using the system renderer";
+        }
+    } else if (!driver_directory.empty() || !driver_library.empty()) {
+        renderer_startup_message_ =
+            "Imported driver files are missing; using the system renderer";
+    }
+#endif
+
+    if (!render_hint.empty()) SDL_SetHint(SDL_HINT_RENDER_DRIVER, render_hint.c_str());
 
     // On a phone or tablet there is no window to size — SDL gives us the
     // display. Asking for a resizable window is harmless there and correct on
@@ -100,26 +161,57 @@ bool App::init() {
     SDL_WindowFlags flags = SDL_WINDOW_HIGH_PIXEL_DENSITY;
 #if defined(__ANDROID__) || defined(__APPLE__)
     flags |= SDL_WINDOW_FULLSCREEN;
-#else
+#elif !defined(__linux__)
     flags |= SDL_WINDOW_RESIZABLE;
 #endif
 
     if (!SDL_CreateWindowAndRenderer("Retro-3DO", kDefaultWindowWidth,
-                                     kDefaultWindowHeight, flags,
-                                     &window_, &renderer_)) {
-        last_error_ = std::string("Could not create a window: ") + SDL_GetError();
-        return false;
+                                     kDefaultWindowHeight, flags, &window_,
+                                     &renderer_)) {
+        const std::string requested_error = SDL_GetError();
+        if (!render_hint.empty()) {
+            // A bad third-party driver must never strand the user outside the
+            // app. Fall back to SDL's platform choice and report it on System.
+            SDL_ResetHint(SDL_HINT_RENDER_DRIVER);
+            SDL_ResetHint(SDL_HINT_VULKAN_LIBRARY);
+            if (SDL_CreateWindowAndRenderer("Retro-3DO", kDefaultWindowWidth,
+                                            kDefaultWindowHeight, flags,
+                                            &window_, &renderer_)) {
+                renderer_startup_message_ =
+                    "Vulkan failed; using automatic renderer (" +
+                    requested_error + ")";
+            }
+        }
+        if (renderer_ == nullptr) {
+            last_error_ = std::string("Could not create a window: ") + SDL_GetError();
+            return false;
+        }
     }
+    actual_renderer_ = SDL_GetRendererName(renderer_) != nullptr
+                           ? SDL_GetRendererName(renderer_)
+                           : "unknown";
+    SDL_Log("Renderer: %s", actual_renderer_.c_str());
 
-    // Present without waiting on vblank. The emulator paces itself from its own
-    // frame budget; letting the present block would put the display's refresh
-    // rate in charge of emulation speed, which is the mistake that made the
-    // previous version stutter on handhelds.
-    SDL_SetRenderVSync(renderer_, 0);
+#if defined(__linux__)
+    // The launcher is deliberately a fixed landscape surface on Linux. A
+    // tiling compositor otherwise squeezes the window until the A-Z strip is
+    // unreadable or clipped, even though the app requested a useful initial
+    // size. Equal minimum and maximum bounds make 1280x720 authoritative.
+    SDL_SetWindowMinimumSize(window_, kDefaultWindowWidth, kDefaultWindowHeight);
+    SDL_SetWindowMaximumSize(window_, kDefaultWindowWidth, kDefaultWindowHeight);
+#endif
+
+    // Synchronise presentation to the panel. Emulation is paced independently
+    // on EmulatorThread, so blocking this UI thread at vblank cannot change the
+    // machine's speed. Leaving vsync disabled made Android submit the same
+    // texture hundreds of times per second and produced visible horizontal
+    // tearing whenever a game panned laterally.
+    if (!SDL_SetRenderVSync(renderer_, 1)) {
+        SDL_Log("Could not enable presentation vsync: %s", SDL_GetError());
+    }
 
     console_ = std::make_unique<Console>();
     mailbox_ = std::make_unique<FrameMailbox>();
-    settings_ = std::make_unique<Settings>();
     touch_ = std::make_unique<TouchPad>();
     emulator_ = std::make_unique<EmulatorThread>(*console_, *mailbox_);
 
@@ -128,6 +220,7 @@ bool App::init() {
         last_error_ = "Could not start the user interface";
         return false;
     }
+    ui_->set_renderer_status(actual_renderer_, renderer_startup_message_);
 
     start_audio();
 
@@ -156,6 +249,12 @@ bool App::init() {
     load_settings();
     load_nvram();
 
+    if (AndroidStorage::available()) {
+        ui_->set_retro_media_status("", 0, 0, false, true,
+                                    "Checking account...");
+        AndroidStorage::begin_retro_media_status();
+    }
+
     emulator_->set_paused(!start_on_launch_);
     emulating_ = start_on_launch_;
     if (start_on_launch_) {
@@ -164,6 +263,97 @@ bool App::init() {
     emulator_->start();
 
     running_ = true;
+    return true;
+}
+
+bool App::lifecycle_event_watch(void* userdata, SDL_Event* event) {
+    auto* app = static_cast<App*>(userdata);
+    switch (event->type) {
+        case SDL_EVENT_WILL_ENTER_BACKGROUND:
+            // SDL's Android pump blocks inside the lifecycle transition and
+            // does not return to tick() until the app is foregrounded again.
+            // Release the Vulkan swapchain here, on SDL's own thread, before
+            // Java destroys the native Surface and before SDL emits RESTORED.
+            app->backgrounded_.store(true, std::memory_order_release);
+            app->suspend_renderer();
+            break;
+        case SDL_EVENT_DID_ENTER_BACKGROUND:
+            app->backgrounded_.store(true, std::memory_order_release);
+            break;
+        case SDL_EVENT_WILL_ENTER_FOREGROUND:
+            // The Android surface has not been recreated yet. Keep rendering
+            // suspended until DID_ENTER_FOREGROUND and a short driver settle
+            // period have both passed.
+            break;
+        case SDL_EVENT_DID_ENTER_FOREGROUND:
+            app->render_resume_after_ms_.store(SDL_GetTicks() + 500u,
+                                               std::memory_order_release);
+            app->backgrounded_.store(false, std::memory_order_release);
+            break;
+        default:
+            break;
+    }
+    return true;
+}
+
+void App::suspend_renderer() {
+    if (renderer_suspended_ || renderer_ == nullptr) return;
+
+    // Android owns the native window surface and destroys it while the app is
+    // in the background. Vulkan swapchain objects must go away before that
+    // surface is reused; retaining SDL's renderer makes the first Present on
+    // return walk stale driver state on some Adreno/Turnip combinations.
+    if (ui_) ui_->suspend_renderer();
+    if (frame_texture_ != nullptr) {
+        SDL_DestroyTexture(frame_texture_);
+        frame_texture_ = nullptr;
+    }
+    texture_width_ = 0;
+    texture_height_ = 0;
+    SDL_DestroyRenderer(renderer_);
+    renderer_ = nullptr;
+    renderer_suspended_ = true;
+}
+
+bool App::resume_renderer() {
+    if (!renderer_suspended_) return renderer_ != nullptr;
+
+    const char* preferred = actual_renderer_.empty()
+                                ? nullptr
+                                : actual_renderer_.c_str();
+    renderer_ = SDL_CreateRenderer(window_, preferred);
+    if (renderer_ == nullptr) {
+        const std::string preferred_error = SDL_GetError();
+        // A custom Vulkan driver may not survive a system surface transition.
+        // Automatic selection keeps the session usable instead of crashing.
+        SDL_ResetHint(SDL_HINT_RENDER_DRIVER);
+        SDL_ResetHint(SDL_HINT_VULKAN_LIBRARY);
+        renderer_ = SDL_CreateRenderer(window_, nullptr);
+        if (renderer_ == nullptr) {
+            last_error_ = "Could not restore the Android renderer: " +
+                          preferred_error + "; fallback: " + SDL_GetError();
+            return false;
+        }
+        renderer_startup_message_ =
+            "Vulkan could not resume; using the system renderer";
+    }
+
+    actual_renderer_ = SDL_GetRendererName(renderer_) != nullptr
+                           ? SDL_GetRendererName(renderer_)
+                           : "unknown";
+    if (!SDL_SetRenderVSync(renderer_, 1)) {
+        SDL_Log("Could not restore presentation vsync: %s", SDL_GetError());
+    }
+    if (ui_ && !ui_->resume_renderer(renderer_)) {
+        last_error_ = "Could not restore the user interface renderer";
+        SDL_DestroyRenderer(renderer_);
+        renderer_ = nullptr;
+        return false;
+    }
+    if (ui_) {
+        ui_->set_renderer_status(actual_renderer_, renderer_startup_message_);
+    }
+    renderer_suspended_ = false;
     return true;
 }
 
@@ -179,9 +369,10 @@ void App::ensure_frame_texture(int width, int height) {
     frame_texture_ = SDL_CreateTexture(renderer_, SDL_PIXELFORMAT_XRGB8888,
                                        SDL_TEXTUREACCESS_STREAMING, width, height);
     if (frame_texture_ != nullptr) {
-        // Nearest keeps the pixels honest; a smoothing filter is a user choice,
-        // not a default.
-        SDL_SetTextureScaleMode(frame_texture_, SDL_SCALEMODE_NEAREST);
+        // The VDLP has already produced the hardware's interpolated 640x480
+        // signal. Linear sampling preserves that graded output when the final
+        // display size is not an integer multiple of it.
+        SDL_SetTextureScaleMode(frame_texture_, SDL_SCALEMODE_LINEAR);
         texture_width_  = width;
         texture_height_ = height;
     }
@@ -195,7 +386,7 @@ void App::handle_events() {
         // Touch controls get first refusal, but only when the UI is not using
         // the pointer: otherwise a tap on a menu would also press a button
         // hiding underneath it.
-        if (!ui_->wants_mouse()) {
+        if (renderer_ != nullptr && !ui_->wants_mouse()) {
             int window_w = 0;
             int window_h = 0;
             SDL_GetRenderOutputSize(renderer_, &window_w, &window_h);
@@ -274,18 +465,24 @@ void App::present() {
                           width * static_cast<int>(sizeof(u32)));
     }
 
-    // Letterbox to the machine's 4:3 output rather than stretching to the
-    // window, which on a phone in landscape would otherwise distort everything.
+    // Fit to the selected presentation shape. 4:3 preserves the machine's
+    // original geometry; 16:9 deliberately fills a modern handheld screen.
     int window_w = 0;
     int window_h = 0;
     SDL_GetRenderOutputSize(renderer_, &window_w, &window_h);
 
-    const float target_aspect = 4.0f / 3.0f;
+    const bool bezel = ui_ != nullptr && ui_->bezel();
+    const bool crt = ui_ != nullptr && ui_->crt_effect();
+    const float target_aspect =
+        ui_ != nullptr && ui_->widescreen() ? 16.0f / 9.0f : 4.0f / 3.0f;
     (void)height;
-    float draw_w = static_cast<float>(window_w);
+    const float bezel_margin =
+        bezel ? static_cast<float>(std::min(window_w, window_h)) * 0.035f : 0.0f;
+    float draw_w = static_cast<float>(window_w) - bezel_margin * 2.0f;
     float draw_h = draw_w / target_aspect;
-    if (draw_h > static_cast<float>(window_h)) {
-        draw_h = static_cast<float>(window_h);
+    const float available_h = static_cast<float>(window_h) - bezel_margin * 2.0f;
+    if (draw_h > available_h) {
+        draw_h = available_h;
         draw_w = draw_h * target_aspect;
     }
 
@@ -295,7 +492,47 @@ void App::present() {
     destination.w = draw_w;
     destination.h = draw_h;
 
+    if (bezel) {
+        const float rim = std::max(5.0f, bezel_margin * 0.72f);
+        SDL_FRect surround{destination.x - rim, destination.y - rim,
+                           destination.w + rim * 2.0f,
+                           destination.h + rim * 2.0f};
+        SDL_SetRenderDrawColor(renderer_, 25, 29, 36, 255);
+        SDL_RenderFillRect(renderer_, &surround);
+        SDL_SetRenderDrawColor(renderer_, 71, 78, 88, 255);
+        SDL_RenderRect(renderer_, &surround);
+        SDL_FRect inner{destination.x - 2.0f, destination.y - 2.0f,
+                        destination.w + 4.0f, destination.h + 4.0f};
+        SDL_SetRenderDrawColor(renderer_, 3, 4, 6, 255);
+        SDL_RenderRect(renderer_, &inner);
+    }
+
     SDL_RenderTexture(renderer_, frame_texture_, nullptr, &destination);
+
+    if (crt) {
+        // Renderer-independent CRT treatment. Keeping it in SDL primitives
+        // gives identical controls on Vulkan, GLES, Metal and desktop GL and
+        // avoids making a custom shader a requirement for correct emulation.
+        SDL_SetRenderDrawBlendMode(renderer_, SDL_BLENDMODE_BLEND);
+        SDL_SetRenderDrawColor(renderer_, 0, 0, 0, 38);
+        const float bottom = destination.y + destination.h;
+        const float right = destination.x + destination.w;
+        for (float y = destination.y + 1.0f; y < bottom; y += 3.0f) {
+            SDL_RenderLine(renderer_, destination.x, y, right, y);
+        }
+        // A restrained dark edge suggests the falloff of a tube without
+        // cropping game pixels or bending HUD text.
+        for (int edge = 0; edge < 4; ++edge) {
+            const float inset = static_cast<float>(edge);
+            SDL_FRect shade{destination.x + inset, destination.y + inset,
+                            destination.w - inset * 2.0f,
+                            destination.h - inset * 2.0f};
+            SDL_SetRenderDrawColor(renderer_, 0, 0, 0,
+                                   static_cast<Uint8>(70 - edge * 12));
+            SDL_RenderRect(renderer_, &shade);
+        }
+        SDL_SetRenderDrawBlendMode(renderer_, SDL_BLENDMODE_NONE);
+    }
 }
 
 
@@ -370,10 +607,41 @@ void App::save_nvram() {
 void App::load_settings() {
     settings_->load(Storage::join(Storage::writable_directory(), "settings.cfg"));
 
+    load_library();
+
+    const std::string bios_folder =
+        settings_->get(settings_key::kBiosFolderPath);
+    const std::string games_folder =
+        settings_->get(settings_key::kGamesFolderPath);
+    ui_->configure_setup(
+        !AndroidStorage::available() ||
+            settings_->get_bool(settings_key::kSetupComplete, false),
+        settings_->get(settings_key::kBiosFolderName), bios_folder,
+        settings_->get(settings_key::kGamesFolderName), games_folder);
+
     console_->set_region(settings_->get_int(settings_key::kRegion, 0) == 1
                              ? Region::Pal
                              : Region::Ntsc);
+    const int cpu_scale = settings_->get_int(settings_key::kCpuScale, 100);
+    console_->set_cpu_scale_percent(cpu_scale == 125 || cpu_scale == 150
+                                        ? static_cast<u32>(cpu_scale)
+                                        : 100u);
     touch_->load_layout(*settings_);
+    ui_->set_performance_visible(
+        settings_->get_bool(settings_key::kPerformanceHud, false));
+    ui_->configure_video(
+        settings_->get(settings_key::kRendererBackend, "auto") == "vulkan" ? 1
+                                                                              : 0,
+        settings_->get_bool(settings_key::kAspectWidescreen, false),
+        settings_->get_bool(settings_key::kBezel, false),
+        settings_->get_bool(settings_key::kCrtEffect, false),
+        settings_->get(settings_key::kGpuDriverName));
+    ui_->set_renderer_status(actual_renderer_, renderer_startup_message_);
+    ui_->configure_retro_media(
+        settings_->get(settings_key::kRetroMediaCardType, "box2d"));
+    ui_->set_retro_media_email_hint(
+        AndroidStorage::retro_media_saved_email());
+    load_retro_media_artwork();
 
     // Remembered files are re-opened, but a failure is not reported as an
     // error: a SAF grant can be revoked and an iOS container is reassigned on
@@ -388,15 +656,24 @@ void App::load_settings() {
                                 ? settings_->get(settings_key::kBiosName)
                                 : Storage::base_name(launch_bios_))) {
             SDL_Log("Reopened BIOS from settings");
-            // Start straight away. Having to press Start on every launch when
-            // the machine already has everything it needs is a chore, and it
-            // means the app looks inert on opening when it is not.
-            start_on_launch_ = true;
+            // Explicit command-line launches remain scriptable. A normal app
+            // launch now opens the game library, which is the useful home
+            // screen once more than one title has been added.
+            start_on_launch_ = !launch_bios_.empty() || !launch_disc_.empty();
         } else {
             SDL_Log("Remembered BIOS is no longer reachable; forgetting it");
             settings_->remove(settings_key::kBiosPath);
             settings_->remove(settings_key::kBiosName);
         }
+    }
+    const std::string remembered_bios_name =
+        lowercased(settings_->get(settings_key::kBiosName));
+    const bool arcade_bios = remembered_bios_name.find("arcade") != std::string::npos ||
+                             remembered_bios_name.find("saot") != std::string::npos;
+    if (AndroidStorage::available() && (!console_->bios_loaded() || arcade_bios) &&
+        !bios_folder.empty()) {
+        use_bios_folder(settings_->get(settings_key::kBiosFolderName),
+                        bios_folder);
     }
 
     const std::string disc = launch_disc_.empty()
@@ -404,19 +681,211 @@ void App::load_settings() {
                                  : launch_disc_;
     ui_->set_remembered_disc(settings_->get(settings_key::kDiscName), disc);
     if (!disc.empty()) {
-        if (!open_disc(disc, launch_disc_.empty()
-                                 ? settings_->get(settings_key::kDiscName)
-                                 : Storage::base_name(launch_disc_))) {
+        const std::string disc_name = launch_disc_.empty()
+                                          ? settings_->get(settings_key::kDiscName)
+                                          : Storage::base_name(launch_disc_);
+        if (!open_disc(disc, disc_name)) {
             settings_->remove(settings_key::kDiscPath);
             settings_->remove(settings_key::kDiscName);
+        } else {
+            // Android's configured games folder owns its library. Desktop has
+            // no SAF setup, so direct opens remain its way to populate cards.
+            if (!AndroidStorage::available()) remember_game(disc_name, disc);
         }
     }
+    if (AndroidStorage::available() && library_.games().empty() &&
+        !games_folder.empty()) {
+        scan_games_folder(settings_->get(settings_key::kGamesFolderName),
+                          games_folder);
+    }
+}
+
+void App::load_library() {
+    persisted_library_count_ =
+        std::clamp(settings_->get_int(settings_key::kLibraryCount, 0), 0, 512);
+    std::vector<LibraryGame> games;
+    games.reserve(static_cast<size_t>(persisted_library_count_));
+    for (int i = 0; i < persisted_library_count_; ++i) {
+        const std::string target = settings_->get(library_key(i, "target"));
+        if (!target.empty()) {
+            LibraryGame game;
+            game.name = settings_->get(library_key(i, "name"));
+            game.target = target;
+            const int disc_count = std::clamp(
+                settings_->get_int(library_key(i, "disc_count"), 0), 0, 32);
+            for (int disc = 0; disc < disc_count; ++disc) {
+                const std::string prefix = "disc_" + std::to_string(disc) + "_";
+                const std::string disc_target =
+                    settings_->get(library_key(i, prefix + "target"));
+                if (disc_target.empty()) continue;
+                game.discs.push_back({
+                    settings_->get(library_key(i, prefix + "name")),
+                    disc_target,
+                    settings_->get_int(library_key(i, prefix + "number"), disc + 1)});
+            }
+            games.push_back(std::move(game));
+        }
+    }
+    library_.replace(games);
+    ui_->set_game_library(library_.games());
+}
+
+void App::save_library() {
+    const int count = static_cast<int>(library_.games().size());
+    const int old_count = persisted_library_count_;
+    for (int i = 0; i < std::max(old_count, count); ++i) {
+        if (i < count) {
+            settings_->set(library_key(i, "name"), library_.games()[i].name);
+            settings_->set(library_key(i, "target"), library_.games()[i].target);
+            const auto& discs = library_.games()[i].discs;
+            const int old_discs = std::clamp(
+                settings_->get_int(library_key(i, "disc_count"), 0), 0, 32);
+            settings_->set_int(library_key(i, "disc_count"),
+                               static_cast<int>(discs.size()));
+            for (int disc = 0;
+                 disc < std::max(old_discs, static_cast<int>(discs.size())); ++disc) {
+                const std::string prefix = "disc_" + std::to_string(disc) + "_";
+                if (disc < static_cast<int>(discs.size())) {
+                    settings_->set(library_key(i, prefix + "name"),
+                                   discs[disc].name);
+                    settings_->set(library_key(i, prefix + "target"),
+                                   discs[disc].target);
+                    settings_->set_int(library_key(i, prefix + "number"),
+                                       discs[disc].number);
+                } else {
+                    settings_->remove(library_key(i, prefix + "name"));
+                    settings_->remove(library_key(i, prefix + "target"));
+                    settings_->remove(library_key(i, prefix + "number"));
+                }
+            }
+        } else {
+            settings_->remove(library_key(i, "name"));
+            settings_->remove(library_key(i, "target"));
+            settings_->remove(library_key(i, "disc_count"));
+        }
+    }
+    settings_->set_int(settings_key::kLibraryCount, count);
+    persisted_library_count_ = count;
+}
+
+void App::load_retro_media_artwork() {
+    if (!ui_) return;
+    ui_->set_retro_media_artwork(
+        AndroidStorage::retro_media_artwork(ui_->retro_media_type()));
+}
+
+void App::remember_game(const std::string& name, const std::string& target) {
+    const std::string friendly = name.empty() ? Storage::base_name(target) : name;
+    library_.add(friendly, target);
+    ui_->set_game_library(library_.games());
+}
+
+void App::use_bios_folder(const std::string& name, const std::string& target) {
+    if (target.empty()) return;
+    settings_->set(settings_key::kBiosFolderPath, target);
+    settings_->set(settings_key::kBiosFolderName, name);
+
+    // A firmware folder commonly contains several regional and arcade ROMs.
+    // Keep the already-working choice when it is in this folder; on a first
+    // install prefer the well-supported retail Panasonic images.
+    std::vector<DocumentEntry> candidates;
+    std::vector<std::pair<std::string, int>> pending{{target, 0}};
+    for (size_t cursor = 0; cursor < pending.size() && cursor < 256; ++cursor) {
+        const auto [folder, depth] = pending[cursor];
+        for (const DocumentEntry& entry : AndroidStorage::list(folder)) {
+            if (entry.is_directory && depth < 6) {
+                pending.emplace_back(entry.uri, depth + 1);
+            } else if (!entry.is_directory) {
+                if (has_bios_extension(entry.name, true)) candidates.push_back(entry);
+            }
+        }
+    }
+    const std::string remembered = settings_->get(settings_key::kBiosPath);
+    auto preference = [&](const DocumentEntry& entry) {
+        const std::string lower = lowercased(entry.name);
+        const bool arcade = lower.find("arcade") != std::string::npos ||
+                            lower.find("saot") != std::string::npos;
+        if (!remembered.empty() && entry.uri == remembered && !arcade) return 0;
+        if (lower == "panafz1.bin") return 1;
+        if (lower == "panafz10.bin") return 2;
+        if (lower.find("panafz") != std::string::npos) return 3;
+        if (lower.size() > 4 && lower.compare(lower.size() - 4, 4, ".rom") == 0) {
+            return 4;
+        }
+        if (lower.find("goldstar") != std::string::npos) return 5;
+        return 10;
+    };
+    std::stable_sort(candidates.begin(), candidates.end(),
+                     [&](const DocumentEntry& a, const DocumentEntry& b) {
+                         return preference(a) < preference(b);
+                     });
+    for (const DocumentEntry& candidate : candidates) {
+        if (!open_bios(candidate.uri, candidate.name)) continue;
+        settings_->set(settings_key::kBiosPath, candidate.uri);
+        settings_->set(settings_key::kBiosName, candidate.name);
+        ui_->set_remembered_bios(candidate.name, candidate.uri);
+        SDL_Log("BIOS found by setup: %s", candidate.name.c_str());
+        break;
+    }
+    save_settings();
+}
+
+void App::scan_games_folder(const std::string& name, const std::string& target) {
+    if (target.empty()) return;
+    settings_->set(settings_key::kGamesFolderPath, target);
+    settings_->set(settings_key::kGamesFolderName, name);
+
+    // The selected folder is authoritative. Rebuilding means deleted or moved
+    // images disappear instead of leaving dead cards behind.
+    library_.replace({});
+    std::vector<std::pair<std::string, int>> pending{{target, 0}};
+    size_t added = 0;
+    for (size_t cursor = 0; cursor < pending.size() && cursor < 1024 && added < 2048;
+         ++cursor) {
+        const auto [folder, depth] = pending[cursor];
+        const std::vector<DocumentEntry> entries = AndroidStorage::list(folder);
+        const bool folder_has_cue = std::any_of(
+            entries.begin(), entries.end(), [](const DocumentEntry& entry) {
+                const std::string lower = lowercased(entry.name);
+                return !entry.is_directory && lower.size() > 4 &&
+                       lower.compare(lower.size() - 4, 4, ".cue") == 0;
+            });
+        for (const DocumentEntry& entry : entries) {
+            if (entry.is_directory) {
+                if (depth < 8) pending.emplace_back(entry.uri, depth + 1);
+                continue;
+            }
+            if (!has_disc_extension(entry.name)) continue;
+            const std::string lower = lowercased(entry.name);
+            if (folder_has_cue && lower.size() > 4 &&
+                lower.compare(lower.size() - 4, 4, ".bin") == 0) {
+                continue;  // the CUE is the game; its BIN files are tracks
+            }
+            if (library_.add(entry.name, entry.uri)) ++added;
+            if (added >= 2048) break;
+        }
+    }
+    ui_->set_game_library(library_.games());
+    save_settings();
+    SDL_Log("Setup library scan added %zu game%s", added, added == 1 ? "" : "s");
 }
 
 void App::save_settings() {
     settings_->set_int(settings_key::kRegion,
                        console_->region() == Region::Pal ? 1 : 0);
+    settings_->set_int(settings_key::kCpuScale,
+                       static_cast<int>(console_->cpu_scale_percent()));
     touch_->save_layout(*settings_);
+    settings_->set_bool(settings_key::kPerformanceHud,
+                        ui_->performance_visible());
+    settings_->set(settings_key::kRendererBackend,
+                   ui_->renderer_backend() == 1 ? "vulkan" : "auto");
+    settings_->set_bool(settings_key::kAspectWidescreen, ui_->widescreen());
+    settings_->set_bool(settings_key::kBezel, ui_->bezel());
+    settings_->set_bool(settings_key::kCrtEffect, ui_->crt_effect());
+    settings_->set(settings_key::kRetroMediaCardType,
+                   ui_->retro_media_type());
+    save_library();
     settings_->save();
 }
 
@@ -439,7 +908,9 @@ bool App::start_audio() {
         SDL_Log("Audio unavailable, continuing silently: %s", SDL_GetError());
         return false;
     }
-    SDL_ResumeAudioStreamDevice(audio_stream_);
+    // Prime the stream before starting it. Feeding invented silence to reach
+    // the target made startup and mode changes appear as audio underruns.
+    audio_started_ = false;
     return true;
 }
 
@@ -448,6 +919,7 @@ void App::stop_audio() {
         SDL_DestroyAudioStream(audio_stream_);
         audio_stream_ = nullptr;
     }
+    audio_started_ = false;
 }
 
 void App::feed_audio() {
@@ -460,19 +932,30 @@ void App::feed_audio() {
     constexpr int kTargetQueuedBytes =
         static_cast<int>(kAudioSampleRate / 30) * static_cast<int>(sizeof(StereoSample));
 
-    const int queued = SDL_GetAudioStreamQueued(audio_stream_);
+    int queued = SDL_GetAudioStreamQueued(audio_stream_);
     if (queued >= kTargetQueuedBytes) {
         return;
     }
 
     StereoSample chunk[1024];
     int wanted = (kTargetQueuedBytes - queued) / static_cast<int>(sizeof(StereoSample));
+    const int available = static_cast<int>(console_->audio().available());
+    if (!audio_started_ && available < wanted) {
+        return;
+    }
+    if (wanted > available) {
+        wanted = available;
+    }
     while (wanted > 0) {
         const u32 count = static_cast<u32>(wanted > 1024 ? 1024 : wanted);
         console_->audio().pull(chunk, count);
         SDL_PutAudioStreamData(audio_stream_, chunk,
                                static_cast<int>(count * sizeof(StereoSample)));
         wanted -= static_cast<int>(count);
+    }
+    if (!audio_started_) {
+        SDL_ResumeAudioStreamDevice(audio_stream_);
+        audio_started_ = true;
     }
 }
 
@@ -651,8 +1134,84 @@ void App::apply_gamepad_axis(int slot, int axis, s16 value) {
 void App::tick() {
     handle_events();
 
+    // Android destroys or detaches the native surface while another app is in
+    // front. Rendering even one more frame after WILL_ENTER_BACKGROUND can
+    // make SDL_RenderPresent dereference that dead surface. These lifecycle
+    // events are delivered only to an event watch, so the atomic flag is also
+    // checked again immediately before presentation.
+    const u64 resume_after =
+        render_resume_after_ms_.load(std::memory_order_acquire);
+    if (backgrounded_.load(std::memory_order_acquire) ||
+        (resume_after != 0 && SDL_GetTicks() < resume_after)) {
+        if (!lifecycle_pause_applied_) {
+            emulator_->set_paused(true);
+            lifecycle_pause_applied_ = true;
+        }
+        if (backgrounded_.load(std::memory_order_acquire)) suspend_renderer();
+        SDL_Delay(16);
+        return;
+    }
+    if (renderer_suspended_ && !resume_renderer()) {
+        running_ = false;
+        return;
+    }
+    render_resume_after_ms_.store(0, std::memory_order_release);
+    if (lifecycle_pause_applied_) {
+        emulator_->set_paused(!emulating_);
+        lifecycle_pause_applied_ = false;
+    }
+
     feed_audio();
     save_nvram();
+
+    const GpuDriverImport imported_driver =
+        AndroidStorage::consume_gpu_driver_import();
+    if (imported_driver.ready) {
+        if (imported_driver.success) {
+            settings_->set(settings_key::kGpuDriverName, imported_driver.name);
+            settings_->set(settings_key::kGpuDriverDirectory,
+                           imported_driver.directory);
+            settings_->set(settings_key::kGpuDriverLibrary,
+                           imported_driver.library);
+            ui_->configure_video(1, ui_->widescreen(), ui_->bezel(),
+                                 ui_->crt_effect(), imported_driver.name);
+            ui_->set_gpu_driver_status(imported_driver.name,
+                                       imported_driver.message);
+        } else {
+            ui_->set_gpu_driver_status(
+                settings_->get(settings_key::kGpuDriverName),
+                imported_driver.message);
+        }
+        save_settings();
+    }
+
+    const RetroMediaResult retro_media =
+        AndroidStorage::consume_retro_media_result();
+    if (retro_media.ready) {
+        if (retro_media.success) {
+            ui_->set_retro_media_status(
+                retro_media.email, retro_media.credits,
+                retro_media.free_remaining, retro_media.is_admin, false,
+                retro_media.message);
+            if (retro_media.operation == "SYNC") load_retro_media_artwork();
+            if (retro_media.operation == "CATALOGUE") {
+                ui_->set_retro_media_catalogue(
+                    AndroidStorage::retro_media_catalogue());
+            }
+            if (retro_media.operation == "DOWNLOAD") {
+                scan_games_folder(
+                    settings_->get(settings_key::kGamesFolderName),
+                    settings_->get(settings_key::kGamesFolderPath));
+            }
+        } else if (retro_media.operation == "STATUS" ||
+                   retro_media.message.find("session expired") !=
+                       std::string::npos) {
+            ui_->set_retro_media_status("", 0, 0, false, false,
+                                        retro_media.message);
+        } else {
+            ui_->set_retro_media_error(retro_media.message);
+        }
+    }
 
     // Frames per second, smoothed, for the overlay. Measured across the whole
     // turn of the loop, so it reflects what the user actually sees.
@@ -675,8 +1234,65 @@ void App::tick() {
     const EmulatorStats emu = emulator_->stats();
     const UiIntent intent =
         ui_->build(*console_, emulating_, smoothed_fps, emu.emulated_fps,
-                   emu.frame_ms, console_->audio().underruns(), touch_->visible(),
+                   emu.frame_ms, console_->audio().underruns(), touch_->enabled(),
                    touch_->editing());
+
+    if (intent.bios_folder_chosen) {
+        use_bios_folder(intent.folder_name, intent.folder_path);
+    }
+    if (intent.games_folder_chosen) {
+        scan_games_folder(intent.folder_name, intent.folder_path);
+    }
+    if (intent.setup_finished) {
+        settings_->set_bool(settings_key::kSetupComplete, true);
+        save_settings();
+    }
+    if (intent.rescan_games) {
+        scan_games_folder(settings_->get(settings_key::kGamesFolderName),
+                          settings_->get(settings_key::kGamesFolderPath));
+    }
+    if (intent.import_gpu_driver) {
+        AndroidStorage::pick_gpu_driver_package();
+        ui_->set_gpu_driver_status(
+            settings_->get(settings_key::kGpuDriverName),
+            "Choose an ADPKG/ZIP driver package");
+    }
+    if (intent.use_system_gpu_driver) {
+        settings_->remove(settings_key::kGpuDriverName);
+        settings_->remove(settings_key::kGpuDriverDirectory);
+        settings_->remove(settings_key::kGpuDriverLibrary);
+        ui_->configure_video(ui_->renderer_backend(), ui_->widescreen(),
+                             ui_->bezel(), ui_->crt_effect(), "");
+        ui_->set_gpu_driver_status("", "System driver selected - restart to apply");
+        save_settings();
+    }
+    if (intent.retro_media_login) {
+        AndroidStorage::begin_retro_media_login(intent.retro_media_email,
+                                                intent.retro_media_password);
+    }
+    if (intent.retro_media_logout) {
+        AndroidStorage::begin_retro_media_logout();
+    }
+    if (intent.retro_media_artwork_changed) {
+        load_retro_media_artwork();
+    }
+    if (intent.retro_media_sync) {
+        std::vector<std::string> names;
+        names.reserve(library_.games().size());
+        for (const LibraryGame& game : library_.games()) {
+            names.push_back(game.name);
+        }
+        AndroidStorage::begin_retro_media_sync(names,
+                                               ui_->retro_media_type());
+    }
+    if (intent.retro_media_catalogue) {
+        AndroidStorage::begin_retro_media_catalogue(intent.retro_media_search);
+    }
+    if (intent.retro_media_download) {
+        AndroidStorage::begin_retro_media_download(
+            intent.retro_media_slug,
+            settings_->get(settings_key::kGamesFolderPath));
+    }
 
     if (intent.bios_chosen && !intent.bios_path.empty()) {
         // A document URI is not a path and cannot be opened by name, so it goes
@@ -691,33 +1307,31 @@ void App::tick() {
             SDL_Log("%s", console_->last_error().c_str());
         }
     }
+    bool selected_disc_ready = false;
     if (intent.disc_chosen && !intent.disc_path.empty()) {
         if (open_disc(intent.disc_path, intent.disc_name)) {
             settings_->set(settings_key::kDiscPath, intent.disc_path);
             settings_->set(settings_key::kDiscName, intent.disc_name);
-            settings_->save();
+            if (!AndroidStorage::available()) {
+                remember_game(intent.disc_name, intent.disc_path);
+            }
+            save_settings();
+            selected_disc_ready = true;
             SDL_Log("Disc inserted (%u sectors)", console_->disc().sector_count());
         } else {
+            if (intent.start_disc) ui_->show_launcher();
             SDL_Log("%s", console_->last_error().c_str());
         }
     }
     if (intent.eject) {
         console_->eject_disc();
     }
-    if (intent.test_pattern) {
-        // Drawn on this thread, with the emulator paused, so there is no race
-        // for the console's memory.
-        emulator_->set_paused(true);
-        console_->reset();
-        write_test_pattern(*console_);
-        console_->run_frame();
-        std::memcpy(mailbox_->writable(), console_->framebuffer().pixels,
-                    static_cast<size_t>(mailbox_->width()) * mailbox_->height() *
-                        sizeof(u32));
-        mailbox_->publish();
-        emulating_ = false;
-    }
     if (intent.reset) {
+        emulator_->request_reset();
+        emulating_ = console_->bios_loaded();
+        emulator_->set_paused(!emulating_);
+    }
+    if (intent.start_disc && selected_disc_ready) {
         emulator_->request_reset();
         emulating_ = console_->bios_loaded();
         emulator_->set_paused(!emulating_);
@@ -736,9 +1350,13 @@ void App::tick() {
         emulator_->set_paused(!emulating_);
         save_settings();
     }
+    if (intent.cpu_scale_changed) {
+        console_->set_cpu_scale_percent(intent.cpu_scale_percent);
+        save_settings();
+    }
     if (intent.toggle_touch_controls) {
-        touch_->set_visible(!touch_->visible());
-        if (!touch_->visible()) touch_->set_editing(false);
+        touch_->set_visible(!touch_->enabled());
+        if (!touch_->enabled()) touch_->set_editing(false);
         save_settings();
     }
     if (intent.toggle_layout_edit) {
@@ -752,9 +1370,14 @@ void App::tick() {
         touch_->reset_layout(window_w, window_h);
         save_settings();
     }
+    if (intent.ui_settings_changed) {
+        save_settings();
+    }
     if (intent.quit) {
         running_ = false;
     }
+
+    if (backgrounded_.load(std::memory_order_acquire)) return;
 
     SDL_SetRenderDrawColor(renderer_, 8, 8, 10, 255);
     SDL_RenderClear(renderer_);
@@ -772,6 +1395,7 @@ void App::tick() {
     }
 
     ui_->render(renderer_);
+    if (backgrounded_.load(std::memory_order_acquire)) return;
     SDL_RenderPresent(renderer_);
 }
 

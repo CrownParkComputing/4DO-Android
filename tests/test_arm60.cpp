@@ -441,11 +441,17 @@ TEST(a_multiply_costs_by_the_bits_of_its_multiplier_not_its_bytes) {
         return static_cast<u32>(m.cpu.total_cycles() - before);
     };
 
-    // 1S plus ((significant_bits + 5) / 2) - 1 internal cycles, capped at 16.
-    CHECK_EQ(cost_for(0u), 1u + 2u);            // 1 bit  -> 2I
-    CHECK_EQ(cost_for(1u), 1u + 2u);            // 1 bit  -> 2I
-    CHECK_EQ(cost_for(0xffu), 1u + 5u);         // 8 bits -> 5I
-    CHECK_EQ(cost_for(0xffffu), 1u + 9u);       // 16 bits -> 9I
+    // ARM's published ranges: 0/1 take 1I; for n > 1, values from
+    // 2^(2n-3) through 2^(2n-1)-1 take n I-cycles.
+    CHECK_EQ(cost_for(0u), 1u + 1u);
+    CHECK_EQ(cost_for(1u), 1u + 1u);
+    CHECK_EQ(cost_for(2u), 1u + 2u);
+    CHECK_EQ(cost_for(7u), 1u + 2u);
+    CHECK_EQ(cost_for(8u), 1u + 3u);
+    CHECK_EQ(cost_for(31u), 1u + 3u);
+    CHECK_EQ(cost_for(32u), 1u + 4u);
+    CHECK_EQ(cost_for(0xffu), 1u + 5u);
+    CHECK_EQ(cost_for(0xffffu), 1u + 9u);
     // A full 32-bit multiplier saturates the array. The ARM7 table would have
     // charged four here; the ARM6 charges sixteen.
     CHECK_EQ(cost_for(0x80000000u), 1u + 16u);

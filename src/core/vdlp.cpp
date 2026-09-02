@@ -1,5 +1,7 @@
 #include "vdlp.h"
 
+#include <cstring>
+
 #include "bus.h"
 
 namespace retro3do {
@@ -11,12 +13,10 @@ namespace {
 constexpr u32 kMaxVdlEntries = 1024;
 
 // Offsets within a VDL entry, in words.
-// TODO(vdl): confirm against the published documentation. The order below —
-// control, current buffer, previous buffer, next entry, then the CLUT — is the
-// commonly described layout, but it has not been verified here.
+// Header order from the official VDL structure: control, current buffer,
+// previous buffer, next entry, then optional control/CLUT words.
 constexpr u32 kVdlControlWord      = 0;
 constexpr u32 kVdlCurrentBuffer    = 1;
-constexpr u32 kVdlPreviousBuffer   = 2;
 constexpr u32 kVdlNextEntry        = 3;
 
 }  // namespace
@@ -27,24 +27,31 @@ void Vdlp::reset() {
     list_address_ = 0;
     reset_clut();
     entries_walked_ = 0;
+    field_entry_ = 0;
+    field_buffer_ = 0;
+    field_persist_ = 0;
+    field_width_ = 0;
+    field_height_ = 0;
+    field_have_buffer_ = false;
+    field_dma_enabled_ = false;
+    field_list_ended_ = true;
+    field_active_ = false;
 }
 
 void Vdlp::render_line(u32* out, int width, u32 framebuffer_address, int line) {
     const u8* vram = bus_.vram();
 
-    const u32 base = framebuffer_address - kVramBase;
+    // The VDLP exposes only the fitted VRAM address lines. Software
+    // occasionally leaves high address bits set; fitted address lines wrap
+    // them rather than turning an otherwise valid framebuffer black.
+    const u32 base = framebuffer_address & (kVramSize - 1u);
 
     for (int x = 0; x < width; ++x) {
-        // Bounds-check every pixel rather than the line: a display list can
-        // legitimately point near the end of VRAM, and a game that sets a bad
-        // pointer should show corruption, not crash the emulator.
-        const u32 at = base + framebuffer_offset(x, line, width);
-        if (at + 1 >= kVramSize) {
-            out[x] = 0xff000000u;
-            continue;
-        }
+        const u32 at = (base + framebuffer_offset(x, line, width)) &
+                       (kVramSize - 1u);
+        const u32 next = (at + 1u) & (kVramSize - 1u);
         const u16 pixel =
-            static_cast<u16>((static_cast<u16>(vram[at]) << 8) | vram[at + 1]);
+            static_cast<u16>((static_cast<u16>(vram[at]) << 8) | vram[next]);
         out[x] = shade(pixel);
     }
 }
@@ -81,6 +88,9 @@ void Vdlp::reset_clut() {
     }
     background_ = 0;
     clut_bypass_ = false;
+    horizontal_interp_ = false;
+    vertical_interp_ = false;
+    disable_vertical_once_ = false;
 }
 
 // The words that follow an entry's header: palette entries, the background
@@ -118,6 +128,11 @@ void Vdlp::process_control_words(u32 address, u32 count) {
                     continue;
                 }
                 clut_bypass_ = (word & kVdlDisplayClutBypass) != 0;
+                horizontal_interp_ =
+                    (word & kVdlDisplayHorizontalInterp) != 0;
+                vertical_interp_ = (word & kVdlDisplayVerticalInterp) != 0;
+                disable_vertical_once_ =
+                    (word & kVdlDisplayDisableVerticalOnce) != 0;
                 colours_only = (word & kVdlDisplayColoursOnly) != 0;
                 break;
             default:
@@ -181,23 +196,6 @@ u32 Vdlp::advance_line(u32 address) const {
 // run it across the WHOLE field rather than just the visible part.
 //
 // An entry says how many lines it persists for, and the framebuffer address
-// advances every line whether or not a new entry arrives. That is why a
-// persist count of zero is ordinary rather than degenerate: it means the next
-// entry arrives on the very next line, and a list with one entry per line is
-// normal. Treating zero as "the rest of the field" renders the whole screen
-// out of the first entry's buffer, which for a title that puts a blank buffer
-// first is a black screen.
-//
-// The list also starts running well before the first visible line, and the
-// address advances on every line it runs for - blanking included. So the
-// picture that reaches the screen begins some way into the buffer. Starting at
-// the top of the buffer instead shifts everything down by however many lines
-// were skipped, which on this machine is nineteen and looks like a badly
-// centred television rather than a bug.
-// Walk the display list a LINE at a time rather than an entry at a time, and
-// run it across the WHOLE field rather than just the visible part.
-//
-// An entry says how many lines it persists for, and the framebuffer address
 // advances every line whether or not a new entry arrives. A persist count of
 // zero is ordinary rather than degenerate: it means the entry covers no lines
 // at all and the next one is picked up on the same line. Treating zero as "the
@@ -209,98 +207,233 @@ u32 Vdlp::advance_line(u32 address) const {
 // reaches the screen begins some way into the buffer. Starting at the top of
 // it instead shifts everything down by however many lines were skipped, which
 // looks like a badly centred television rather than a bug.
-void Vdlp::render_field(u32* out, int width, int height) {
+void Vdlp::begin_field(int width, int height) {
     entries_walked_ = 0;
+    field_width_ = width;
+    field_height_ = height;
+    field_entry_ = list_address_;
+    field_buffer_ = 0;
+    field_persist_ = 0;
+    field_have_buffer_ = false;
+    field_dma_enabled_ = false;
+    field_list_ended_ = list_address_ == 0;
+    field_active_ = width > 0 && height > 0;
 
-    if (list_address_ == 0) {
-        // No display list yet. Leave the frame black rather than showing
-        // whatever happens to be at VRAM offset zero, which would look like a
-        // rendering bug rather than an unconfigured machine.
-        for (int i = 0; i < width * height; ++i) {
-            out[i] = 0xff000000u;
-        }
+    logical_frame_.assign(static_cast<size_t>(width > 0 ? width : 0) *
+                              static_cast<size_t>(height > 0 ? height : 0),
+                          0xff000000u);
+    line_interp_modes_.assign(static_cast<size_t>(height > 0 ? height : 0), 0);
+}
+
+void Vdlp::take_field_entry() {
+    if (field_list_ended_ || entries_walked_ >= kMaxVdlEntries) {
         return;
     }
 
-    u32 entry = list_address_;
-    u32 buffer = 0;
-    s32 persist = 0;
-    bool have_buffer = false;
-    bool list_ended = false;
+    const u32 entry = field_entry_;
+    const u32 control = bus_.read32(entry + kVdlControlWord * 4u);
+    if (control == 0) {
+        field_list_ended_ = true;
+        return;
+    }
+    ++entries_walked_;
 
-    // Reads one entry and leaves the walk pointing at the next.
-    const auto take_entry = [&]() {
-        if (list_ended || entries_walked_ >= kMaxVdlEntries) {
-            return;
-        }
-        const u32 control = bus_.read32(entry);
-        if (control == 0) {
-            list_ended = true;
-            return;
-        }
-        ++entries_walked_;
+    if ((control & kVdlCurrOverride) != 0) {
+        field_buffer_ = bus_.read32(entry + kVdlCurrentBuffer * 4u);
+        field_have_buffer_ = true;
+    }
+    modulo_index_ = (control >> kVdlModuloShift) & kVdlModuloMask;
+    field_dma_enabled_ = (control & kVdlEnableDma) != 0;
+    field_persist_ = static_cast<s32>(control & kVdlPersistMask);
 
-        // The buffer only changes when the entry says so; otherwise it carries
-        // on from where the previous entry left it.
-        if ((control & kVdlCurrOverride) != 0) {
-            buffer = bus_.read32(entry + 4);
-            have_buffer = true;
-        }
-        modulo_index_ = (control >> kVdlModuloShift) & kVdlModuloMask;
-        persist = static_cast<s32>(control & kVdlPersistMask);
+    const u32 words = (control >> kVdlControlCountShift) & kVdlControlCountMask;
+    if (words != 0) {
+        process_control_words(entry + (kVdlNextEntry + 1u) * 4u, words);
+    }
 
-        // The palette and display control ride along behind the header.
-        const u32 words = (control >> kVdlControlCountShift) & kVdlControlCountMask;
-        if (words != 0) {
-            process_control_words(entry + 16, words);
-        }
+    u32 next = bus_.read32(entry + kVdlNextEntry * 4u);
+    if ((control & kVdlNextRelative) != 0) {
+        next += entry + (kVdlNextEntry + 1u) * 4u;
+    }
+    if (next == entry || next == 0) {
+        field_list_ended_ = true;
+        return;
+    }
+    field_entry_ = next;
+}
 
-        u32 next = bus_.read32(entry + 12);
-        if ((control & kVdlNextRelative) != 0) {
-            next += entry + 16;
-        }
-        if (next == entry || next == 0) {
-            list_ended = true;
-            return;
-        }
-        entry = next;
-    };
+void Vdlp::process_scanline(u32 line) {
+    if (!field_active_ || line < kListStartLine) {
+        return;
+    }
 
     const u32 last_line = total_lines_ != 0
                               ? total_lines_
-                              : first_visible_line_ + static_cast<u32>(height);
+                              : first_visible_line_ + static_cast<u32>(field_height_);
+    if (line >= last_line) {
+        return;
+    }
 
-    for (u32 line = kListStartLine; line < last_line; ++line) {
-        // The first line takes an entry unconditionally; every line takes one
-        // if the last has run out. Both can happen on the first line, which is
-        // why an entry that persists for nothing still costs a line's worth of
-        // walking.
-        if (line == kListStartLine) {
-            take_entry();
-        }
-        if (persist == 0) {
-            take_entry();
-        }
+    // The entry is read in horizontal blank before this line is displayed.
+    if (line == kListStartLine) {
+        take_field_entry();
+    }
+    if (field_persist_ == 0) {
+        take_field_entry();
+    }
 
-        if (line >= first_visible_line_) {
-            const u32 output_line = line - first_visible_line_;
-            if (output_line >= static_cast<u32>(height)) {
-                break;
-            }
-            u32* row = out + static_cast<size_t>(output_line) * width;
-            if (!have_buffer) {
-                for (int x = 0; x < width; ++x) {
+    if (line >= first_visible_line_) {
+        const u32 output_line = line - first_visible_line_;
+        if (output_line < static_cast<u32>(field_height_)) {
+            line_interp_modes_[output_line] =
+                static_cast<u8>((horizontal_interp_ ? 1u : 0u) |
+                                ((vertical_interp_ && !disable_vertical_once_)
+                                     ? 2u
+                                     : 0u));
+            u32* row = logical_frame_.data() +
+                       static_cast<size_t>(output_line) * field_width_;
+            if (!field_have_buffer_ || !field_dma_enabled_) {
+                for (int x = 0; x < field_width_; ++x) {
                     row[x] = 0xff000000u;
                 }
             } else {
-                render_line(row, width, buffer, 0);
+                render_line(row, field_width_, field_buffer_, 0);
             }
         }
+    }
 
-        if (have_buffer) {
-            buffer = advance_line(buffer);
+    // The SDK's documented line order ticks the bitmap pointer after display
+    // and before the next entry is read.
+    if (field_have_buffer_) {
+        field_buffer_ = advance_line(field_buffer_);
+    }
+    disable_vertical_once_ = false;
+    --field_persist_;
+}
+
+void Vdlp::render_field(u32* out, int width, int height) {
+    if (out == nullptr || width <= 0 || height <= 0) {
+        return;
+    }
+    begin_field(width, height);
+    const u32 last_line = total_lines_ != 0
+                              ? total_lines_
+                              : first_visible_line_ + static_cast<u32>(height);
+    for (u32 line = kListStartLine; line < last_line; ++line) {
+        process_scanline(line);
+    }
+    std::memcpy(out, logical_frame_.data(),
+                static_cast<size_t>(width) * height * sizeof(u32));
+}
+
+namespace {
+
+u32 average2(u32 a, u32 b) {
+    // Average channels independently so a carry out of blue cannot leak into
+    // green. The display generator works on the 24-bit colours after the CLUT.
+    const u32 rb = (((a & 0x00ff00ffu) + (b & 0x00ff00ffu)) >> 1) &
+                   0x00ff00ffu;
+    const u32 g = (((a & 0x0000ff00u) + (b & 0x0000ff00u)) >> 1) &
+                  0x0000ff00u;
+    return 0xff000000u | rb | g;
+}
+
+u32 average4(u32 a, u32 b, u32 c, u32 d) {
+    // Red and blue are far enough apart to sum four eight-bit channels in
+    // parallel without either carrying into the other. This is bit-exact with
+    // averaging each channel separately, but substantially cheaper in the
+    // display generator's per-pixel loop.
+    constexpr u32 kRedBlue = 0x00ff00ffu;
+    constexpr u32 kGreen = 0x0000ff00u;
+    const u32 rb = (((a & kRedBlue) + (b & kRedBlue) +
+                     (c & kRedBlue) + (d & kRedBlue)) >> 2) & kRedBlue;
+    const u32 g = (((a & kGreen) + (b & kGreen) +
+                    (c & kGreen) + (d & kGreen)) >> 2) & kGreen;
+    return 0xff000000u | rb | g;
+}
+
+}  // namespace
+
+void Vdlp::render_field_2x(u32* out, int width, int height) {
+    if (out == nullptr || width <= 0 || height <= 0) {
+        return;
+    }
+
+    begin_field(width, height);
+    const u32 last_line = total_lines_ != 0
+                              ? total_lines_
+                              : first_visible_line_ + static_cast<u32>(height);
+    for (u32 line = kListStartLine; line < last_line; ++line) {
+        process_scanline(line);
+    }
+    finish_field_2x(out, width, height);
+}
+
+void Vdlp::finish_field_2x(u32* out, int width, int height) {
+    if (out == nullptr || width <= 0 || height <= 0 ||
+        width != field_width_ || height != field_height_) {
+        return;
+    }
+
+    const int output_width = width * 2;
+    for (int y = 0; y < height; ++y) {
+        const int below_y = y + 1 < height ? y + 1 : y;
+        const bool horizontal = (line_interp_modes_[y] & 1u) != 0;
+        const bool vertical = (line_interp_modes_[y] & 2u) != 0;
+        const u32* row = logical_frame_.data() + static_cast<size_t>(y) * width;
+        const u32* below_row =
+            logical_frame_.data() + static_cast<size_t>(below_y) * width;
+        u32* upper = out + static_cast<size_t>(y * 2) * output_width;
+        u32* lower = upper + output_width;
+
+        // Interpolation mode is constant for the whole scanline. Splitting the
+        // four cases here avoids testing both axes and loading unused neighbour
+        // pixels for every output pixel. The last source pixel is handled
+        // separately because its right neighbour clamps to itself.
+        if (!horizontal && !vertical) {
+            for (int x = 0; x < width; ++x) {
+                const u32 here = row[x];
+                upper[x * 2] = here;
+                upper[x * 2 + 1] = here;
+                lower[x * 2] = here;
+                lower[x * 2 + 1] = here;
+            }
+        } else if (horizontal && !vertical) {
+            for (int x = 0; x + 1 < width; ++x) {
+                const u32 here = row[x];
+                const u32 half = average2(here, row[x + 1]);
+                upper[x * 2] = here;
+                upper[x * 2 + 1] = half;
+                lower[x * 2] = here;
+                lower[x * 2 + 1] = half;
+            }
+            const int x = width - 1;
+            upper[x * 2] = upper[x * 2 + 1] = row[x];
+            lower[x * 2] = lower[x * 2 + 1] = row[x];
+        } else if (!horizontal && vertical) {
+            for (int x = 0; x < width; ++x) {
+                const u32 here = row[x];
+                const u32 half = average2(here, below_row[x]);
+                upper[x * 2] = upper[x * 2 + 1] = here;
+                lower[x * 2] = lower[x * 2 + 1] = half;
+            }
+        } else {
+            for (int x = 0; x + 1 < width; ++x) {
+                const u32 here = row[x];
+                const u32 right = row[x + 1];
+                const u32 below = below_row[x];
+                const u32 diagonal = below_row[x + 1];
+                upper[x * 2] = here;
+                upper[x * 2 + 1] = average2(here, right);
+                lower[x * 2] = average2(here, below);
+                lower[x * 2 + 1] = average4(here, right, below, diagonal);
+            }
+            const int x = width - 1;
+            const u32 here = row[x];
+            const u32 half = average2(here, below_row[x]);
+            upper[x * 2] = upper[x * 2 + 1] = here;
+            lower[x * 2] = lower[x * 2 + 1] = half;
         }
-        --persist;
     }
 }
 

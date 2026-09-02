@@ -7,18 +7,21 @@
 // would have needed a bridge on each side.
 #pragma once
 
+#include <atomic>
 #include <memory>
 #include <string>
 #include <vector>
 
 #include "core/pad.h"
 #include "core/types.h"
+#include "ui/game_library.h"
 
 struct SDL_Window;
 struct SDL_Renderer;
 struct SDL_Texture;
 struct SDL_AudioStream;
 struct SDL_Gamepad;
+union SDL_Event;
 
 namespace retro3do {
 
@@ -53,6 +56,8 @@ public:
     const std::string& last_error() const { return last_error_; }
 
 private:
+    static bool lifecycle_event_watch(void* userdata, SDL_Event* event);
+
     // One turn of the loop: events, emulate, draw. Split out so that platforms
     // which insist on driving the loop themselves can call it directly.
     void tick();
@@ -72,12 +77,20 @@ private:
     void apply_gamepad_axis(int slot, int axis, s16 value);
     void load_settings();
     void save_settings();
+    void load_library();
+    void save_library();
+    void load_retro_media_artwork();
+    void remember_game(const std::string& name, const std::string& target);
+    void use_bios_folder(const std::string& name, const std::string& target);
+    void scan_games_folder(const std::string& name, const std::string& target);
     void load_nvram();
     void save_nvram();
     bool open_bios(const std::string& path, const std::string& name);
     bool open_disc(const std::string& path, const std::string& name);
     void present();
     void ensure_frame_texture(int width, int height);
+    void suspend_renderer();
+    bool resume_renderer();
 
     SDL_Window*   window_   = nullptr;
     SDL_Renderer* renderer_ = nullptr;
@@ -93,6 +106,7 @@ private:
     std::unique_ptr<EmulatorThread> emulator_;
 
     SDL_AudioStream* audio_stream_ = nullptr;
+    bool audio_started_ = false;
     // One host controller per chained 3DO pad. Slot zero is also what the
     // keyboard and the on-screen controls drive, so it is never freed.
     SDL_Gamepad* gamepads_[kMaxPads] = {};
@@ -104,10 +118,18 @@ private:
 
     std::string launch_bios_;
     std::string launch_disc_;
+    std::string actual_renderer_;
+    std::string renderer_startup_message_;
     bool start_on_launch_ = false;
     bool running_ = false;
     bool emulating_ = false;
-
+    std::atomic<bool> backgrounded_{false};
+    std::atomic<u64> render_resume_after_ms_{0};
+    bool lifecycle_watch_registered_ = false;
+    bool lifecycle_pause_applied_ = false;
+    bool renderer_suspended_ = false;
+    GameLibrary library_;
+    int persisted_library_count_ = 0;
     // Reused across saves so a save does not allocate thirty-two kilobytes.
     std::vector<u8> nvram_scratch_;
 

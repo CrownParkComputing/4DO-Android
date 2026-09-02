@@ -69,10 +69,9 @@ enum : u32 {
     // reads back and compares; the compare fails here because nothing is
     // mapped at this address, so the writes go nowhere.
     //
-    // Not implemented: the page size and exactly which operation a given
-    // address selects are not yet established. The region is mapped so that
-    // accesses are counted and visible rather than vanishing silently, which
-    // is what made this hard to find in the first place.
+    // The copy, fill-value and fill windows are implemented in Sport. Accesses
+    // remain counted as a diagnostic because the ROM's own memory test is the
+    // fastest way to spot a broken decode here.
     kSportBase = 0x03200000,
     // SPORT decodes only the windows it actually has: the copy window at
     // +0x0000, the fill-value register at +0x2000, and the fill window at
@@ -85,7 +84,7 @@ enum : u32 {
     kMadamBase = 0x03300000,        // confirmed by the boot ROM
     kMadamSize = 0x00100000,
 
-    kClioBase  = 0x03400000,        // TODO(map): confirm
+    kClioBase  = 0x03400000,        // confirmed by the boot ROM
     kClioSize  = 0x00100000,
 };
 
@@ -212,8 +211,8 @@ public:
                (address >= kClioBase && address < kClioBase + kClioSize);
     }
 
-    // Accesses to regions that are recognised but not implemented. A silent
-    // drop is the hardest kind of gap to find, so they are counted.
+    // SPORT diagnostics. A silent decode failure is difficult to attribute,
+    // so all accesses remain counted even though the operations are present.
     u64 sport_accesses() const { return sport_accesses_; }
 
     // Whether the low memory still reads ROM. Cleared by the first write there.

@@ -88,6 +88,8 @@ bool opcode_writes_result(unsigned opcode) {
 struct Arm60::DecodeCache {
     static constexpr u32 kPageBytes   = 4096;
     static constexpr u32 kPageEntries = kPageBytes / 4;
+    static constexpr u32 kFastEntries = 64;
+    static constexpr u32 kNoPage      = ~0u;
 
     // Validity is a generation stamp rather than a flag.
     //
@@ -104,24 +106,41 @@ struct Arm60::DecodeCache {
 
     std::unordered_map<u32, std::vector<Page>::size_type> page_index;
     std::vector<Page> pages;
+    u32 fast_keys[kFastEntries] = {};
+    std::vector<Page>::size_type fast_indices[kFastEntries] = {};
+
+    DecodeCache() {
+        std::fill(std::begin(fast_keys), std::end(fast_keys), kNoPage);
+    }
 
     Page& page_for(u32 address) {
-        const u32 key = address / kPageBytes;
+        const u32 key = address >> 12;
+        const u32 fast_slot = key & (kFastEntries - 1u);
+        if (fast_keys[fast_slot] == key) {
+            return pages[fast_indices[fast_slot]];
+        }
+
         auto it = page_index.find(key);
         if (it != page_index.end()) {
+            fast_keys[fast_slot] = key;
+            fast_indices[fast_slot] = it->second;
             return pages[it->second];
         }
         pages.emplace_back();
         Page& page = pages.back();
         std::memset(page.stamp, 0, sizeof(page.stamp));
         page.generation = 1;
-        page_index.emplace(key, pages.size() - 1);
+        const auto index = pages.size() - 1;
+        page_index.emplace(key, index);
+        fast_keys[fast_slot] = key;
+        fast_indices[fast_slot] = index;
         return page;
     }
 
     void clear() {
         page_index.clear();
         pages.clear();
+        std::fill(std::begin(fast_keys), std::end(fast_keys), kNoPage);
     }
 
     void invalidate(u32 address, u32 length) {
@@ -319,7 +338,7 @@ Decoded Arm60::decode(u32 instruction) {
 
 const Decoded& Arm60::decoded_at(u32 address) {
     DecodeCache::Page& page = cache_->page_for(address);
-    const u32 slot = (address % DecodeCache::kPageBytes) / 4;
+    const u32 slot = (address & (DecodeCache::kPageBytes - 1u)) >> 2;
 
     if (page.stamp[slot] != page.generation) {
         ++decodes_;
@@ -467,6 +486,16 @@ const u64 g_pc_trace_skip = [] {
     return skip != nullptr ? std::strtoull(skip, nullptr, 10) : 0ull;
 }();
 u64 g_pc_trace_seen = 0;
+
+// Paired with PCTRACE: CYCLOG names a file that gets one 8-byte record per
+// instruction - the PC and the cycles the instruction was charged. Diffing
+// this against the reference's CYCLOG output finds where two cycle models
+// stopped agreeing even when the instruction stream is still identical.
+std::FILE* const g_cyc_log = [] {
+    const char* path = std::getenv("CYCLOG");
+    return path != nullptr ? std::fopen(path, "wb") : nullptr;
+}();
+
 }  // namespace
 #endif
 
@@ -500,6 +529,12 @@ u32 Arm60::step() {
 
     total_cycles_ += cycles;
     ++total_instructions_;
+#if RETRO3DO_TRACING
+    if (g_cyc_log != nullptr) {
+        const u32 rec[2] = { address, cycles };
+        std::fwrite(rec, 4, 2, g_cyc_log);
+    }
+#endif
     // The cel engine starts between instructions, never inside one.
     if (bus_.cel_engine_pending()) {
         bus_.run_pending_cel_engine();
@@ -664,34 +699,16 @@ u32 Arm60::exec_multiply(const Decoded& d) {
         cpsr_ = flags;
     }
 
-    // How long a multiply takes, and why it is not the familiar answer.
-    //
-    // Nearly every ARM cycle table you will find is the ARM7's: it says a
-    // multiply costs one internal cycle per BYTE of the multiplier that still
-    // holds significant bits, so one to four. That is a real early-out, but it
-    // belongs to a later core.
-    //
-    // The 3DO's ARM60 is an ARM6, whose multiplier is a 2-bit Booth array. It
-    // gets through two bits of the multiplier per cycle and terminates on the
-    // significant BIT count, not the byte count - so the same multiply costs
-    // roughly half the bit length rather than a quarter of it, and a full
-    // 32-bit operand costs sixteen internal cycles where the ARM7 table would
-    // have charged four.
-    //
-    // Getting this wrong makes the CPU four times too fast at exactly the work
-    // 3D titles do most of, and a title that waits on a timer rather than on a
-    // flag notices.
+    // ARM's ARM6 performance guide describes the original 2-bit Booth
+    // multiplier precisely.  Rs is shifted two bits per I-cycle and terminates
+    // when it becomes zero, or after sixteen iterations.  For n > 1, values
+    // 2^(2n-3)..2^(2n-1)-1 take n I-cycles; zero and one take one.
     const u32 operand = regs_[rs];
-    u32 significant_bits = 1;
+    u32 significant_bits = 0;
     for (u32 v = operand; v != 0; v >>= 1) {
         ++significant_bits;
     }
-    if (operand != 0) {
-        --significant_bits;   // the loop counts one past the top set bit
-    }
-    // Two bits a cycle, plus the array's own fixed overhead, capped where the
-    // multiplier runs out of stages to use.
-    u32 internal = ((significant_bits + 5) >> 1) - 1;
+    u32 internal = operand <= 1 ? 1u : (significant_bits + 2u) / 2u;
     if (internal > 16) {
         internal = 16;
     }

@@ -1,18 +1,20 @@
 # Retro-3DO
 
-A 3DO Interactive Multiplayer emulator, written from scratch for phones,
-tablets and desktops.
+A new 3DO Interactive Multiplayer emulator codebase for phones, tablets and
+desktops. Its historical reference exposure is disclosed in
+[docs/PROVENANCE.md](docs/PROVENANCE.md).
 
 One C++ codebase builds for Android, iOS, Linux and Windows. There is no
 per-platform front end: SDL provides the window, input, audio and GPU on every
 target, and Dear ImGui draws the launcher and the in-game overlay.
 
-> **Status: it boots.** A real 3DO BIOS passes its power-on self test and
-> displays the 3DO logo. Disc images load and their tracks are read, but nothing
-> connects a disc to the CPU yet, and there is no audio — so a game will not run
-> yet. See [Roadmap](#roadmap).
+> **Status: games run.** A real 3DO BIOS passes its power-on self test, CD media
+> is mounted through XBUS/MADAM DMA, and the ARM, CEL, matrix and DSP paths run
+> commercial titles. Compatibility is still in progress, but Road Rash and The
+> Need for Speed both boot into correctly rendered gameplay. See
+> [Roadmap](#roadmap) and the [Opera parity audit](docs/OPERA_AUDIT.md).
 
-## Why this exists rather than another Opera port
+## Why this exists as a separate core
 
 Two reasons, and the second is the one with a deadline attached.
 
@@ -24,13 +26,11 @@ emulation, and the machine appears to run slow when it is really being
 throttled. This core decodes each instruction once and caches it, and never
 presents from the emulation path at all.
 
-**It is ours.** The FreeDO sources that Opera and `opera-libretro` descend from
-carry a licence clause forbidding commercial use of the code, or of knowledge
-obtained by studying it, without the owners' approval — and stating that this
-takes precedence over the LGPL. **This emulator's hardware layer is derived
-from such a source.** [docs/PROVENANCE.md](docs/PROVENANCE.md) sets out exactly
-what is original and what is not, including which routines are direct ports.
-Read it before assuming anything about this project's licensing position.
+**Its current architecture is project-owned and auditable.** The former
+direct-port routines have been replaced with implementations structured around
+public ARM/3DO documentation, patents and focused tests. The project is still
+historically reference-exposed; replacing code does not make its development
+history clean-room. [docs/PROVENANCE.md](docs/PROVENANCE.md) records both facts.
 
 ## Building
 
@@ -64,6 +64,25 @@ cd android
 Gradle drives the same root `CMakeLists.txt` the desktop build uses; there is no
 separate Android copy of the emulator.
 
+On Android the app requests the fastest full-resolution panel mode up to
+120 Hz and keeps SDL presentation vsynced to it. The 3DO itself remains at its
+hardware-correct 50/60 Hz field rate; presentation refresh never changes game
+or audio speed. A 60 Hz-only panel therefore remains at 60 Hz.
+
+The Settings panel and in-game overlay offer optional 125% and 150% ARM boosts.
+Only the emulated ARM instruction budget changes: video fields remain at 50/60
+Hz, DSP output remains 44.1 kHz, and CD timing remains native. This can reduce
+CPU-bound slowdown without fast-forwarding sound or FMV; it cannot raise a
+frame rate deliberately capped by the game.
+
+The Android Settings page can sign in to a registered RetroMedia account and
+download one selected artwork piece per matched 3DO title (2D cover,
+screenshot, thumbnail or title screen). Sessions are encrypted with the
+Android Keystore; passwords are never written to the emulator settings. Media
+is resized and cached in private app storage, then shown directly on library
+cards. Downloads happen only when the user presses **Download Missing
+Artwork**, and use that account's normal daily allowance/credit balance.
+
 ### iOS
 
 ```sh
@@ -96,20 +115,26 @@ platform header, it belongs in `src/platform/` instead.
 - [x] CLIO — interrupts, timers, video counters
 - [x] VDLP — display list to framebuffer
 - [x] MADAM — the CEL engine: affine mapping, indexed and direct cels
-- [ ] DSP — audio
+- [x] DSP — instruction engine, DMA inputs and DAC output
 - [x] Disc images: ISO, BIN, CUE, with sector layout detected not assumed
 - [x] SPORT — page copy and fill; the ROM does not pass its self test without it
-- [ ] XBUS + MADAM DMA: needed for the animated startup and for loading a disc
+- [x] XBUS + MADAM DMA: animated startup and disc loading
 - [x] Emulation on its own thread, with one pacing policy and a triple-buffered frame mailbox
 - [x] Audio output path: lock-free ring, SDL sink
 - [x] Controller: keyboard and gamepad through SDL
-- [ ] DSP — the machine is silent until this exists
 - [x] File browser, so the app is usable without a keyboard
 - [x] Android scoped storage (SAF): the user grants folders, the app requests no storage permission
 - [x] On-screen controls, movable, saved per device
 - [x] Settings that survive a restart
+- [x] RetroMedia account artwork downloads and illustrated library cards (Android)
+- [x] Scanline-timed VDLP updates
+- [ ] Full MADAM CEL pause/status timing
+- [ ] Remaining CD queries, CD audio and additional PBUS peripherals
 - [ ] Save states
 
 ## Licence
 
-MIT. The vendored dependencies keep their own: SDL3 (zlib) and Dear ImGui (MIT).
+Project-owned code is MIT licensed; see [LICENSE](LICENSE). Bundled components
+retain their own terms, collected in [docs/THIRD_PARTY.md](docs/THIRD_PARTY.md).
+The distribution and historical reference-source notices in [NOTICE](NOTICE)
+and [docs/PROVENANCE.md](docs/PROVENANCE.md) are part of the release record.

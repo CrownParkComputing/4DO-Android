@@ -161,6 +161,7 @@ set(RETRO3DO_APP_SOURCES
     src/platform/app.cpp
     src/platform/emulator_thread.cpp
     src/ui/ui.cpp
+    src/ui/game_library.cpp
     src/ui/file_browser.cpp
     src/ui/touch_pad.cpp
     src/platform/storage.cpp
@@ -168,10 +169,20 @@ set(RETRO3DO_APP_SOURCES
 )
 
 if(ANDROID)
+    # Rootless, per-app custom Adreno/Turnip loading. The driver itself is
+    # supplied by the user and kept in private app storage; these small BSD
+    # libraries only provide Android linker-namespace isolation.
+    add_subdirectory(third_party/libadrenotools EXCLUDE_FROM_ALL)
+    add_library(retro3do_vulkan_loader SHARED
+        src/platform/android_vulkan_loader.cpp)
+    target_link_libraries(retro3do_vulkan_loader PRIVATE adrenotools dl)
+
     # SDLActivity dlopens the app rather than executing it, so on Android the
     # app is a shared library and must be called "main".
     add_library(retro3do SHARED ${RETRO3DO_APP_SOURCES})
     set_target_properties(retro3do PROPERTIES OUTPUT_NAME "main")
+    target_link_libraries(retro3do PRIVATE retro3do_vulkan_loader)
+    add_dependencies(retro3do main_hook hook_impl file_redirect_hook gsl_alloc_hook)
 else()
     add_executable(retro3do ${RETRO3DO_APP_SOURCES})
 endif()
@@ -220,7 +231,9 @@ if(RETRO3DO_BUILD_TESTS)
         tests/test_chd.cpp
         tests/test_clio.cpp
         tests/test_disc.cpp
+        tests/test_dsp.cpp
         tests/test_frame_mailbox.cpp
+        tests/test_game_library.cpp
         tests/test_madam.cpp
         tests/test_pad_layout.cpp
         tests/test_path.cpp
@@ -228,6 +241,7 @@ if(RETRO3DO_BUILD_TESTS)
         tests/test_sport.cpp
         tests/test_vdlp.cpp
     )
+    target_sources(retro3do_tests PRIVATE src/ui/game_library.cpp)
     target_link_libraries(retro3do_tests PRIVATE retro3do_core)
     find_package(Threads REQUIRED)
     target_link_libraries(retro3do_tests PRIVATE Threads::Threads)

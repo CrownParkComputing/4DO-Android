@@ -119,7 +119,7 @@ TEST(a_single_entry_covers_the_whole_field) {
     const u32 list = 0x1000u;              // the VDL lives in DRAM
     const u32 framebuffer = kVramBase;     // and points at the start of VRAM
 
-    bus.write32(list + 0, kVdlCurrOverride | 1);   // sets the buffer, two lines
+    bus.write32(list + 0, kVdlEnableDma | kVdlCurrOverride | 1);
     bus.write32(list + 4, framebuffer);    // current buffer
     bus.write32(list + 8, framebuffer);    // previous buffer
     bus.write32(list + 12, 0);             // no next entry
@@ -141,6 +141,101 @@ TEST(a_single_entry_covers_the_whole_field) {
     CHECK_EQ(out[3], 0xffffffffu);
 }
 
+TEST(an_entry_with_video_dma_disabled_renders_black) {
+    Bus bus;
+    Vdlp vdlp(bus);
+
+    const u32 list = 0x1000u;
+    bus.write32(list + 0, kVdlCurrOverride | 0u);
+    bus.write32(list + 4, kVramBase);
+    bus.write32(list + 8, kVramBase);
+    bus.write32(list + 12, 0);
+    put_fb(bus, 0, 0, 0, 1, rgb555(31, 31, 31));
+
+    vdlp.set_list_address(list);
+    u32 out[1] = {};
+    vdlp.render_field(out, 1, 1);
+    CHECK_EQ(out[0], 0xff000000u);
+}
+
+TEST(framebuffer_addresses_wrap_on_the_fitted_vram_address_lines) {
+    Bus bus;
+    Vdlp vdlp(bus);
+
+    const u32 list = 0x1000u;
+    bus.write32(list + 0, kVdlEnableDma | kVdlCurrOverride | 0u);
+    bus.write32(list + 4, kVramBase + kVramSize);
+    bus.write32(list + 8, kVramBase + kVramSize);
+    bus.write32(list + 12, 0);
+    put_fb(bus, 0, 0, 0, 1, rgb555(31, 0, 31));
+
+    vdlp.set_list_address(list);
+    u32 out[1] = {};
+    vdlp.render_field(out, 1, 1);
+    CHECK_EQ(out[0], 0xffff00ffu);
+}
+
+TEST(the_display_generator_interpolates_to_twice_the_resolution) {
+    Bus bus;
+    Vdlp vdlp(bus);
+
+    const u32 list = 0x1000u;
+    // One display-control word enables both interpolation axes. The stock OS
+    // uses a constant upper-left cornerweight for this mode.
+    bus.write32(list + 0, kVdlEnableDma | kVdlCurrOverride |
+                              (1u << kVdlControlCountShift) | 1u);
+    bus.write32(list + 4, kVramBase);
+    bus.write32(list + 8, kVramBase);
+    bus.write32(list + 12, 0);
+    bus.write32(list + 16, (kVdlWordDisplay << kVdlWordSelectorShift) |
+                               kVdlDisplayHorizontalInterp |
+                               kVdlDisplayVerticalInterp);
+
+    put_fb(bus, 0, 0, 0, 2, rgb555(31, 0, 0));
+    put_fb(bus, 0, 1, 0, 2, rgb555(0, 31, 0));
+    put_fb(bus, 0, 0, 1, 2, rgb555(0, 0, 31));
+    put_fb(bus, 0, 1, 1, 2, rgb555(31, 31, 31));
+
+    vdlp.set_list_address(list);
+    u32 out[16] = {};
+    vdlp.render_field_2x(out, 2, 2);
+
+    CHECK_EQ(out[0], 0xffff0000u);  // the cornerweight keeps the parent colour
+    CHECK_EQ(out[1], 0xff7f7f00u);  // horizontal average
+    CHECK_EQ(out[4], 0xff7f007fu);  // vertical average
+    CHECK_EQ(out[5], 0xff7f7f7fu);  // four-pixel average
+    CHECK_EQ(out[3], 0xff00ff00u);  // right edge clamps rather than wrapping
+    CHECK_EQ(out[12], 0xff0000ffu); // bottom edge clamps likewise
+}
+
+TEST(a_displayed_scanline_is_not_changed_by_a_later_vram_write) {
+    Bus bus;
+    Vdlp vdlp(bus);
+
+    const u32 list = 0x1000u;
+    bus.write32(list + 0, kVdlEnableDma | kVdlCurrOverride | 2u);
+    bus.write32(list + 4, kVramBase);
+    bus.write32(list + 8, kVramBase);
+    bus.write32(list + 12, 0);
+    put_fb(bus, 0, 0, 0, 1, rgb555(31, 0, 0));
+    put_fb(bus, 0, 0, 1, 1, rgb555(0, 31, 0));
+
+    vdlp.set_list_address(list);
+    vdlp.set_field_shape(Vdlp::kListStartLine, Vdlp::kListStartLine + 2);
+    vdlp.begin_field(1, 2);
+    vdlp.process_scanline(Vdlp::kListStartLine);
+
+    // The beam has passed the first line. Repainting its source now can only
+    // affect a later field, while the second line has not yet been sampled.
+    put_fb(bus, 0, 0, 0, 1, rgb555(0, 0, 31));
+    vdlp.process_scanline(Vdlp::kListStartLine + 1);
+
+    u32 out[8] = {};
+    vdlp.finish_field_2x(out, 1, 2);
+    CHECK_EQ(out[0], 0xffff0000u);
+    CHECK_EQ(out[4], 0xff00ff00u);
+}
+
 TEST(the_list_is_followed_to_a_second_entry) {
     Bus bus;
     Vdlp vdlp(bus);
@@ -151,11 +246,11 @@ TEST(the_list_is_followed_to_a_second_entry) {
     // A persist count of one covers exactly one line. Zero covers NO lines -
     // the next entry is taken on the same line - which is a real thing lists
     // do, but not what this test is about.
-    bus.write32(first + 0, kVdlCurrOverride | 1u);
+    bus.write32(first + 0, kVdlEnableDma | kVdlCurrOverride | 1u);
     bus.write32(first + 4, kVramBase);
     bus.write32(first + 12, second);
 
-    bus.write32(second + 0, kVdlCurrOverride | 1u);
+    bus.write32(second + 0, kVdlEnableDma | kVdlCurrOverride | 1u);
     bus.write32(second + 4, kVramBase + 0x100);
     bus.write32(second + 12, 0);
 
@@ -225,18 +320,18 @@ TEST(a_pattern_written_through_the_bus_comes_back_out_of_the_frame) {
     Console console;
     console.reset();
 
-    const Frame shape = console.framebuffer();
+    constexpr int logical_width = 320;
     Bus& bus = console.bus();
 
     // Fill the whole FIELD, not just the visible part: the screen starts some
     // way down the buffer, so a pattern that stops at the visible height runs
     // out before the bottom of the screen does.
     for (int y = 0; y < 262; ++y) {
-        for (int x = 0; x < shape.width; ++x) {
-            const unsigned r = static_cast<unsigned>(x * 31 / (shape.width - 1));
+        for (int x = 0; x < logical_width; ++x) {
+            const unsigned r = static_cast<unsigned>(x * 31 / (logical_width - 1));
             const unsigned g = static_cast<unsigned>(y * 31 / 261);
             const unsigned b = 31u - r;
-            bus.write16(kVramBase + framebuffer_offset(x, y, shape.width),
+            bus.write16(kVramBase + framebuffer_offset(x, y, logical_width),
                         static_cast<u16>((r << 10) | (g << 5) | b));
         }
     }
@@ -244,7 +339,7 @@ TEST(a_pattern_written_through_the_bus_comes_back_out_of_the_frame) {
     // One entry for the whole FIELD, not just the visible part of it - the
     // list runs through the vertical blank too.
     const u32 list = 0x1000u;
-    bus.write32(list + 0, kVdlCurrOverride | 261u);
+    bus.write32(list + 0, kVdlEnableDma | kVdlCurrOverride | 261u);
     bus.write32(list + 4, kVramBase);
     bus.write32(list + 8, kVramBase);
     bus.write32(list + 12, 0);
@@ -255,8 +350,8 @@ TEST(a_pattern_written_through_the_bus_comes_back_out_of_the_frame) {
     console.run_frame();
 
     const Frame frame = console.framebuffer();
-    CHECK_EQ(frame.width, 320);
-    CHECK_EQ(frame.height, 240);
+    CHECK_EQ(frame.width, 640);
+    CHECK_EQ(frame.height, 480);
 
     // Red and blue depend only on x, so the ends of the top row are exact
     // whichever line of the buffer the visible window happens to start on.
@@ -309,7 +404,8 @@ TEST(reading_the_framebuffer_linearly_is_the_bug_that_looks_like_a_stride_error)
     put_pixel(bus, framebuffer_offset(2, 1, width), rgb555(31, 0, 0));
 
     const u32 list = 0x1000u;
-    bus.write32(list + 0, kVdlCurrOverride | static_cast<u32>(height - 1));
+    bus.write32(list + 0, kVdlEnableDma | kVdlCurrOverride |
+                              static_cast<u32>(height - 1));
     bus.write32(list + 4, kVramBase);
     bus.write32(list + 12, 0);
     vdlp.set_list_address(list);
@@ -338,18 +434,18 @@ TEST(madam_and_the_display_agree_about_where_a_pixel_goes) {
     // through the vertical blank first, advancing the address as it goes.
     const u32 top = console.vdlp().buffer_start_line();
 
-    const Frame shape = console.framebuffer();
+    constexpr int logical_width = 320;
     for (int y = 0; y < 4; ++y) {
         for (int x = 0; x < 4; ++x) {
             bus.write16(kVramBase +
                             framebuffer_offset(x, static_cast<int>(top) + y,
-                                               shape.width),
+                                               logical_width),
                         rgb555(31, 31, 31));
         }
     }
 
     const u32 list = 0x2000u;
-    bus.write32(list + 0, kVdlCurrOverride | 261u);
+    bus.write32(list + 0, kVdlEnableDma | kVdlCurrOverride | 261u);
     bus.write32(list + 4, kVramBase);
     bus.write32(list + 12, 0);
     bus.write32(kMadamBase + kMadamVdlAddress, list);
@@ -376,7 +472,8 @@ TEST(the_display_list_can_reprogram_the_output_colour_table) {
 
     const u32 list = 0x1000u;
     // One entry, one line, carrying two colour words behind its header.
-    bus.write32(list + 0, kVdlCurrOverride | (2u << kVdlControlCountShift) | 0u);
+    bus.write32(list + 0, kVdlEnableDma | kVdlCurrOverride |
+                              (2u << kVdlControlCountShift) | 0u);
     bus.write32(list + 4, kVramBase);
     bus.write32(list + 8, kVramBase);
     bus.write32(list + 12, 0);
@@ -403,7 +500,8 @@ TEST(a_pixel_of_zero_shows_the_programmed_background) {
     put_fb(bus, 0, 0, 0, 1, 0);
 
     const u32 list = 0x1000u;
-    bus.write32(list + 0, kVdlCurrOverride | (1u << kVdlControlCountShift) | 0u);
+    bus.write32(list + 0, kVdlEnableDma | kVdlCurrOverride |
+                              (1u << kVdlControlCountShift) | 0u);
     bus.write32(list + 4, kVramBase);
     bus.write32(list + 8, kVramBase);
     bus.write32(list + 12, 0);

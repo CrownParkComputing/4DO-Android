@@ -50,7 +50,8 @@ void write_ccb(Bus& bus, u32 at, u32 flags, u32 source, u32 plut,
     // would be testing nothing - and every cel in every title measured here
     // sets at least one.
     bus.write32(at + 0,  flags | kCcbLast | kCcbNpAbs | kCcbSpAbs | kCcbPpAbs |
-                             kCcbLdPlut | kCcbAcw | kCcbAccw | kCcbCcbPre);
+                             kCcbLdSize | kCcbLdPrs | kCcbLdPpmp | kCcbLdPlut |
+                             kCcbCcbPre | kCcbYoxy | kCcbAcw | kCcbAccw);
     bus.write32(at + 4,  0);
     bus.write32(at + 8,  source);
     bus.write32(at + 12, plut);
@@ -171,6 +172,32 @@ TEST(a_direct_cel_lands_where_it_is_told) {
     madam.render_cel_list(kCcbAt);
 
     CHECK_EQ(madam.stats().cels_drawn, 1u);
+    CHECK_EQ(read_target(bus, 10, 20), rgb555(31, 0, 0));
+    CHECK_EQ(read_target(bus, 11, 20), rgb555(0, 31, 0));
+    CHECK_EQ(read_target(bus, 10, 21), rgb555(0, 0, 31));
+    CHECK_EQ(read_target(bus, 11, 21), rgb555(31, 31, 31));
+}
+
+TEST(an_lrform_cel_reads_the_two_rows_from_each_source_word) {
+    Bus bus;
+    Madam madam(bus);
+    madam.set_clip(320, 240);
+    madam.set_target(kVramBase, 320 * 2);
+
+    // The official LR layout interleaves a pair of rows by pixel:
+    // [row0 x0, row1 x0], [row0 x1, row1 x1].
+    bus.write16(kSourceAt + 0, rgb555(31, 0, 0));
+    bus.write16(kSourceAt + 2, rgb555(0, 0, 31));
+    bus.write16(kSourceAt + 4, rgb555(0, 31, 0));
+    bus.write16(kSourceAt + 6, rgb555(31, 31, 31));
+
+    constexpr u32 kLrform = 1u << 11;
+    // VCNT zero means one pair, hence two output rows in LR form.
+    write_ccb(bus, kCcbAt, 0, kSourceAt, 0, fixed(10), fixed(20),
+              fixed(1), 0, 0, fixed(1),
+              pre0_for(kFormatDirect16, 1), pre1_for(2) | kLrform);
+    madam.render_cel_list(kCcbAt);
+
     CHECK_EQ(read_target(bus, 10, 20), rgb555(31, 0, 0));
     CHECK_EQ(read_target(bus, 11, 20), rgb555(0, 31, 0));
     CHECK_EQ(read_target(bus, 10, 21), rgb555(0, 0, 31));
@@ -391,7 +418,7 @@ TEST(a_second_cel_paints_over_the_first) {
     // First cel: red at the origin, chaining to the second.
     write_ccb(bus, first, 0, kSourceAt, 0, 0, 0, fixed(1), 0, 0, fixed(1),
               pre0_for(kFormatDirect16, 1), pre1_for(1));
-    bus.write32(first + 0, kCcbNpAbs | kCcbSpAbs | kCcbPpAbs);  // clear LAST
+    bus.write32(first + 0, bus.read32(first) & ~kCcbLast);
     bus.write32(first + 4, second);
 
     // Second cel: blue, same place, and it is last.
@@ -404,12 +431,41 @@ TEST(a_second_cel_paints_over_the_first) {
     CHECK_EQ(read_target(bus, 0, 0), rgb555(0, 0, 31));
 }
 
+TEST(a_skipped_cel_can_load_the_palette_for_the_cel_after_it) {
+    Bus bus;
+    Madam madam(bus);
+    madam.set_clip(320, 240);
+    madam.set_target(kVramBase, 320 * 2);
+
+    const u32 first = kCcbAt;
+    const u32 second = kCcbAt + 0x100;
+    bus.write8(kSourceAt, 1u);
+    bus.write8(kSourceAt + 8, 1u);
+    bus.write16(kPlutAt + 2, rgb555(31, 0, 0));
+
+    write_ccb(bus, first, kCcbSkip, kSourceAt, kPlutAt,
+              fixed(1), fixed(1), fixed(1), 0, 0, fixed(1),
+              pre0_for(kFormatIndexed8, 1), pre1_for(1, 8));
+    bus.write32(first, bus.read32(first) & ~kCcbLast);
+    bus.write32(first + 4, second);
+
+    write_ccb(bus, second, 0, kSourceAt + 8, kPlutAt + 0x100,
+              fixed(5), fixed(6), fixed(1), 0, 0, fixed(1),
+              pre0_for(kFormatIndexed8, 1), pre1_for(1, 8));
+    bus.write32(second, bus.read32(second) & ~kCcbLdPlut);
+
+    madam.render_cel_list(first);
+    CHECK_EQ(madam.stats().cels_walked, 2u);
+    CHECK_EQ(madam.stats().cels_drawn, 1u);
+    CHECK_EQ(read_target(bus, 5, 6), rgb555(31, 0, 0));
+}
+
 TEST(a_self_referencing_list_terminates) {
     Bus bus;
     Madam madam(bus);
     write_ccb(bus, kCcbAt, 0, kSourceAt, 0, 0, 0, fixed(1), 0, 0, fixed(1),
               pre0_for(kFormatDirect16, 1), pre1_for(1));
-    bus.write32(kCcbAt + 0, kCcbNpAbs | kCcbSpAbs | kCcbPpAbs);  // not LAST
+    bus.write32(kCcbAt + 0, bus.read32(kCcbAt) & ~kCcbLast);
     bus.write32(kCcbAt + 4, kCcbAt);                             // points at itself
 
     madam.render_cel_list(kCcbAt);
@@ -523,7 +579,7 @@ TEST(a_cel_drawn_into_vram_appears_in_the_frame) {
     bus.write32(kMadamBase + kMadamCelStart, 0);
 
     const u32 list = 0x8000u;
-    bus.write32(list + 0, kVdlCurrOverride | 261u);
+    bus.write32(list + 0, kVdlEnableDma | kVdlCurrOverride | 261u);
     bus.write32(list + 4, kVramBase);
     bus.write32(list + 8, kVramBase);
     bus.write32(list + 12, 0);
@@ -539,7 +595,7 @@ TEST(a_cel_drawn_into_vram_appears_in_the_frame) {
     const Frame frame = console.framebuffer();
     const int row = cel_row - static_cast<int>(console.vdlp().buffer_start_line());
     CHECK(row >= 0);
-    CHECK_EQ(frame.pixels[row * frame.width + 3], 0xffff0000u);
+    CHECK_EQ(frame.pixels[(row * 2) * frame.width + 3 * 2], 0xffff0000u);
 }
 
 // ---------------------------------------------------------------------------
@@ -656,9 +712,57 @@ TEST(a_rotated_cel_lands_as_a_solid_figure_not_a_stack_of_rectangles) {
     CHECK_EQ(widest, 16);
 }
 
+TEST(a_transparent_run_advances_both_edges_of_a_rotated_packed_cel) {
+    // A packed transparent packet still consumes source columns. The
+    // arbitrary mapper carries both the current row edge and the matching
+    // edge on the next row; if only the first is advanced, the next visible
+    // texel becomes a long quad spanning backwards across the transparent
+    // run. Road Rash's leaned rider exposed this as repeated horizontal
+    // strips while steering.
+    Bus bus;
+    Madam madam(bus);
+    madam.set_clip(320, 240);
+    madam.set_target(kVramBase, 320 * 2);
+
+    // One eight-byte packed row: three transparent pixels, then one literal
+    // palette index, then end-of-row. The zero length field names an
+    // eight-byte row because packed lengths are stored as words-minus-two.
+    bus.write8(kSourceAt + 0, 0x00);
+    bus.write8(kSourceAt + 1, 0x00);
+    bus.write8(kSourceAt + 2, 0x82);  // transparent, count 3
+    bus.write8(kSourceAt + 3, 0x40);  // literal, count 1
+    bus.write8(kSourceAt + 4, 0x01);  // PLUT entry 1
+    bus.write8(kSourceAt + 5, 0x00);  // end of row
+    bus.write16(kPlutAt + 2, rgb555(31, 31, 31));
+
+    const s32 step = fixed(2);
+    write_ccb(bus, kCcbAt, kCcbPacked, kSourceAt, kPlutAt,
+              fixed(20), fixed(20), step, step, -step, step,
+              pre0_for(kFormatIndexed8, 1), pre1_for(4, 8));
+    madam.render_cel_list(kCcbAt);
+
+    // Only the final source texel is visible, so it covers one 2x2-rotated
+    // diamond (determinant eight), not a bridge back to the row origin.
+    CHECK_EQ(madam.stats().pixels_written, 8u);
+    CHECK_EQ(read_target(bus, 20, 23), 0u);
+    CHECK_EQ(read_target(bus, 26, 27), rgb555(31, 31, 31));
+}
+
 // ---------------------------------------------------------------------------
 // DMA channel registers
 // ---------------------------------------------------------------------------
+
+TEST(madam_reports_the_green_hardware_revision_and_keeps_it_read_only) {
+    Bus bus;
+    Madam madam(bus);
+    bus.attach_madam(&madam);
+
+    CHECK_EQ(bus.read32(kMadamBase + kMadamRevision), 0x01020000u);
+    bus.write32(kMadamBase + kMadamRevision, 0);
+    CHECK_EQ(bus.read32(kMadamBase + kMadamRevision), 0x01020000u);
+    madam.reset();
+    CHECK_EQ(bus.read32(kMadamBase + kMadamRevision), 0x01020000u);
+}
 
 TEST(dma_channels_are_address_and_length_pairs_eight_bytes_apart) {
     // The layout comes from the ROM's own driver, which writes channel 3 at
@@ -705,6 +809,53 @@ TEST(a_reset_clears_the_dma_channels) {
     CHECK_EQ(madam.dma_address(3), 0u);
 }
 
+TEST(a_reset_clears_madams_operational_registers_and_inherited_cel_state) {
+    Bus bus;
+    Madam madam(bus);
+    bus.attach_madam(&madam);
+
+    bus.write32(kMadamBase + kMadamDmaEnable, 1u);
+    bus.write32(kMadamBase + kMadamXbusDmaAddress, 0x11110000u);
+    bus.write32(kMadamBase + kMadamXbusDmaLength, 0x200u);
+    bus.write32(kMadamBase + kMadamVdlAddress, 0x22220000u);
+    bus.write32(kMadamBase + kMadamPbusAddress, 0x33330000u);
+    bus.write32(kMadamBase + kMadamPbusLength, 0x80u);
+    bus.write32(kMadamBase + kMadamPbusPointer, 0x20u);
+    bus.write32(kMadamBase + kMadamCurrentCcb, 0x44440000u);
+    bus.write32(kMadamBase + kMadamNextCcb, 0x55550000u);
+    bus.write32(kMadamBase + kMadamCcbCtl0, 0x1234u);
+    bus.write32(kMadamBase + kMadamRegCtl0, 0x0101u);
+    bus.write32(kMadamBase + kMadamRegCtl1, 0x00ef013fu);
+    bus.write32(kMadamBase + kMadamRegCtl2, 0x66660000u);
+    bus.write32(kMadamBase + kMadamRegCtl3, 0x77770000u);
+    bus.write32(kMadamBase + kMadamFifoBase, 0x88880000u);
+    bus.write32(kMadamBase + kMadamFifoBase + 4, 0x40u);
+    bus.write32(kMadamBase + kMadamMatrixIn, 0x1111u);
+    bus.write32(kMadamBase + kMadamMatrixVec, 0x2222u);
+    bus.write32(kMadamBase + kMadamMatrixNumHi, 0x3333u);
+    madam.reset();
+
+    CHECK_EQ(bus.read32(kMadamBase + kMadamDmaEnable), 0u);
+    CHECK_EQ(bus.read32(kMadamBase + kMadamXbusDmaAddress), 0u);
+    CHECK_EQ(bus.read32(kMadamBase + kMadamXbusDmaLength), 0u);
+    CHECK_EQ(bus.read32(kMadamBase + kMadamVdlAddress), 0u);
+    CHECK_EQ(bus.read32(kMadamBase + kMadamPbusAddress), 0u);
+    CHECK_EQ(bus.read32(kMadamBase + kMadamPbusLength), 0u);
+    CHECK_EQ(bus.read32(kMadamBase + kMadamPbusPointer), 0u);
+    CHECK_EQ(bus.read32(kMadamBase + kMadamCurrentCcb), 0u);
+    CHECK_EQ(bus.read32(kMadamBase + kMadamNextCcb), 0u);
+    CHECK_EQ(bus.read32(kMadamBase + kMadamCcbCtl0), 0u);
+    CHECK_EQ(bus.read32(kMadamBase + kMadamRegCtl0), 0u);
+    CHECK_EQ(bus.read32(kMadamBase + kMadamRegCtl1), 0u);
+    CHECK_EQ(bus.read32(kMadamBase + kMadamRegCtl2), 0u);
+    CHECK_EQ(bus.read32(kMadamBase + kMadamRegCtl3), 0u);
+    CHECK_EQ(bus.read32(kMadamBase + kMadamFifoBase), 0u);
+    CHECK_EQ(bus.read32(kMadamBase + kMadamFifoBase + 4), 0u);
+    CHECK_EQ(bus.read32(kMadamBase + kMadamMatrixIn), 0u);
+    CHECK_EQ(bus.read32(kMadamBase + kMadamMatrixVec), 0u);
+    CHECK_EQ(bus.read32(kMadamBase + kMadamMatrixNumHi), 0u);
+}
+
 TEST(the_start_port_ignores_the_value_written_to_it) {
     // None of the engine's control ports carries an address. Treating the
     // written value as the list head makes the engine draw from wherever the
@@ -721,6 +872,64 @@ TEST(the_start_port_ignores_the_value_written_to_it) {
     bus.write32(kMadamBase + kMadamCelStart, 0xdeadbeef);
     bus.run_pending_cel_engine();
     CHECK_EQ(console.madam().stats().cels_drawn, 1u);
+}
+
+TEST(the_cel_status_distinguishes_running_suspended_and_idle) {
+    Console console;
+    console.reset();
+    Bus& bus = console.bus();
+
+    write_ccb(bus, kCcbAt, 0, kSourceAt, 0, fixed(5), fixed(5),
+              fixed(1), 0, 0, fixed(1),
+              pre0_for(kFormatDirect16, 1), pre1_for(1));
+    bus.write32(kMadamBase + kMadamNextCcb, kCcbAt);
+
+    CHECK_EQ(bus.read32(kMadamBase + kMadamCelStatus), 0u);
+    bus.write32(kMadamBase + kMadamCelStart, 0);
+    CHECK_EQ(bus.read32(kMadamBase + kMadamCelStatus), kMadamCelRunning);
+
+    bus.write32(kMadamBase + kMadamCelPause, 0);
+    CHECK_EQ(bus.read32(kMadamBase + kMadamCelStatus),
+             kMadamCelRunning | kMadamCelPaused);
+    CHECK(!bus.cel_engine_pending());
+
+    bus.write32(kMadamBase + kMadamCelResume, 0);
+    CHECK_EQ(bus.read32(kMadamBase + kMadamCelStatus), kMadamCelRunning);
+    CHECK(bus.cel_engine_pending());
+    bus.run_pending_cel_engine();
+    CHECK_EQ(bus.read32(kMadamBase + kMadamCelStatus), 0u);
+}
+
+TEST(current_ccb_tracks_the_hardware_fetch_cursor) {
+    Console console;
+    console.reset();
+    Bus& bus = console.bus();
+
+    write_ccb(bus, kCcbAt, 0, kSourceAt, 0, fixed(5), fixed(5),
+              fixed(1), 0, 0, fixed(1),
+              pre0_for(kFormatDirect16, 1), pre1_for(1));
+    bus.write32(kMadamBase + kMadamNextCcb, kCcbAt);
+    bus.write32(kMadamBase + kMadamCelStart, 0);
+    bus.run_pending_cel_engine();
+
+    // Six fixed words + four size + two perspective + PIXC + two literal
+    // preamble words = fifteen fetched words.
+    CHECK_EQ(bus.read32(kMadamBase + kMadamCurrentCcb), kCcbAt + 15u * 4u);
+}
+
+TEST(stop_leaves_the_engine_idle_and_discards_a_suspended_walk) {
+    Console console;
+    console.reset();
+    Bus& bus = console.bus();
+
+    bus.write32(kMadamBase + kMadamNextCcb, kCcbAt);
+    bus.write32(kMadamBase + kMadamCelStart, 0);
+    bus.write32(kMadamBase + kMadamCelPause, 0);
+    bus.write32(kMadamBase + kMadamCelStop, 0);
+
+    CHECK_EQ(bus.read32(kMadamBase + kMadamCelStatus), 0u);
+    CHECK_EQ(bus.read32(kMadamBase + kMadamNextCcb), 0u);
+    CHECK(!bus.cel_engine_pending());
 }
 
 TEST(stopping_the_engine_clears_where_it_would_go_next) {
@@ -775,15 +984,59 @@ TEST(a_packed_cel_keeps_the_width_the_last_unpacked_cel_left_behind) {
 
     bus.write32(kCcbAt + 0, kCcbLast | kCcbSpAbs | kCcbCcbPre);
     bus.write32(kCcbAt + 8, kSourceAt);
-    bus.write32(kCcbAt + 52, pre0_for(kFormatDirect16, 4));
-    bus.write32(kCcbAt + 56, pre1_for(37));
+    bus.write32(kCcbAt + 24, pre0_for(kFormatDirect16, 4));
+    bus.write32(kCcbAt + 28, pre1_for(37));
     CHECK_EQ(madam.read_ccb(kCcbAt).width, 37u);
 
     // Now a packed cel with a different PRE1 word sitting in the CCB, which it
     // must ignore.
     bus.write32(kCcbAt + 0, kCcbLast | kCcbSpAbs | kCcbCcbPre | kCcbPacked);
-    bus.write32(kCcbAt + 56, pre1_for(5));
+    bus.write32(kCcbAt + 28, pre1_for(5));
     CHECK_EQ(madam.read_ccb(kCcbAt).width, 37u);
+}
+
+TEST(a_compact_ccb_inherits_the_load_controlled_cel_registers) {
+    Bus bus;
+    Madam madam(bus);
+
+    write_ccb(bus, kCcbAt, 0, kSourceAt, kPlutAt,
+              fixed(13), fixed(17), fixed(2), fixed(3),
+              fixed(4), fixed(5), pre0_for(kFormatDirect16, 6),
+              pre1_for(7), fixed(8), fixed(9));
+    bus.write32(kCcbAt + 48, 0x12345678u);
+
+    const Ccb loaded = madam.read_ccb(kCcbAt);
+    CHECK_EQ(loaded.x, fixed(13));
+    CHECK_EQ(loaded.hdx, fixed(2));
+    CHECK_EQ(loaded.pixc, 0x12345678u);
+
+    // With all four load flags clear, the tail begins immediately after the
+    // always-present X/Y slots. Those slots are ignored because YOXY is clear;
+    // PRE0/PRE1 at +24/+28 still describe this cel, while every transform and
+    // PIXC register remains from the preceding one.
+    constexpr u32 compact = 0x1100;
+    bus.write32(compact + 0, kCcbLast | kCcbNpAbs | kCcbSpAbs | kCcbPpAbs |
+                                 kCcbCcbPre | kCcbAcw | kCcbAccw);
+    bus.write32(compact + 4, 0);
+    bus.write32(compact + 8, kSourceAt);
+    bus.write32(compact + 12, kPlutAt);
+    bus.write32(compact + 16, 0x7fffffffu);
+    bus.write32(compact + 20, 0x7fffffffu);
+    bus.write32(compact + 24, pre0_for(kFormatDirect16, 10));
+    bus.write32(compact + 28, pre1_for(11));
+
+    const Ccb inherited = madam.read_ccb(compact);
+    CHECK_EQ(inherited.x, fixed(13));
+    CHECK_EQ(inherited.y, fixed(17));
+    CHECK_EQ(inherited.hdx, fixed(2));
+    CHECK_EQ(inherited.hdy, fixed(3));
+    CHECK_EQ(inherited.vdx, fixed(4));
+    CHECK_EQ(inherited.vdy, fixed(5));
+    CHECK_EQ(inherited.hddx, fixed(8));
+    CHECK_EQ(inherited.hddy, fixed(9));
+    CHECK_EQ(inherited.pixc, 0x12345678u);
+    CHECK_EQ(inherited.width, 11u);
+    CHECK_EQ(inherited.height, 10u);
 }
 
 TEST(the_engine_reads_the_ccb_as_it_stands_when_the_instruction_ends) {

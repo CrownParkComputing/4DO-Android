@@ -14,6 +14,8 @@ import java.util.ArrayList;
 import java.util.Collections;
 import java.util.Comparator;
 import java.util.List;
+import java.io.InputStream;
+import java.io.OutputStream;
 
 /**
  * Scoped folder access through the Storage Access Framework.
@@ -46,6 +48,7 @@ public final class DocumentAccess {
     public void pickFolder() {
         Intent intent = new Intent(Intent.ACTION_OPEN_DOCUMENT_TREE);
         intent.addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION
+                | Intent.FLAG_GRANT_WRITE_URI_PERMISSION
                 | Intent.FLAG_GRANT_PERSISTABLE_URI_PERMISSION);
         activity.startActivityForResult(intent, REQUEST_PICK_FOLDER);
     }
@@ -62,7 +65,8 @@ public final class DocumentAccess {
         }
         try {
             activity.getContentResolver().takePersistableUriPermission(
-                    treeUri, Intent.FLAG_GRANT_READ_URI_PERMISSION);
+                    treeUri, Intent.FLAG_GRANT_READ_URI_PERMISSION |
+                             Intent.FLAG_GRANT_WRITE_URI_PERMISSION);
         } catch (SecurityException e) {
             Log.w(TAG, "Could not persist access to " + treeUri, e);
             return false;
@@ -227,6 +231,84 @@ public final class DocumentAccess {
         } catch (Exception e) {
             Log.w(TAG, "Could not open " + documentUri, e);
             return -1;
+        }
+    }
+
+    /** True only when the chosen tree still has a persisted write grant. */
+    public boolean canWrite(String treeUri) {
+        if (treeUri == null || treeUri.isEmpty()) return false;
+        for (android.content.UriPermission held :
+                activity.getContentResolver().getPersistedUriPermissions()) {
+            if (held.getUri().toString().equals(treeUri) &&
+                held.isReadPermission() && held.isWritePermission()) return true;
+        }
+        return false;
+    }
+
+    private Uri folderDocumentUri(String uri) {
+        Uri parsed = Uri.parse(uri);
+        if (DocumentsContract.isDocumentUri(activity, parsed)) return parsed;
+        return DocumentsContract.buildDocumentUriUsingTree(
+                parsed, DocumentsContract.getTreeDocumentId(parsed));
+    }
+
+    private Uri findChild(Uri parent, String wantedName) throws Exception {
+        String parentId = DocumentsContract.getDocumentId(parent);
+        Uri children = DocumentsContract.buildChildDocumentsUriUsingTree(parent, parentId);
+        try (Cursor cursor = activity.getContentResolver().query(children,
+                new String[] { DocumentsContract.Document.COLUMN_DOCUMENT_ID,
+                               DocumentsContract.Document.COLUMN_DISPLAY_NAME },
+                null, null, null)) {
+            if (cursor == null) return null;
+            while (cursor.moveToNext()) {
+                if (wantedName.equalsIgnoreCase(cursor.getString(1))) {
+                    return DocumentsContract.buildDocumentUriUsingTree(
+                            parent, cursor.getString(0));
+                }
+            }
+        }
+        return null;
+    }
+
+    /** Create (or reuse) one directory below a granted tree/document URI. */
+    public String ensureDirectory(String parentUri, String name) throws Exception {
+        Uri parent = folderDocumentUri(parentUri);
+        Uri existing = findChild(parent, name);
+        if (existing != null) return existing.toString();
+        Uri created = DocumentsContract.createDocument(
+                activity.getContentResolver(), parent,
+                DocumentsContract.Document.MIME_TYPE_DIR, name);
+        if (created == null) throw new Exception("Could not create game folder");
+        return created.toString();
+    }
+
+    /** Atomically replace one file in a writable SAF directory. */
+    public void writeDocument(String parentUri, String name, String mime,
+                              InputStream input) throws Exception {
+        Uri parent = folderDocumentUri(parentUri);
+        Uri existing = findChild(parent, name);
+        if (existing != null) {
+            DocumentsContract.deleteDocument(activity.getContentResolver(), existing);
+        }
+        Uri created = DocumentsContract.createDocument(
+                activity.getContentResolver(), parent,
+                mime == null ? "application/octet-stream" : mime, name);
+        if (created == null) throw new Exception("Could not create " + name);
+        boolean complete = false;
+        try (OutputStream output = activity.getContentResolver()
+                 .openOutputStream(created, "w")) {
+            if (output == null) throw new Exception("Could not write " + name);
+            byte[] buffer = new byte[256 * 1024];
+            int read;
+            while ((read = input.read(buffer)) >= 0) {
+                if (read > 0) output.write(buffer, 0, read);
+            }
+            complete = true;
+        } finally {
+            if (!complete) {
+                try { DocumentsContract.deleteDocument(
+                    activity.getContentResolver(), created); } catch (Exception ignored) {}
+            }
         }
     }
 }

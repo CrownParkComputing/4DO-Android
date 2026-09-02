@@ -1,6 +1,6 @@
 # Handover
 
-State of Retro-3DO as of 2026-08-31, written for someone picking this up cold.
+State of Retro-3DO as of 2026-09-01, written for someone picking this up cold.
 
 ## Standing instructions from the user
 
@@ -10,9 +10,10 @@ These override defaults. Do not re-litigate them.
   `~/StudioProjects/4DO-Android/app/cpp/native_core/`, copied to
   `~/retro3do-work/oracle/src/`. Reading it is sanctioned. If stuck, Opera
   itself is also permitted.
-- **Provenance is settled and deferred.** `docs/PROVENANCE.md` states plainly
-  that the hardware layer is derived from FreeDO/Opera. The user has said they
-  will address the licensing later. Do not raise it again unasked.
+- **Provenance has now had a full retrospective.** `docs/PROVENANCE.md`
+  distinguishes historical FreeDO/Opera exposure from the public authority and
+  independently structured algorithm used by each current module. Do not call
+  the history clean-room; do not call the current old-port routines unchanged.
 - **Android must use SAF scoped-folder access only.** Never all-files access.
 - **applicationId stays `com.fourdo.android`.** Do not change it.
 - **No custom animations or polish** ahead of emulation correctness.
@@ -24,7 +25,7 @@ These override defaults. Do not re-litigate them.
 
 ## Where things stand
 
-225 tests pass. All library floors pass. Two titles are **pixel-identical** to
+250 tests pass. All library floors pass. Two titles are **pixel-identical** to
 the reference at frame 20,000: Killing Time and Alone in the Dark 2. Flashback
 differs by 4.75%, which is animation phase.
 
@@ -40,54 +41,73 @@ Library at 20,000 frames (`tools/gamecheck/expectations.txt` holds the floors):
 | Flashback | 104,548 | 2,083 | |
 | Killing Time | 60,640 | 895 | pixel-identical to reference |
 | PGA Tour 96 | 239,005 | 2,372 | |
-| Need for Speed | 13,755 | 2,635 | **road missing in-game — see below** |
-| Road Rash | 171,932 | 853 | BIOS shell — disc rejected |
+| Need for Speed | 13,755 | 2,635 | road and terrain now render; targeted gameplay smoke passes |
+| Road Rash | 171,932 | 853 | now boots into a live race; targeted gameplay smoke passes |
 | Wing Commander III d1 | 304 | 4,673 | FMV plays cleanly; it is video, not cels |
 | Wing Commander III d2 | — | — | will not open, bad dump |
 
 Device: BIOS boots on the Retroid at 60/60 fps, ~4.8 ms/frame. APK installed as
 `com.fourdo.android` v2.1.0 debug.
 
-## THE ACTIVE BUG: Need for Speed's road
+The scheduler now gives VDLP one horizontal-blank callback per scanline, based
+on the official 3DO Graphics Programming Guide and display-list patent rather
+than on Opera's implementation. The VDL root is latched at the field boundary;
+pixels and CLUT state are captured as each line is reached. A short headless
+smoke run passed for NFS and Road Rash, and on-device NFS gameplay remained
+clean at ARM 150%, 59-60/60 fps and about 13.6 ms/frame with no audio-gap
+warning.
 
-**Symptom.** In-game, the cockpit, dials, rear-view mirror and HUD render
-perfectly. Roadside sprites (buildings, trees, cars) draw. The road surface, sky
-and terrain are missing — flat green, which is the clear colour showing through.
+Android presentation is vsynced. The emulator already runs on its own paced
+thread, so this does not control machine speed; it prevents the UI thread from
+submitting the same frame hundreds of times per second and visibly tearing
+during lateral movement.
 
-**What is known, all measured:**
+The launcher is now a fixed top-navigation layout. The A-Z/0-9 strip and search
+stay fixed while only the card child can scroll; the card scrollbar is hidden
+and direct finger swipes move the list. Settings contains the optional
+RetroMedia integration: native registered-account login (Firebase or local,
+according to `/api/auth/config`), an Android-Keystore-encrypted session, an
+explicit artwork-type selector, and user-triggered downloads of one matching
+piece per library game. Decoded covers are stored as bounded private RGBA cache
+files and loaded lazily into SDL textures on the game cards. No password enters
+`settings.cfg`, and no download starts automatically.
 
-- The reference draws this scene correctly. It is a genuine bug on our side.
-- In 6,000 frames the reference walks **217,134 cels**; we walk **90,694**. We
-  run the cel engine *more* often (6,754 vs 4,806) while walking far fewer cels.
-- Cel-by-cel, the two machines are **identical for the first 9 cels and then
-  diverge**. At cel #9 both read CCB `0D9FC0`; the reference sees flags
-  `4FEE4430`, we see `5FE64430` — the value from the previous run. The game has
-  rewritten that CCB and we are reading the stale version.
-- The cel engine first runs somewhere between frame 400 and 800; cel #9 is at
-  roughly frame 700–800. **The divergence window is small and traceable.**
-- This is a **CPU-path divergence, not a rendering one.** Four separate,
-  correct rendering fixes (deferred engine start, CCBPRE preamble, the rotated
-  quad mapper, the matrix engine) did not move the divergence point at all.
+The VDLP implements 2x output expansion and SDL presents it with vsync, but
+neither was the lateral-breakup fix. An exact Opera CCB/source comparison found
+that a type-2 transparent packet in a rotated packed cel advanced only the
+upper transformed edge. The lower edge stayed behind, so the next visible quad
+crossed backwards through the sprite and created horizontal strips. Advancing
+both edges fixes the Road Rash rider and the rotating/scrolled scenery in both
+titles. The regression is
+`a_transparent_run_advances_both_edges_of_a_rotated_packed_cel`.
 
-**Next step, already scoped:** PC-trace diff from boot to find the first
-instruction where the two CPUs disagree. Both sides have hooks:
+The full pre-build module comparison and the deliberately remaining boundaries
+are in [OPERA_AUDIT.md](OPERA_AUDIT.md).
 
-- Reference: `PCTRACE=<file>` writes raw 4-byte PCs; `PCTRACESKIP=<n>` skips the
-  first n. See `oracle/src/native_arm.c:1424`.
-- Ours: **not yet implemented.** `Arm60::step` in `src/core/arm60.cpp` is where
-  it goes; follow the `CELLOG` pattern in `madam.cpp` for an env-var-gated log.
+The post-audit source retrospective replaced the former direct-port routines:
+MADAM matrix math, arbitrary-quad rasterisation, winding/visibility, LR-form
+addressing, DSP operand/branch/ALU structure, SPORT masking and ARM6 multiply
+timing. It also found and fixed an inherited ARM timing boundary error: zero,
+one and odd significant-bit ranges were overcharged. The current algorithms and
+the few behavior-only fallbacks are catalogued in
+[PROVENANCE.md](PROVENANCE.md).
 
-Trace ~800 frames (roughly 48M instructions, ~190 MB) and find the first
-differing PC. That instruction is the bug.
+## Resolved: Need for Speed's road
 
-**Things already ruled out** — do not re-investigate:
+The missing road was a producer-side failure, not a CEL renderer failure. The
+game's road CCBs contained valid texture pointers but zero positions and matrix
+deltas. It selects a matrix driver from MADAM's revision register; the emulator
+reported zero, so NFS selected the wrong result-port layout. MADAM now reports
+the read-only Panasonic Green hardware ID `0x01020000`, matching the production
+hardware and the sanctioned core.
 
-- Cel engine port addresses (0x100/0x104/0x108/0x10c) match the reference.
-- `pixel_offset` matches the reference's `XY2OFF` exactly.
-- The winding cull is not eating the road (73 culled out of 224,081).
-- The 1x1 zero-area cels drawing nothing is correct — the reference does the
-  same with those CCBs.
-- Register 0x28 (engine status) reads 0, which is what software wants.
+With that ID, NFS produces non-degenerate road CCBs and renders the road,
+terrain, signs and lane markings. A clean release run also verified that the
+scene remains correct across pause/resume.
+
+Road Rash had a separate mount failure: READ CAPACITY and READ DISC INFO added
+the 150-frame CD lead-in twice. Reporting the physical lead-out with one bias
+lets DIPIR accept the verified retail image and the title reaches a live race.
 
 ## The oracle harness — the most useful thing built this session
 
@@ -158,18 +178,23 @@ store. MADAM's matrix unit, which did not exist at all and is why the 3D titles
 were drawing degenerate geometry. ARM6 multiply timing (2-bit Booth, not the
 ARM7 byte table) and exception cost.
 
+The Opera audit then fixed full CLIO/MADAM/XBUS reset state, read-only chip
+revisions, ordinary CLIO register latches, DMA/type-0 readback, VDL video-DMA
+blanking and VRAM wrapping, skipped-CCB state inheritance, and the rotated
+packed-CEL transparent-run edge bug. Each has a focused test; see
+[OPERA_AUDIT.md](OPERA_AUDIT.md).
+
 **And the input path: `PadState` was written by the front end and read by
 nothing.** The on-screen pad and every controller were connected to a dead end.
 Multiple controllers now chain as separate 3DO pads, analogue sticks drive the
 directions, triggers act as shoulders.
 
-## Known-unfixed, besides the road
+## Known-unfixed
 
-- Road Rash and BattleSport are rejected after five header sectors. Narrowed to
-  the signature block; **the reference rejects them identically**, which points
-  at the dumps.
-- Audio gaps at startup (3–8 reported by the harness). Never investigated by
-  ear; the user has not yet reported on audio quality.
+- BattleSport is rejected after five header sectors. It remains separate from
+  the Road Rash lead-out bug fixed above.
+- Audio startup now primes the SDL stream with real samples before playback;
+  the device overlay reports no startup gaps. Broader listening tests remain.
 - Wing Commander III disc 2 will not open at all.
 - Device testing outstanding: a game end-to-end, save persistence across a
   force-close, audio, controller mapping, sustained gameplay frame rate.

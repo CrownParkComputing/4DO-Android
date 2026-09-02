@@ -77,6 +77,14 @@ android {
         }
 
     }
+    packaging {
+        jniLibs {
+            // AdrenoTools installs its isolated Vulkan hook from the extracted
+            // nativeLibraryDir. Android cannot provide that path when native
+            // libraries remain compressed inside the APK.
+            useLegacyPackaging = true
+        }
+    }
     lint {
         abortOnError = false
     }

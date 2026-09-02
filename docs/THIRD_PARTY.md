@@ -84,10 +84,11 @@ extra to cross compile for Android or iOS.
 Its bundled dependencies carry their own permissive terms: the LZMA SDK is
 public domain, miniz is MIT, and zstd is BSD/GPLv2 dual licensed (BSD taken).
 
-## What is deliberately NOT used
+## Reference-source history
 
-FreeDO, 4DO, Opera and `opera-libretro`, whose licence forbids commercial use
-of the sources "or any knowledge obtained by studying or reverse engineering"
-them. Every other 3DO emulator with published source - 3doh, 3dox, 3doplay -
-descends from that same lineage and is excluded for the same reason. Phoenix is
-closed source.
+No FreeDO, 4DO, Opera or `opera-libretro` source file is compiled or vendored
+into this project. Their code was nevertheless studied during development, and
+some earlier Retro-3DO routines were ports before the September 2026
+reimplementation pass. That historical exposure and the relevant FreeDO notice
+are disclosed in [PROVENANCE.md](PROVENANCE.md); it must not be described as
+clean-room merely because the current routines were later replaced.

@@ -13,8 +13,9 @@
 // the part this implementation is confident about. Individual register offsets
 // are collected into one table so a correction is a one-line change; those not
 // yet checked against the published hardware documentation are marked
-// TODO(clio). Register values, the interrupt banks and the timer rate were
-// taken from the reference emulator; see docs/PROVENANCE.md.
+// TODO(clio). Active offsets and bit assignments are cross-checked against the
+// official SDK headers, system patents, boot-ROM code paths and focused tests;
+// the historical reference audit remains documented in PROVENANCE.md.
 #pragma once
 
 #include <memory>
@@ -373,6 +374,14 @@ public:
     void set_scanlines_per_field(u32 lines) { scanlines_per_field_ = lines; }
     u32  scanline() const { return scanline_; }
 
+    // Horizontal blank is when the VDLP reads the entry for the line that is
+    // about to be displayed. Keep this as a small callback rather than making
+    // CLIO know about display-list memory or pixels.
+    void set_scanline_handler(void (*handler)(void*, u32), void* context) {
+        scanline_handler_ = handler;
+        scanline_context_ = context;
+    }
+
     // True while the machine is in vertical blank, which is what the display
     // side asks in order to know a field has finished.
     bool field_complete() const { return field_complete_; }
@@ -471,6 +480,8 @@ private:
     u32 scanline_ = 0;
     u32 pixel_in_line_ = 0;
     u32 scanlines_per_field_ = 263;
+    void (*scanline_handler_)(void*, u32) = nullptr;
+    void* scanline_context_ = nullptr;
 
     bool field_complete_ = false;
     bool field_odd_ = false;
@@ -482,6 +493,14 @@ private:
     u32 mode_ = 0;
     u32 csys_bits_ = 0;
     u32 cstat_bits_ = 0;
+    // Keep explicit latches for low registers that have no modelled side
+    // effect yet. Software still observes the hardware register-file contract:
+    // a value written to an ordinary read/write register can be read back.
+    u32 audio_in_ = 0;
+    u32 audio_out_ = 0;
+    u32 spare_ = 0;
+    u32 hdelay_ = 0;
+    u32 adbctl_ = 0;
     u32 watchdog_ = 0;
     u32 seed_ = 0;
     u32 timer_slack_ = 0;
@@ -489,10 +508,9 @@ private:
     bool written_flag_[kTrackedRegisters] = {};
     u64 read_count_[kTrackedRegisters] = {};
 
-    // The DSP is not emulated. Its window is backed by plain storage so that an
-    // uploaded program is retained and can be read back and inspected, rather
-    // than being silently dropped - which would make the upload itself
-    // impossible to study.
+    // Retain the raw DSP-window image as well as forwarding mapped program and
+    // data writes to the DSP. This keeps diagnostics available for addresses
+    // that do not represent active DSP memory.
     std::vector<u32> dsp_window_;
     u64 dsp_writes_ = 0;
 

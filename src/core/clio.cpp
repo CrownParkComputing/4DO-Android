@@ -73,6 +73,7 @@ u32 Clio::dsp_word(u32 offset) const {
 }
 
 void Clio::reset() {
+    revision_ = kClioRevisionValue;
     irq0_pending_ = 0;
     irq0_enabled_ = 0;
     irq1_pending_ = 0;
@@ -98,6 +99,27 @@ void Clio::reset() {
 
     mode_ = 0;
     csys_bits_ = 0;
+    control_ = 0;
+    audio_in_ = 0;
+    audio_out_ = 0;
+    spare_ = 0;
+    hdelay_ = 0;
+    adbctl_ = 0;
+
+    // The expansion-bus registers are ordinary CLIO state. Leaving any of
+    // them live across reset is especially nasty because a stale selection or
+    // DMA request changes which device receives the BIOS's first command.
+    xbus_sel_ = 0;
+    xbus_dma_enable_ = 0;
+    xbus_poll_ = 0;
+    xbus_device_poll_ = kXbusPollControlReset;
+    xbus_sel_modifier_ = 0;
+    media_changed_ = false;
+    xbus_dma_requested_ = false;
+    xbus_control_ = kXbusReady;
+    xbus_direction_ = 0;
+    xbus_type0_ = 0;
+    xbus_xfer_count_ = 0;
 
     // A reset is a power-on as far as the machine is concerned. Reporting no
     // cause at all is not a neutral default: the boot ROM tests this against a
@@ -214,6 +236,9 @@ void Clio::tick(u32 cycles) {
             // flag to synchronise with a particular one.
             field_odd_ = !field_odd_;
         }
+        if (scanline_handler_ != nullptr) {
+            scanline_handler_(scanline_context_, scanline_);
+        }
     }
 }
 
@@ -328,6 +353,15 @@ const long g_clio_log_limit = [] {
     return limit != nullptr ? std::strtol(limit, nullptr, 10) : 200000L;
 }();
 long g_clio_log_count = 0;
+
+// TIMER15LOG names a file that gets one line per read of the timer-15 counter:
+// the instruction count and total cycles at the read, and the value returned.
+// The same hook exists in the reference build; lining the two files up by
+// instruction index shows exactly when the timers stopped agreeing.
+std::FILE* const g_timer15_log = [] {
+    const char* path = std::getenv("TIMER15LOG");
+    return path != nullptr ? std::fopen(path, "w") : nullptr;
+}();
 #endif
 void log_access(char kind, u32 offset, u32 value, u32 pc) {
 #if !RETRO3DO_TRACING
@@ -350,6 +384,14 @@ void log_access(char kind, u32 offset, u32 value, u32 pc) {
 u32 Clio::read(u32 offset) {
     const u32 result = read_impl(offset);
     log_access('R', offset, result, cpu_.pc());
+#if RETRO3DO_TRACING
+    if (g_timer15_log != nullptr && (offset & 0xffffu) == 0x178u) {
+        std::fprintf(g_timer15_log, "%llu %llu %08x\n",
+                     static_cast<unsigned long long>(cpu_.total_instructions()),
+                     static_cast<unsigned long long>(cpu_.total_cycles()),
+                     result);
+    }
+#endif
     return result;
 }
 
@@ -438,6 +480,8 @@ u32 Clio::read_impl(u32 offset) {
         case kClioCsysBits:    return csys_bits_;
         case kClioVint0:       return vint0_line_;
         case kClioVint1:       return vint1_line_;
+        case kClioAudioIn:     return audio_in_;
+        case kClioAudioOut:    return audio_out_;
         case kClioCstatBits:   return cstat_bits_;
         case kClioTimerDelay:  return timer_delay_;
         case kClioWatchdog:    return watchdog_;
@@ -475,9 +519,17 @@ u32 Clio::read_impl(u32 offset) {
 
         case kClioControl:     return control_;
         case kClioMode:        return mode_;
+        case kClioSpare:       return spare_;
+        case kClioHDelay:      return hdelay_;
+        case kClioAdbctl:      return adbctl_;
+
+        case kClioDmaRequestSet:
+        case kClioDmaRequestClear:
+            return xbus_dma_enable_;
 
         case kClioXbusCtl:       return xbus_control_;
         case kClioXbusDirection: return xbus_direction_;
+        case kClioXbusType0:     return xbus_type0_;
         case kClioXbusXferCount: return xbus_xfer_count_;
         case kClioDipir1:        return dipir1_;
         case kClioDipir2:        return dipir2_;
@@ -648,13 +700,21 @@ void Clio::write_impl(u32 offset, u32 value) {
     }
 
     switch (offset) {
-        case kClioRevision:  revision_ = value; break;
+        case kClioRevision:
+            // Fixed silicon identification. Probe writes must not change a
+            // read-only chip revision.
+            break;
         case kClioCsysBits:  csys_bits_ = value; break;
         case kClioVint0:     vint0_line_ = value; break;
         case kClioVint1:     vint1_line_ = value; break;
+        case kClioAudioIn:   audio_in_ = value; break;
+        case kClioAudioOut:  audio_out_ = value; break;
         case kClioWatchdog:  watchdog_ = value; break;
         case kClioSeed:      seed_ = value; break;
         case kClioMode:      mode_ = value; break;
+        case kClioSpare:     spare_ = value; break;
+        case kClioHDelay:    hdelay_ = value; break;
+        case kClioAdbctl:    adbctl_ = value; break;
         // The ROM clears this once it has read the reset cause, so the cause is
         // reported once rather than latching forever.
         case kClioCstatBits: cstat_bits_ = value; break;

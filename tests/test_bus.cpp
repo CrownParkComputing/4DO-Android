@@ -88,14 +88,23 @@ TEST(the_frame_is_the_right_shape_for_the_region) {
 
     console.set_region(Region::Ntsc);
     Frame frame = console.framebuffer();
-    CHECK_EQ(frame.width, 320);
-    CHECK_EQ(frame.height, 240);
+    CHECK_EQ(frame.width, 640);
+    CHECK_EQ(frame.height, 480);
     CHECK(frame.pixels != nullptr);
 
     console.set_region(Region::Pal);
     frame = console.framebuffer();
-    CHECK_EQ(frame.width, 320);
-    CHECK_EQ(frame.height, 288);
+    CHECK_EQ(frame.width, 640);
+    CHECK_EQ(frame.height, 576);
+}
+
+TEST(a_reset_preserves_the_selected_pal_geometry_in_madam) {
+    Console console;
+    console.set_region(Region::Pal);
+    console.reset();
+
+    CHECK_EQ(console.madam().clip_width(), 320u);
+    CHECK_EQ(console.madam().clip_height(), 288u);
 }
 
 TEST(nvram_survives_a_round_trip_through_a_saved_image) {

@@ -1,10 +1,15 @@
 # Hardware notes and provenance
 
 Where each part of the emulated machine came from. Read
-[PROVENANCE.md](PROVENANCE.md) first: much of this machine IS derived from an
-existing emulator's source, and that document says which parts and how closely.
-The convention kept here is that anything not checked against a citable source
-is marked as such rather than quietly asserted.
+[PROVENANCE.md](PROVENANCE.md) first: it separates the project's historical
+reference exposure from the public authority and independently structured
+algorithm used by the current source. Anything not checked against a citable
+source is marked rather than quietly asserted.
+
+The current module-by-module comparison with Opera, including deliberate
+compatibility boundaries, is [OPERA_AUDIT.md](OPERA_AUDIT.md). The bring-up
+traces later in this file are retained as history and are not the current
+feature boundary.
 
 ## ARM60 (`src/core/arm60.cpp`)
 
@@ -55,10 +60,11 @@ mistaken for a fall-through. Every handler that writes PC says so explicitly.
 
 | Region | Base | Size | Confidence |
 |---|---|---|---|
-| DRAM | `0x00000000` | 1 MB | See below |
-| VRAM | `0x00100000` | 1 MB | See below |
+| DRAM | `0x00000000` | 2 MB | Confirmed by MADAM memory configuration and the ROM sizing test |
+| VRAM | `0x00200000` | 1 MB | Confirmed by MADAM memory configuration and the ROM sizing test |
 | ROM (BIOS, reset vector) | `0x03000000` | 1 MB | Confident |
-| NVRAM | `0x03140000` | 32 KB | **TODO(map)** — confirm base and stride |
+| NVRAM | `0x03140000` | 32 KB in a 128 KB word-strided window | Confirmed against the machine map and reference |
+| SPORT | `0x03200000` | decoded 64 KB window | Confirmed by the ROM SPORT test and reference |
 | MADAM | `0x03300000` | — | **Confirmed** by the boot ROM |
 | CLIO | `0x03400000` | — | **Confirmed** by the boot ROM |
 
@@ -72,8 +78,9 @@ taken on trust: at `0x03000068` it builds `0x03400000` for CLIO and at
 `0x0300006C` `0x03300000` for MADAM, then immediately reads a CLIO register.
 
 Reads of unmapped space currently return zero rather than raising a data abort.
-That is a scaffolding decision to keep early boot alive while the chips are
-being written, and should become a real abort once MADAM exists.
+This is now an explicit compatibility boundary: the implemented chips no longer
+depend on it, but the CPU/bus does not yet generate a real data or prefetch abort
+for an unmapped access.
 
 ## CLIO (`src/core/clio.cpp`)
 
@@ -97,9 +104,12 @@ shape is unusual enough to be worth stating plainly:
 - Bank 1 does not reach the CPU directly; it chains into a bit in bank 0, so a
   handler always reads bank 0 first.
 
-Marked `TODO(clio)`: most individual register offsets, which timer prescaler
-sets the decrement rate (timers currently run at the CPU clock — the right shape
-at the wrong speed), and which bank-0 bit bank 1 chains into.
+The timer clock is the 21 MHz source divided by `TIMERCTL`, with a fractional
+accumulator against the 12.5 MHz CPU clock. The revision, interrupt banks,
+timers, DSP window, DMA and XBUS paths are backed by SDK/system references,
+ROM-path tests and a historical Opera parity comparison. A handful of unused
+offsets retain `TODO(clio)` labels where published naming is still less certain
+than the observed behaviour; ADB serial behaviour is not modelled.
 
 A scanline is derived, not hardcoded: 12.5 MHz over 60 fields of 263 lines is
 about 792 cycles, and deriving it keeps PAL right when the region changes the
@@ -118,10 +128,31 @@ top three bits into the low ones. A plain left-shift instead would make white
 come out as `0xF8F8F8` — which looks fine in a screenshot and is wrong against
 hardware, so both ends of the range are asserted.
 
-Marked `TODO(vdl)`: the bit assignments inside a VDL control word, and the word
-order within an entry. Until those are confirmed, `render_linear()` reads VRAM as
-a plain framebuffer, which is what the app's test pattern uses to prove the video
-path independently of the list format.
+The primary architecture references for this implementation are the official
+3DO Graphics Programming Guide page **Creating a Custom VDL** and US patent
+**5,502,462, Display List Management Mechanism For Real-Time Control Of
+By-The-Line Modifiable Video Display System**. They independently specify the
+same hardware sequence: fetch an entry during horizontal blank, display the
+following line using that state, then tick the bitmap-buffer registers. The
+patent also places the top-of-field VDL load near scanline 5.
+
+The VDL header order and active control bits are checked against those system
+references and observed game lists:
+persist length, current/previous override, relative next pointer, framebuffer
+modulo, video-DMA enable, CLUT programming, background and per-pixel CLUT bypass.
+`render_linear()` remains only as a pixel-conversion diagnostic.
+
+CLIO now advances VDLP once per scanline. Each visible line is captured from
+VRAM with the palette and control state present when the emulated beam reaches
+it, so a later CPU, SPORT or CEL write cannot retroactively change an earlier
+line. The field boundary only performs the final 2x signal expansion; it does
+not reread VRAM.
+
+One source ambiguity is recorded rather than hidden: the SDK documents the
+validated user-level meaning of a final persistence value of zero, while raw
+game lists use zero before another entry. Game traces establish the required
+raw transition. Opera was used only as the permitted fallback check for that
+one counter boundary and produced the same transition.
 
 Malformed lists are handled rather than trusted — a self-referencing entry, an
 entry claiming zero lines, and a walk longer than 1024 entries all terminate.
@@ -136,10 +167,11 @@ fixed-point deltas mapping the source rectangle onto the destination. Because
 that is a general affine step rather than a blit, a cel can be scaled, rotated
 and sheared — every textured polygon in a 3DO game is a cel.
 
-Implemented: CCB walking with absolute and relative pointers, the full
-fixed-point mapping including the row-to-row bend (`hddx`/`hddy`) that makes a
-cel a quad rather than a parallelogram, direct 16-bit cels, indexed 1/2/4/6/8-bit
-cels through the PLUT, colour-zero transparency, and clipping.
+Implemented and compared on the active paths: compact CCB inheritance, absolute
+and relative pointers, skipped-CCB state loading, the full fixed-point mapping
+including the row-to-row bend (`hddx`/`hddy`), packed and unpacked/LR source
+layouts, direct 16-bit and indexed 1/2/4/6/8-bit cels, PLUT/PIXC processing,
+visibility tests, transparency, clipping and the matrix engine.
 
 ### Two things worth writing down
 
@@ -160,9 +192,13 @@ The safe parallelism is destination row bands *inside* one large cel. This is
 recorded because "just thread the cel list" is the natural thing to try and
 would be very hard to diagnose afterwards.
 
-Marked `TODO(madam)`: most CCB flag bits, the PRE0/PRE1 field layout (isolated
-in two functions so a correction is local), PIXC blending, run-length-coded
-source data, and which flag overrides colour-zero transparency.
+The CEL control ports now expose idle, in-process and suspended states; START,
+PAUSE, CONTINUE and STOP obey their state transitions, and `CURRENTCCB` tracks
+the exact fixed-plus-optional DMA fetch cursor. START is deferred until the ARM
+instruction finishes, while an active list retains the shared data bus. A
+cycle-granular model of an external request forcing a convenient CEL safe-yield
+point is not scheduled yet. Optional hires CEL mode and state serialization are
+also absent.
 
 Note that the size fields are ten bits each, so a cel cannot claim to be larger
 than 1024 in either direction. That is what actually bounds the work; the
@@ -238,10 +274,9 @@ though the count rises, so it measures back-pressure rather than lost audio. The
 emulator never retries, so for the emulator the two coincide. This distinction
 exists because a test caught the original counter conflating them.
 
-The console fills the ring with the right number of samples every frame even
-though the DSP does not exist yet, so pacing and underrun behaviour are exercised
-from the start rather than appearing for the first time when sound is switched
-on.
+The DSP runs once per output sample and pushes its DAC words into this ring. A
+stopped DSP, or a program that has not written its DACs, naturally contributes
+zeroes without requiring a separate silence path.
 
 ## Control pad (`src/core/pad.cpp`)
 
@@ -1233,19 +1268,14 @@ One asymmetry, which is a real bug regardless: with an EMPTY tray at boot the
 mount stops early at `0x82`, and inserting a disc afterwards never retriggers
 it. Disc-at-boot mounts; hot-insert does not.
 
-### The honest boundary
+### Current boundary
 
-The logo is drawn but does not yet animate. The machine reaches the OS idle loop
-— a counter increment, touching no hardware at all — having completed its CD
-conversation. What is missing is the **command set**: what `0x83` and `0x8F`
-mean, and the shape of the reply the drive DMAs back. The transport is now
-complete and characterised; the vocabulary spoken over it is not.
+The bring-up observations above are historical measurements, not the current
+compatibility limit. The CD command set, expansion DMA and DSP are now present;
+commercial titles load and run. Compatibility work is at title-specific
+hardware details: for example, Road Rash exposed a double-applied CD lead-in,
+and Need for Speed selected the wrong matrix driver when MADAM reported a zero
+revision ID.
 
-Fabricating replies until the animation runs would be actively harmful: it would
-produce a driver that works for the wrong reason, and every later conclusion
-would rest on it. That needs documentation, not more guessing.
-
-## Still to be written
-
-The DSP, and the CD command set above the transport. Each needs its own section
-here as it lands.
+Hot-insert recovery, audio quality on devices and remaining title-specific
+failures still need broader testing.

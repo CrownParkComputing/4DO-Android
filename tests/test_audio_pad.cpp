@@ -148,8 +148,9 @@ TEST(a_producer_and_consumer_on_two_threads_lose_nothing) {
 }
 
 TEST(a_frame_of_emulation_produces_a_frame_of_audio) {
-    // Even with no DSP the ring is filled, so pacing and underrun behaviour are
-    // exercised from the start rather than appearing when sound is switched on.
+    // A stopped DSP produces zero-valued DAC pairs, but the machine still
+    // advances at its real sample cadence and fills the ring. Pacing and
+    // underrun behaviour are therefore exercised before a program starts it.
     Console console;
     console.reset();
 
@@ -157,6 +158,32 @@ TEST(a_frame_of_emulation_produces_a_frame_of_audio) {
     // 44100 / 60, give or take the integer division.
     CHECK(console.audio().available() >= 700u);
     CHECK(console.audio().available() <= 750u);
+}
+
+TEST(an_arm_boost_does_not_speed_up_audio_or_video_time) {
+    Console native;
+    native.reset();
+    native.bus().write32(0x8000u, 0xeafffffeu);  // branch to itself
+    native.cpu().set_reg(15, 0x8000u);
+    const u64 native_before = native.cpu().total_cycles();
+    native.run_frame();
+    const u64 native_cycles = native.cpu().total_cycles() - native_before;
+    const u32 native_samples = native.audio().available();
+
+    Console boosted;
+    boosted.reset();
+    boosted.set_cpu_scale_percent(150);
+    boosted.bus().write32(0x8000u, 0xeafffffeu);
+    boosted.cpu().set_reg(15, 0x8000u);
+    const u64 boosted_before = boosted.cpu().total_cycles();
+    boosted.run_frame();
+    const u64 boosted_cycles = boosted.cpu().total_cycles() - boosted_before;
+
+    // The ARM gets roughly half again as many cycles, while the independently
+    // clocked DSP still emits exactly one native field's worth of samples.
+    CHECK(boosted_cycles * 100u >= native_cycles * 145u);
+    CHECK(boosted_cycles * 100u <= native_cycles * 155u);
+    CHECK_EQ(boosted.audio().available(), native_samples);
 }
 
 // ---------------------------------------------------------------------------

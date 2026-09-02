@@ -1,0 +1,68 @@
+diff --git a/src/render/vulkan/SDL_render_vulkan.c b/src/render/vulkan/SDL_render_vulkan.c
+index 38a14ccf6..2b10676a2 100644
+--- a/src/render/vulkan/SDL_render_vulkan.c
++++ b/src/render/vulkan/SDL_render_vulkan.c
+@@ -667,15 +667,24 @@ static void VULKAN_DestroyAll(SDL_Renderer *renderer)
+     rendererData->pipelineStates = NULL;
+     rendererData->pipelineStateCount = 0;
+ 
+-    if (rendererData->currentUploadBuffer) {
++    // A device/surface loss can interrupt allocation between these two arrays.
++    // Treat them independently so Android lifecycle teardown is safe even when
++    // a custom Vulkan driver leaves the upload pool only partly initialised.
++    if (rendererData->currentUploadBuffer && rendererData->uploadBuffers) {
+         for (uint32_t i = 0; i < rendererData->swapchainImageCount; ++i) {
+-            for (int j = 0; j < rendererData->currentUploadBuffer[i]; ++j) {
+-                VULKAN_DestroyBuffer(rendererData, &rendererData->uploadBuffers[i][j]);
++            if (rendererData->uploadBuffers[i]) {
++                for (int j = 0; j < rendererData->currentUploadBuffer[i]; ++j) {
++                    VULKAN_DestroyBuffer(rendererData, &rendererData->uploadBuffers[i][j]);
++                }
++                SDL_free(rendererData->uploadBuffers[i]);
+             }
+-            SDL_free(rendererData->uploadBuffers[i]);
+         }
++    }
++    if (rendererData->uploadBuffers) {
+         SDL_free(rendererData->uploadBuffers);
+         rendererData->uploadBuffers = NULL;
++    }
++    if (rendererData->currentUploadBuffer) {
+         SDL_free(rendererData->currentUploadBuffer);
+         rendererData->currentUploadBuffer = NULL;
+     }
+@@ -3435,11 +3444,32 @@ static bool VULKAN_UpdateClipRect(SDL_Renderer *renderer)
+         scissor.extent.height = viewport->h;
+     }
+     if (swapDimensions) {
++        /* A 90-degree surface transform needs one axis mirrored as well as
++         * swapped. Merely exchanging x/y (the old behaviour) produces the
++         * right-sized scissor in the wrong part of the rotated swapchain. On
++         * a 1920x1080 Android landscape surface, for example, a lower-panel
++         * clip became a horizontal cut through the middle of the UI. */
+         VkRect2D scissorTemp = scissor;
+-        scissor.offset.x = scissorTemp.offset.y;
+-        scissor.offset.y = scissorTemp.offset.x;
+         scissor.extent.width = scissorTemp.extent.height;
+         scissor.extent.height = scissorTemp.extent.width;
++        if (rotation == VK_SURFACE_TRANSFORM_ROTATE_90_BIT_KHR) {
++            scissor.offset.x = viewport->y + viewport->h -
++                               (scissorTemp.offset.y - viewport->y) -
++                               (int32_t)scissorTemp.extent.height;
++            scissor.offset.y = scissorTemp.offset.x;
++        } else { /* VK_SURFACE_TRANSFORM_ROTATE_270_BIT_KHR */
++            scissor.offset.x = scissorTemp.offset.y;
++            scissor.offset.y = viewport->x + viewport->w -
++                               (scissorTemp.offset.x - viewport->x) -
++                               (int32_t)scissorTemp.extent.width;
++        }
++    } else if (rotation == VK_SURFACE_TRANSFORM_ROTATE_180_BIT_KHR) {
++        scissor.offset.x = viewport->x + viewport->w -
++                           (scissor.offset.x - viewport->x) -
++                           (int32_t)scissor.extent.width;
++        scissor.offset.y = viewport->y + viewport->h -
++                           (scissor.offset.y - viewport->y) -
++                           (int32_t)scissor.extent.height;
+     }
+     vkCmdSetScissor(rendererData->currentCommandBuffer, 0, 1, &scissor);
+ 

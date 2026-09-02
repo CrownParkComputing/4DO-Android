@@ -25,15 +25,13 @@
 //     down here because "just thread the cel list" is the natural mistake and
 //     it would be very hard to diagnose afterwards.
 //
-// Confidence
-// ----------
-// The CCB layout, the fixed-point mapping and the pixel formats implemented
-// here come from published 3DO developer documentation. Bit assignments not yet
-// checked are marked TODO(madam) rather than asserted.
-//
-// This is the most heavily derived file in the project: the cel engine's
-// dispatch, its visibility tests, the rotated-cel fill and the matrix unit all
-// follow the reference emulator closely. See docs/PROVENANCE.md.
+// Specification basis
+// -------------------
+// CCB and preamble fields come from the official SDK hardware.h and Graphics
+// Programming Guide. Projection, corner calculation, pixel processing and CEL
+// bus state are grounded in WO 94/10643, WO 94/10644 and WO 94/10641. The
+// current matrix, visibility, active-edge raster and LR row-pair algorithms are
+// project implementations; the historical source audit is in PROVENANCE.md.
 #pragma once
 
 #include "types.h"
@@ -64,6 +62,11 @@ enum : u32 {
     // start-up and reads it back, so it has to hold its value.
     kMadamDmaEnable  = 0x0008,
     kMadamClipXY     = 0x0008,   // TODO(madam): confirm
+
+    // CEL engine state. The official hardware description calls these SPRON
+    // and SPRPAU: running sets bit 4, and a list suspended at a safe bus-yield
+    // point sets bits 4 and 5.
+    kMadamCelStatus  = 0x0028,
     // DMA channels. Each is eight bytes: an address then a length.
     //
     // Read off the driver that programs them, at DRAM 0x1A7FC:
@@ -120,7 +123,7 @@ enum : u32 {
     // the engine draws from wherever the last store happened to land.
     kMadamCelStart   = 0x0100,
     kMadamCelStop    = 0x0104,
-    kMadamCelResume  = 0x0108,
+    kMadamCelResume  = 0x0108,   // SPRCNTU in the hardware documentation
     kMadamCelPause   = 0x010c,
 
     // Where the walk is, and where it goes next. Software both reads and
@@ -178,6 +181,11 @@ enum : u32 {
     kMadamWindowSize = 0x10000,
 };
 
+enum : u32 {
+    kMadamCelRunning = 0x10,
+    kMadamCelPaused  = 0x20,
+};
+
 // What a write to the matrix control port asks for.
 enum : u32 {
     kMatrixCopyOnly          = 0,   // publish the previous result, compute nothing
@@ -206,6 +214,13 @@ enum : u32 {
 // error 7 before doing anything else. That one writable register is what kept
 // this emulator on a halved, wrong memory map.
 constexpr u32 kMadamMemConfigStock = 0x29;
+
+// Production Panasonic consumer machines use the Green MADAM revision with
+// the hardware matrix engine. Software uses this ID to choose the matching
+// matrix-engine driver; zero (or an invented revision) is not a harmless
+// placeholder because Need for Speed then selects a layout whose result ports
+// do not match the chip.
+constexpr u32 kMadamRevisionGreen = 0x01020000u;
 
 // Flags in the CCB's first word.
 //
@@ -310,6 +325,11 @@ struct Ccb {
     CelFormat format = CelFormat::Unknown;
     u32 width = 0;
     u32 height = 0;
+
+    // The hardware CURRENTCCB DMA cursor after loading this CCB. This differs
+    // from the CCB's base: the first six words are always fetched, followed by
+    // only the optional register/preamble words selected by FLAGS.
+    u32 fetch_end_address = 0;
 };
 
 class Madam {
@@ -363,6 +383,8 @@ public:
 
     // The rectangle cels are clipped to. Defaults to the whole visible field.
     void set_clip(u32 width, u32 height);
+    u32 clip_width() const { return clip_width_; }
+    u32 clip_height() const { return clip_height_; }
 
     // The PBUS transfer happens inside the store that starts it, and it is
     // MADAM that owns the registers but the machine that owns memory, so the
@@ -447,8 +469,12 @@ public:
     u32  register_last_write(u32 offset) const;
 
 private:
+    enum class CelEngineState { Idle, InProcess, Suspended };
+
     void note_write(u32 offset, u32 value);
     void draw_cel(const Ccb& ccb);
+    void begin_cel_walk(u32 address);
+    bool step_cel_walk();
 
     // Fetch one source pixel, already expanded to RGB555. Handles the indexed
     // formats via the PLUT and the direct format without it.
@@ -458,7 +484,7 @@ private:
 
     Bus& bus_;
 
-    u32 revision_ = 0;
+    u32 revision_ = kMadamRevisionGreen;
     u32 mem_config_ = kMadamMemConfigStock;
     u32 dma_enable_ = 0;
     u32 xbus_dma_address_ = 0;
@@ -491,6 +517,8 @@ private:
     void* pbus_context_ = nullptr;
     u32 current_ccb_ = 0;
     u32 next_ccb_ = 0;
+    CelEngineState cel_engine_state_ = CelEngineState::Idle;
+    bool cel_walk_started_ = false;
     u32 dma_address_[kMadamDmaChannels] = {};
     u32 dma_length_[kMadamDmaChannels] = {};
     u32 clip_width_ = 320;
@@ -522,11 +550,24 @@ private:
     u32 cel_pixel_mask_ = 0;
     bool cel_transparent_mask_ = true;
 
+    // The tail of a cel is a bank of load-controlled registers, not a fixed
+    // structure. A CCB with YOXY/LDSIZE/LDPRS/LDPPMP clear omits that group and
+    // inherits the value the preceding cel left behind. PRE0/PRE1 persist too.
+    s32 ccb_x_register_ = 0;
+    s32 ccb_y_register_ = 0;
+    s32 ccb_hdx_register_ = 0;
+    s32 ccb_hdy_register_ = 0;
+    s32 ccb_vdx_register_ = 0;
+    s32 ccb_vdy_register_ = 0;
+    s32 ccb_hddx_register_ = 0;
+    s32 ccb_hddy_register_ = 0;
+    u32 ccb_pixc_register_ = 0;
+    u32 pre0_register_ = 0;
+    u32 pre1_register_ = 0;
+
     // Whether this cel maps one source pixel to one screen pixel. The common
     // case by a very long way, and worth knowing per cel rather than deciding
     // per pixel.
-    // PRE1 is machine state, not per-cel data: a packed cel never supplies one
-    // and keeps whatever the last unpacked cel left behind.
     // The matrix unit's registers. The outputs are DOUBLE BUFFERED: an
     // operation computes into a holding set, and the previous result is what
     // moves into the readable outputs. Software therefore reads the answer to
@@ -540,8 +581,6 @@ private:
     u32 matrix_num_lo_ = 0;
 
     void matrix_execute(u32 operation);
-
-    u32 pre1_register_ = 0;
 
     bool cel_one_to_one_ = true;
 

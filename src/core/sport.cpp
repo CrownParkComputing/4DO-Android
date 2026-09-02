@@ -4,15 +4,12 @@
 
 namespace retro3do {
 
-// What a SPORT mask bit means, and it is the opposite of what it looks like.
+// What a SPORT mask bit means.
 //
-// A mask of all ones means "no mask" - copy everything. That is the giveaway:
-// if a one meant "write this bit" then all ones would be the same as the
-// unmasked path, which it is, but a mask of all ZEROES would then write
-// nothing at all and be useless. It is the other way round. A one PROTECTS the
-// destination bit and a zero lets the source through, so the special case for
-// all-ones is an optimisation of the general rule rather than an exception to
-// it.
+// For a masked operation, a one preserves the destination bit and a zero takes
+// the source bit. Written as two explicitly disjoint fields, this is the logic
+// the BIOS's SPORT memory test establishes. 0xffffffff is the port's separate
+// "unmasked transfer" command and is handled before this helper is called.
 //
 // Having this backwards writes the complement of the bits the title asked for.
 // The structure of the image survives, because the pixels that should move
@@ -21,7 +18,7 @@ namespace retro3do {
 // blitter that is inverted. Wing Commander III's video played all the way
 // through its opening under a blizzard of coloured speckle because of this.
 u32 Sport::apply_mask(u32 destination, u32 source, u32 mask) {
-    return ((destination ^ source) & mask) ^ source;
+    return (destination & mask) | (source & ~mask);
 }
 
 void Sport::reset() {

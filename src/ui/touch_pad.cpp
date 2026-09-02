@@ -80,6 +80,13 @@ TouchPad::TouchPad() : controls_(default_touch_layout(1280, 720)) {
 
 void TouchPad::set_physical_gamepad_present(bool present) {
     gamepad_present_ = present;
+    if (present) {
+        // Editing controls which have just disappeared is both confusing and
+        // dangerous: an old drag would otherwise be resumed if the controller
+        // were unplugged later.
+        editing_ = false;
+        active_.clear();
+    }
 }
 
 void TouchPad::reset_layout(int window_width, int window_height) {
@@ -157,7 +164,7 @@ int TouchPad::control_at(float px, float py, int w, int h) const {
 }
 
 bool TouchPad::handle_event(const SDL_Event& event, int w, int h, PadState& pads) {
-    if (!visible_ || w <= 0 || h <= 0) {
+    if (!visible() || w <= 0 || h <= 0) {
         return false;
     }
 
@@ -248,7 +255,7 @@ bool TouchPad::handle_event(const SDL_Event& event, int w, int h, PadState& pads
 }
 
 void TouchPad::draw(SDL_Renderer* renderer, int w, int h) const {
-    if (!visible_ || w <= 0 || h <= 0) {
+    if (!visible() || w <= 0 || h <= 0) {
         return;
     }
 

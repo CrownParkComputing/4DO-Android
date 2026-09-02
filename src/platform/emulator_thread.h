@@ -97,7 +97,6 @@ private:
     std::atomic<bool> should_stop_{false};
     std::atomic<bool> paused_{false};
     std::atomic<bool> reset_requested_{false};
-
     mutable std::mutex nvram_lock_;
     std::vector<u8> nvram_snapshot_;
     bool nvram_pending_ = false;

@@ -48,6 +48,10 @@ Added or corrected for this handover:
 
 ## Build it
 
+SDL and Dear ImGui are **submodules**, so clone with `--recursive` (both scripts
+check, and fetch them if they are missing). `libchdr` and `libadrenotools` are
+vendored in-tree and need nothing.
+
 Both scripts take their settings from the environment and print what they did.
 
 ```sh

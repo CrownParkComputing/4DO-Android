@@ -20,6 +20,15 @@ set -euo pipefail
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "$HERE/.." && pwd)"
 
+# SDL and Dear ImGui are submodules. A clone made without --recursive fails
+# later with a missing third_party/SDL/CMakeLists.txt, which reads as a broken
+# repository rather than an incomplete checkout.
+if [ ! -f "$REPO_ROOT/third_party/SDL/CMakeLists.txt" ] ||
+   [ ! -f "$REPO_ROOT/third_party/imgui/imgui.cpp" ]; then
+    echo "==> fetching submodules"
+    git -C "$REPO_ROOT" submodule update --init --recursive
+fi
+
 GENERATOR="${GENERATOR:-Xcode}"
 # Universal by default. An Intel Mac cannot run an arm64-only build at all, and
 # the failure it gives ("bad CPU type") reads as a corrupt download.

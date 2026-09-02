@@ -1,9 +1,0 @@
-#ifndef NATIVE_BACKEND_PRNG16_H_INCLUDED
-#define NATIVE_BACKEND_PRNG16_H_INCLUDED
-
-#include <stdint.h>
-
-void     prng16_seed(uint32_t const seed);
-uint32_t prng16(void);
-
-#endif

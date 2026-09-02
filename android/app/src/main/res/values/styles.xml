@@ -1,0 +1,15 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- Base application theme, referenced by the <application> tag. -->
+    <style name="AppTheme" parent="android:Theme.NoTitleBar.Fullscreen">
+    </style>
+
+    <!-- The activity's theme. Fullscreen with no title bar, and allowed to draw
+         into a display cutout: without the cutout mode a notched device
+         letterboxes the whole app into a black band, which looks exactly like a
+         broken renderer rather than a layout setting. -->
+    <style name="Theme.Retro3DO" parent="android:Theme.NoTitleBar.Fullscreen">
+        <item name="android:windowLayoutInDisplayCutoutMode">shortEdges</item>
+        <item name="android:windowBackground">@android:color/black</item>
+    </style>
+</resources>

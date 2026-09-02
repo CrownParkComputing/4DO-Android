@@ -1,64 +1,140 @@
-# 3DO Opera
+# Retro-3DO
 
-[![Get it on Google Play](https://img.shields.io/badge/Google_Play-Download-414141?logo=google-play&logoColor=white)](https://play.google.com/store/apps/details?id=com.fourdo.android)
-[![License: LGPL v2.1](https://img.shields.io/badge/License-LGPL_v2.1-blue.svg)](https://www.gnu.org/licenses/old-licenses/lgpl-2.1.en.html)
-[![Android](https://img.shields.io/badge/Platform-Android%207.0%2B-green)](https://www.android)
+A new 3DO Interactive Multiplayer emulator codebase for phones, tablets and
+desktops. Its historical reference exposure is disclosed in
+[docs/PROVENANCE.md](docs/PROVENANCE.md).
 
-<img src="docs/screenshots/icon.png" align="right" width="96" alt="3DO Opera icon" />
+One C++ codebase builds for Android, iOS, Linux and Windows. There is no
+per-platform front end: SDL provides the window, input, audio and GPU on every
+target, and Dear ImGui draws the launcher and the in-game overlay.
 
-Android port of the **Opera** emulator codebase with a Java UI and native emulator/rendering code — a free, open-source emulator for 3DO software with broad Android compatibility across phones, tablets, foldables, and handheld devices.
+> **Status: games run.** A real 3DO BIOS passes its power-on self test, CD media
+> is mounted through XBUS/MADAM DMA, and the ARM, CEL, matrix and DSP paths run
+> commercial titles. Compatibility is still in progress, but Road Rash and The
+> Need for Speed both boot into correctly rendered gameplay. See
+> [Roadmap](#roadmap) and the [Opera parity audit](docs/OPERA_AUDIT.md).
 
-## Download
+## Why this exists as a separate core
 
-**[Get it on Google Play](https://play.google.com/store/apps/details?id=com.fourdo.android)** — requires Android 7.0 (API 24) or later.
+Two reasons, and the second is the one with a deadline attached.
 
-For documentation and more information, visit the **[3DO Opera Documentation site](https://crownparkcomputing.github.io/3DO-Android/)**.
+**It is written to be fast on a phone.** The widely-used 3DO cores descend from
+a 1990s desktop emulator. Their CPU is a plain interpreter that re-decodes every
+instruction on every execution, their graphics chip is scalar C, and they
+present frames from inside the emulation thread — so a slow present stalls
+emulation, and the machine appears to run slow when it is really being
+throttled. This core decodes each instruction once and caches it, and never
+presents from the emulation path at all.
 
-## What's New in v2.0.7
+**Its current architecture is project-owned and auditable.** The former
+direct-port routines have been replaced with implementations structured around
+public ARM/3DO documentation, patents and focused tests. The project is still
+historically reference-exposed; replacing code does not make its development
+history clean-room. [docs/PROVENANCE.md](docs/PROVENANCE.md) records both facts.
 
-- **Fixed sideways / mirrored display** on Vulkan devices — games now render upright and correctly oriented.
-- **Major performance boost** — the emulator core is fully optimized, and rendering is decoupled from the display refresh for smoother, faster gameplay.
-- **New 3DO app icon.**
-- **Ymir-style launcher and library** with IGDB metadata and per-game bezel support.
-- **Translucent 3DO virtual pad** with grey on-screen controls for touch devices.
-- **Redesigned controller mapper** — a clean, colour-coded button layout.
-- **Removed the manual display-rotate control** — orientation is now always correct automatically.
+## Building
 
-**[Update on Google Play »](https://play.google.com/store/apps/details?id=com.fourdo.android)**
+### Linux and Windows
 
-## Screenshots
+```sh
+cmake -S . -B build -DRETRO3DO_USE_SYSTEM_SDL=ON
+cmake --build build -j
+./build/retro3do
+```
 
-| | |
-|---|---|
-| ![Running emulator with virtual pad](docs/screenshots/store/01-gameplay-virtual-pad.png) | ![Running gameplay with bezel](docs/screenshots/store/02-gameplay-bezel.png) |
-| ![3DO title screen gameplay](docs/screenshots/store/03-gameplay-title.png) | ![Game library](docs/screenshots/store/04-library.png) |
-| ![Game details](docs/screenshots/store/05-game-details.png) | ![Settings sidebar](docs/screenshots/store/06-settings-sidebar.png) |
-| ![Bezel library state](docs/screenshots/store/07-bezels-library.png) | |
+Drop `-DRETRO3DO_USE_SYSTEM_SDL=ON` to build the vendored SDL from source
+instead, which is what the mobile targets do.
 
-## Features
+### Tests
 
-- **Accurate Opera-based emulation** with broad Android device support
-- **On-screen controller** support for touchscreen input
-- **External controller** support via Bluetooth gamepads
-- **Software and hardware rendering** options (OpenGL/Vulkan)
-- **Game library** with box art from IGDB
-- **Saves management** and state snapshots
+```sh
+./build/retro3do_tests
+```
 
-## License
+They run on the host, with no window and no device. A bug found on hardware gets
+reproduced here before it gets fixed.
 
-**3DO Opera** is built from the **Opera** emulator codebase. The native emulator core used by this Android project is derived from Opera upstream sources only; this application is not derived from the former 4DO Android frontend/application. The name was changed to **3DO Opera** to reflect the Opera basis of the emulator core and to avoid presenting the app as a continuation of 4DO.
+### Android
 
-The Opera-derived native emulator core is licensed under **GNU LGPL v2.1**. The complete corresponding source for the native core and this project's local modifications is available in this repository.
+```sh
+cd android
+./gradlew :app:assembleDebug -PBUILD_WITH_CMAKE=1
+```
 
-The Android application code, launcher UI, renderer integration, game library, IGDB integration, bezel handling, controller mapping, artwork, and project-specific frontend code are licensed under the **MIT License**, unless a file explicitly states otherwise.
+Gradle drives the same root `CMakeLists.txt` the desktop build uses; there is no
+separate Android copy of the emulator.
 
-Commercial distribution is permitted under the applicable LGPL v2.1 and MIT terms, including paid distribution or sale on Google Play, provided the license obligations are satisfied. This project does not rely on any non-commercial emulator license grant for the Android app distributed as **3DO Opera**.
+On Android the app requests the fastest full-resolution panel mode up to
+120 Hz and keeps SDL presentation vsynced to it. The 3DO itself remains at its
+hardware-correct 50/60 Hz field rate; presentation refresh never changes game
+or audio speed. A 60 Hz-only panel therefore remains at 60 Hz.
 
-See the [LICENSE](LICENSE) file for the full license notice.
+The Settings panel and in-game overlay offer optional 125% and 150% ARM boosts.
+Only the emulated ARM instruction budget changes: video fields remain at 50/60
+Hz, DSP output remains 44.1 kHz, and CD timing remains native. This can reduce
+CPU-bound slowdown without fast-forwarding sound or FMV; it cannot raise a
+frame rate deliberately capped by the game.
 
-## Acknowledgements
+The Android Settings page can sign in to a registered RetroMedia account and
+download one selected artwork piece per matched 3DO title (2D cover,
+screenshot, thumbnail or title screen). Sessions are encrypted with the
+Android Keystore; passwords are never written to the emulator settings. Media
+is resized and cached in private app storage, then shown directly on library
+cards. Downloads happen only when the user presses **Download Missing
+Artwork**, and use that account's normal daily allowance/credit balance.
 
-- **Opera / libretro-opera**: The upstream emulator codebase used for the native core.
-- **Opera Android**: This project is an Android port/frontend for the Opera emulator core.
-- **Tapwave Zodiac** and broader 3DO preservation community.
-- All contributors.
+### iOS
+
+```sh
+ios/build-ios-macos.sh
+```
+
+macOS only, and deliberately so — a Linux cross-build can make something that
+sideloads but never something submittable. See the comments in that script.
+
+## Layout
+
+```
+src/core/       the 3DO itself. No platform headers, ever.
+src/platform/   SDL: window, events, pacing, presentation
+src/ui/         Dear ImGui: launcher and overlay
+tests/          host-side tests
+android/        Gradle shell around the shared CMake tree
+ios/            Xcode/CMake shell around the shared CMake tree
+```
+
+The rule that keeps this working: if something in `src/core/` ever needs a
+platform header, it belongs in `src/platform/` instead.
+
+## Roadmap
+
+- [x] ARM60 CPU with a decoded-instruction cache
+- [x] Memory map and big-endian bus
+- [x] SDL application shell, ImGui launcher
+- [x] Android and iOS build paths off one CMake tree
+- [x] CLIO — interrupts, timers, video counters
+- [x] VDLP — display list to framebuffer
+- [x] MADAM — the CEL engine: affine mapping, indexed and direct cels
+- [x] DSP — instruction engine, DMA inputs and DAC output
+- [x] Disc images: ISO, BIN, CUE, with sector layout detected not assumed
+- [x] SPORT — page copy and fill; the ROM does not pass its self test without it
+- [x] XBUS + MADAM DMA: animated startup and disc loading
+- [x] Emulation on its own thread, with one pacing policy and a triple-buffered frame mailbox
+- [x] Audio output path: lock-free ring, SDL sink
+- [x] Controller: keyboard and gamepad through SDL
+- [x] File browser, so the app is usable without a keyboard
+- [x] Android scoped storage (SAF): the user grants folders, the app requests no storage permission
+- [x] On-screen controls, movable, saved per device
+- [x] Settings that survive a restart
+- [x] RetroMedia account artwork downloads and illustrated library cards (Android)
+- [x] Scanline-timed VDLP updates
+- [ ] Full MADAM CEL pause/status timing
+- [ ] Remaining CD queries, CD audio and additional PBUS peripherals
+- [ ] Save states
+
+## Licence
+
+Project-owned code is MIT licensed; see [LICENSE](LICENSE). Bundled components
+retain their own terms, collected in [docs/THIRD_PARTY.md](docs/THIRD_PARTY.md).
+The distribution and historical reference-source notices in [NOTICE](NOTICE)
+and [docs/PROVENANCE.md](docs/PROVENANCE.md) are part of the release record.

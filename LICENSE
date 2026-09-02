@@ -1,32 +1,6 @@
-This project is a combination of components licensed under different terms:
+MIT License
 
-1. The core emulator logic (native code in app/cpp/native_core) is derived from Opera upstream sources. This code is licensed under the GNU Lesser General Public License version 2.1 (LGPL v2.1). The project is named Retro-3DO and is not derived from the former 4DO Android frontend.
-
-2. The Android-specific frontend, UI code, renderer integration, launcher, game library, IGDB integration, bezel handling, controller mapping, artwork, and project-specific code (unless otherwise specified) are licensed under the MIT License.
-
-3. The complete corresponding source for the Opera-derived native core and this project's local modifications is available in this repository, as LGPL v2.1 requires.
-
-4. IMPORTANT — the LGPL is not the whole picture for the native core. Seven files under app/cpp/native_core/ (native_madam.c, native_arm.c, native_dsp.c, native_cdrom.c, native_clio.c, native_3do.c, native_sport.c) carry the FreeDO notice, which states that commercial use is "strictly forbidden without owners approval" and that "the above notes are taking precedence over GNU LGPL in conflicting situations".
-
-   An earlier version of this file stated that commercial distribution was permitted under LGPL v2.1. That was not correct while those files are present: the addendum in them explicitly overrides the LGPL where the two conflict, and permission to sell is such a conflict.
-
-   The remaining native code and the entire Android application are unaffected and are MIT / LGPL as described above.
-
-   See docs/PROVENANCE.md for the full position, which files are affected, and the work to replace them with clean-room implementations.
-
----
-
-### LGPL v2.1 License (Core Emulator Logic)
-
-The core code is subject to the terms of the GNU Lesser General Public License as published by the Free Software Foundation; either version 2.1 of the License, or (at your option) any later version.
-
-A copy of the LGPL v2.1 can be found at: https://www.gnu.org/licenses/old-licenses/lgpl-2.1.en.html
-
----
-
-### MIT License (Android Frontend & UI)
-
-Copyright (c) 2024 CrownParkComputing
+Copyright (c) 2026 Crown Park Computing
 
 Permission is hereby granted, free of charge, to any person obtaining a copy
 of this software and associated documentation files (the "Software"), to deal

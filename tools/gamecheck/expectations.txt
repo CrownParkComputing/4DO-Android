@@ -1,0 +1,116 @@
+# What each title reaches today, as a floor.
+#
+# These are NOT targets. They are a record of where the emulator got to on a
+# twenty-thousand-frame headless run, written down so that losing ground is a
+# test failure rather than something someone notices by eye three weeks later.
+# A title that does better than its line is not a failure; a title that does
+# worse is a regression.
+#
+# Raise a line when a title genuinely improves. Never lower one to make a run
+# green - a lowered floor is a bug report deleted.
+#
+# Format:  name prefix | cels | distinct screens | busiest frame's lit pixels
+#
+# These numbers are for a TWENTY THOUSAND frame run. A shorter run will fail
+# them, which is correct rather than a bug in the file: several titles take
+# well over a minute of emulated time to reach anything.
+#
+# Run with:
+#   gamecheck <bios> <library> --frames 20000 \
+#             --expect tools/gamecheck/expectations.txt
+#
+# Status, honestly. "Matches reference" means the machine this was ported from
+# does the same thing with the same dump, so the shortfall is not ours alone.
+# Where a title has been compared frame-for-frame, the figure is how many of
+# its pixels differ from the reference's on the same frame.
+#
+#   Killing Time          its title menu. PIXEL IDENTICAL to the reference.
+#   Flashback             its menu. 11% differ, and that is the character
+#                         standing at a different point in his idle animation.
+#   Alone in the Dark     its Infogrames logo and on into the game. It used to
+#                         be PIXEL IDENTICAL to the reference and is now 27%
+#                         different, which is an improvement rather than a
+#                         regression: the reference stops on "There is only
+#                         enough space on your 3DO system to save 0 games",
+#                         which is the blank-NVRAM fault, and this machine no
+#                         longer has it. The old identical match was the two
+#                         machines agreeing on a bug.
+#   Alone in the Dark 2   PIXEL IDENTICAL.
+#   PGA Tour 96           gameplay. Differs from the reference only in where
+#                         the two machines are in the round.
+#   Battle Chess          its publisher splash at twenty thousand frames, and
+#                         its board given sixty thousand - both machines need
+#                         that long. Not a stall.
+#   BattleSport           BIOS shell, "Insert CD". MATCHES REFERENCE.
+#   Road Rash             BIOS shell, "Insert CD". MATCHES REFERENCE.
+#                         Narrowed as far as the disc allows: its volume
+#                         header is structurally identical to a working one,
+#                         its root directory is present and valid at the
+#                         offset it declares, and its length is inside what a
+#                         longer working disc uses. The OS reads five sectors
+#                         of the header area where a working disc reads six,
+#                         asks for the disc info, and ejects. That area holds
+#                         the disc's signature block, and both this machine
+#                         and the reference reject it identically - which
+#                         points at the dump rather than at either emulator.
+#                         Not proven, only narrowed.
+#   Doom                  BIOS shell - the dump is bad, chdman rejects it too
+#   Need for Speed        FIXED, and no longer needs --press at all. It used
+#                         to stop on "NVRAM Full: Configuration not saved"
+#                         with forty-one bytes of thirty-two thousand in use.
+#                         The cause was an NVRAM that came up blank: the OS
+#                         only formats it on reaching its own shell, so a title
+#                         booted straight from a disc finds no filesystem and
+#                         calls it full. The machine now boots with the image
+#                         the boot ROM itself writes, as real hardware does.
+#                         Thirty-three cels became thirteen thousand, two
+#                         hundred and ninety-two sectors became thirty-five
+#                         thousand, and it reaches its attract screen.
+#   Wing Commander III    Its opening video now plays cleanly all the way
+#                         through - the galaxy, the Origin logo, the title
+#                         card and the full cast. It had been playing all
+#                         along, buried under coloured speckle, because
+#                         "bypass CLUT" was being read as a whole-frame bypass
+#                         when it is a per-pixel escape hatch selected by bit
+#                         15. Only 304 cels because it is video, not cels:
+#                         4,673 distinct screens is the number that matters.
+#   Wing Commander III d2 will not open at all - suspect a bad dump
+#
+# A third note. Alone in the Dark 2's cel floor went from 7,600 to 350,000 and
+# PGA Tour's from 64,000 to 230,000 when MADAM's matrix unit went in. That unit
+# is the machine's transform-and-project stage and we did not have one at all,
+# so every title doing 3D was being handed zeros and drawing the degenerate
+# geometry that implies. The rotated-cel mapper and the CCBPRE preamble fix
+# landed at the same time. Killing Time and Alone in the Dark 2 stayed
+# pixel-identical to the reference throughout.
+#
+# A second note. The cel floors below came DOWN by about a tenth when the
+# hardware's own visibility tests went in - a cel that permits neither winding,
+# or whose bounding box is off the clip rectangle with the steps leading
+# further off it, or whose corners wind the wrong way, is never drawn at all.
+# The pictures did not change: BattleSport's screen count and busiest-frame
+# pixel count are identical either side of the change, and the frames differ
+# only by where the floating CD logos are in their orbit - the reference
+# differs from our own earlier frame by the same amount for the same reason.
+# Killing Time and Alone in the Dark 2 remain pixel-identical throughout. So
+# this is the same output for a tenth less work, and lowering the numbers
+# records that rather than hiding a loss.
+#
+# A note on the floors below. Alone in the Dark's cel floor went DOWN, which
+# is normally forbidden. It is allowed here because the title is no longer
+# doing the same thing: it used to loop its intro for the whole run, and now
+# gets past the save-game screen and into the game, which draws far fewer cels
+# and far more distinct screens. The screen floor doubled to hold that gain.
+#
+# Eleven of twelve draw. The one that does not is a bad file.
+
+Alone in the Dark (USA)       |   15000 | 2000 | 60000
+Alone in the Dark 2           |  350000 | 3500 | 60000
+Battle Chess                  |    4500 |  700 | 35000
+BattleSport                   |  168000 |  800 | 65000
+Doom                          |  168000 |  800 | 65000
+Flashback                     |  100000 | 1800 | 60000
+Killing Time                  |   55000 |  800 | 70000
+PGA Tour 96                   |  230000 | 2300 | 70000
+Road & Track Presents         |   13000 | 2500 | 70000
+Wing Commander III            |     300 | 4000 | 45000

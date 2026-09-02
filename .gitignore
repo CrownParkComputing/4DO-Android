@@ -1,52 +1,28 @@
-# Gradle
-.gradle/
 build/
-*/build/
+build-*/
+.cache/
+compile_commands.json
+oracle_map.bin
 
-# Local configuration
-local.properties
+# Android
+android/.gradle/
+android/build/
+android/app/build/
+android/local.properties
+android/.cxx/
+*.apk
+*.aab
+*.keystore
 
-# Android Studio / IntelliJ
-.idea/
-*.iml
-
-# NDK/CMake
-.cxx/
-*/.cxx/
-.externalNativeBuild/
-app/cpp/renderers/shaders/*.spv
-
-# Logs
-*.log
-/build/logs/
-hs_err_pid*.log
-
-# OS files
+# iOS / macOS
+ios/build/
+ios/Pods/
+*.xcuserdatad
+xcuserdata/
 .DS_Store
-Thumbs.db
-app/app
 
-# Local repo artifacts
-_codeql_detected_source_root
-app/*.png
-
-# Local signing artifacts
-4do-release-key.keystore
-*.keystore.backup.*
-
-# Local Gradle command output
-gradle_*.log
-
-# Temp inspection/debug artifacts
-.elf-inspect/
-.tmp_aab_inspect/
-_so_check/
-_so_check_new/
-_native_pb_dump.bin
-app-release*.zip
-check_zip.ps1
-git-lsremote.*.txt
+# Editors
+.idea/
 .vscode/
-media/
-*.zip
-*.zip.part_*
+*.swp
+android/app/.cxx/

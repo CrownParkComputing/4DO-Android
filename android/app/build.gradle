@@ -1,0 +1,95 @@
+plugins {
+     id 'com.android.application'
+}
+
+// The upload key. On a build machine it arrives through KEYSTORE_PATH, and
+// locally it can sit beside the project - but it is never committed, and the
+// only copy of it lives in a CI secret, so BACK IT UP BEFORE RELYING ON IT.
+// Losing this key means never being able to update the Play listing again,
+// by anyone, ever. There is no recovery.
+def localReleaseKeystore = file('../retro3do-release-key.keystore')
+def releaseKeystorePath = System.getenv('KEYSTORE_PATH')
+def releaseKeystoreFile = releaseKeystorePath ? file(releaseKeystorePath) : localReleaseKeystore
+
+android {
+    // The namespace is this project's own - it names the Java classes and the
+    // generated R, and nothing outside the build cares about it.
+    namespace = "com.crownparkcomputing.retro3do"
+    compileSdk 36
+    ndkVersion = "28.2.13676358"
+    defaultConfig {
+        // The application id is the app's identity on Play, and it has to stay
+        // what the existing listing already is. A different id is not a new
+        // version of this app, it is a second app: the installs, the reviews
+        // and the rating all stay behind with the old id, and there is no way
+        // to move them afterwards.
+        //
+        // It does NOT have to match the namespace above, and here it does not.
+        applicationId "com.fourdo.android"
+        minSdk 24
+        targetSdk 36
+        // Above what is on Play (13 / 2.0.11), or the store refuses the
+        // upload and the device refuses the install.
+        versionCode 14
+        versionName "2.1.0"
+        externalNativeBuild {
+            cmake {
+                arguments "-DANDROID_PLATFORM=android-24", "-DANDROID_STL=c++_static"
+                // abiFilters 'armeabi-v7a', 'arm64-v8a', 'x86', 'x86_64'
+                abiFilters 'arm64-v8a'
+            }
+        }
+    }
+    signingConfigs {
+        release {
+            // Null when the key is absent, which makes an unsigned release
+            // build fail at signing rather than quietly produce something the
+            // store will reject.
+            storeFile releaseKeystoreFile.exists() ? releaseKeystoreFile : null
+            storePassword System.getenv('KEYSTORE_PASSWORD') ?: 'android'
+            keyAlias System.getenv('KEY_ALIAS') ?: '4do-key'
+            keyPassword System.getenv('KEY_PASSWORD') ?: 'android'
+        }
+    }
+
+    buildTypes {
+        release {
+            signingConfig signingConfigs.release
+            minifyEnabled false
+            proguardFiles getDefaultProguardFile('proguard-android-optimize.txt'), 'proguard-rules.pro'
+        }
+    }
+    // The template's applicationVariants hook (which forced asset merging to wait
+    // for the native build) was removed: AGP 9 dropped that API, and it only
+    // mattered for the ndkBuild path this project does not use.
+    if (!project.hasProperty('EXCLUDE_NATIVE_LIBS')) {
+        sourceSets.main {
+            jniLibs.srcDir 'libs'
+        }
+        // CMake only. The whole emulator - SDL, ImGui, libchdr and the core -
+        // is described once in the root CMakeLists, and jni/CMakeLists.txt is
+        // a thin entry point into it. There is no second, Android-specific
+        // description of the build to keep in step.
+        externalNativeBuild {
+            cmake {
+                path 'jni/CMakeLists.txt'
+            }
+        }
+
+    }
+    packaging {
+        jniLibs {
+            // AdrenoTools installs its isolated Vulkan hook from the extracted
+            // nativeLibraryDir. Android cannot provide that path when native
+            // libraries remain compressed inside the APK.
+            useLegacyPackaging = true
+        }
+    }
+    lint {
+        abortOnError = false
+    }
+}
+
+dependencies {
+    implementation fileTree(include: ['*.jar'], dir: 'libs')
+}

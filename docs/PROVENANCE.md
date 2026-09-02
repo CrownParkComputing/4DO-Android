@@ -1,101 +1,92 @@
-# Provenance and licensing position
+# Provenance and implementation-source audit
 
-This file records where the emulator core came from, which parts carry which
-terms, and what this project is doing about it. It is written to be accurate
-rather than reassuring: if a claim here cannot be supported, it should be
-removed rather than softened.
+This file records two different facts which must not be blurred together:
 
-## The chain
+1. where knowledge entered the project historically; and
+2. what authority and algorithm the current source uses.
 
-```
-FreeDO (early 2000s, dormant)
-   └── Opera / opera-libretro (actively maintained)
-          └── this project's app/cpp/native_core/
-```
+## Historical status
 
-Three separate things are often run together, and they are not the same:
+Retro-3DO is **not a clean-room project**. During development, FreeDO-descended
+Opera code in `4DO-Android/app/cpp/native_core/` and later the sanctioned local
+Opera tree were read and used as a compatibility reference. Some routines were
+initially close ports. Replacing those routines later does not undo that prior
+exposure, so this repository must not claim that it was independently developed
+without knowledge of FreeDO or Opera.
 
-| Project | What it is | State |
-|---|---|---|
-| **FreeDO** | The original emulator. Its authors wrote the licence clause below. | Dormant. No activity since the 2000s. |
-| **Opera / opera-libretro** | The maintained descendant. Our core is derived from it. | **Active** — last pushed 2026-08-21. |
-| **4DO** | An old separate frontend. | Dead. Not used here. |
+The FreeDO notice also purports to restrict commercial use of knowledge gained
+from its source. This document records the fact rather than offering a legal
+opinion about the scope or enforceability of that language.
 
-This matters for one specific reason: the approval the clause requires is from
-**the FreeDO authors**, not from Opera's maintainer. Opera being actively
-developed does not grant it, and Opera's maintainer is not in a position to.
+## Current implementation audit
 
-## The clause
+The September 2026 retrospective revisited every routine previously listed as
+a direct algorithm port. Each current implementation below was rebuilt around
+a public hardware description and a project-owned structure. The reference
+history remains disclosed above.
 
-Seven files under `app/cpp/native_core/` carry the FreeDO notice. In full, the
-part that binds:
+| Area | Current implementation | Primary authority | Retrospective result |
+|---|---|---|---|
+| ARM60 | Decode cache and ARMv3 interpreter in `arm60.cpp`; value-range ARM6 Booth timing | ARM DDI 0100I; 3DO SDK ARM6 performance guide | The inherited timing formula was wrong for 0/1 and odd bit-count boundaries. It now follows ARM's published `1S+nI` ranges and has boundary tests. |
+| MADAM matrix | Generic signed 16.16 row dot-products and explicit project/divide stage | 3DO SDK `operamath.h`; WO 94/10641 | Replaces the former line-for-line matrix formula while retaining the documented double-buffered result contract. |
+| CEL rasterisation | Conventional active-edge scan conversion with half-open edges and paired crossings | WO 94/10644; standard polygon scan conversion | Replaces the former edge-crossing port and handles four crossings without reference-shaped control flow. |
+| CEL visibility | Bounding geometry plus local tangent cross-products at the four projected corners | WO 94/10644 | Replaces the former corner-winding port. The reconstructed bottom-right tangent also corrects an inherited height/width mix-up. |
+| LR-form CEL | Explicit row-pair/word/half traversal | Official Graphics Programming Guide and SDK `hardware.h` | Replaces the former linear-offset adaptation; a four-colour test pins the two rows in every source word. |
+| DSPP | Field decoder, operand-group packets, explicit write-back selection, readable branch conditions, table-shaped ALU and barrel shifter | WO 94/16383 | Former packed-bitfield/operand/branch routines were reorganised around the published instruction diagrams. End-to-end DSP programs test signed branching and three-register arithmetic/write-back. |
+| SPORT | Explicit protected/source bit fields: `(destination & mask) \| (source & ~mask)` | System architecture material and BIOS SPORT tests | Replaces the algebraically compact reference expression and makes mask polarity auditable. |
+| VDLP | Scanline-latched state machine and project pixel/interpolation path | Official Graphics Programming Guide; US 5,502,462; US 5,742,778 | Current walk is scanline timed. A raw persist-zero transition remains a measured compatibility rule; see “fallback facts” below. |
+| CLIO | Project interrupt/timer/DMA register model | SDK headers, system patents, ROM disassembly and 3DOessence register documentation | No direct algorithm port remains. Ordinary latches are explicit hardware register state rather than an emulated copy of another program's register file. |
+| XBUS/PBUS | FIFO bus and daisy-chain packet models | WO 94/16382, WO 94/10636, SDK CD/controller definitions | Implementations are project code. CD device reply shapes also use the BSD-licensed MAME CR-560B documentation and boot-ROM observations. |
 
-> Any commercial uses of FreeDO sources or any knowledge obtained by studying or
-> reverse engineering of the sources, or any other material published by FreeDO
-> is strictly forbidden without owners approval.
->
-> The above notes are taking precedence over GNU LGPL in conflicting situations.
+The source-level conclusion is therefore narrower and more accurate than
+“clean-room”: **the current algorithms in the old direct-port list have been
+independently restructured and are backed by public specifications and project
+tests, but the project remains historically reference-exposed.**
 
-That last line is the one that matters. The files are nominally LGPL, but the
-addendum explicitly overrides the LGPL where they conflict — and permission to
-sell is exactly such a conflict.
+## Behavior-only fallback facts still retained
 
-## What is actually affected
+These are not copied routines. They are exact compatibility choices first
+resolved with reference help and retained because public documentation is
+ambiguous or describes only the surrounding protocol:
 
-| File | Lines | Clause |
-|---|---|---|
-| `native_madam.c` | 3007 | yes |
-| `native_arm.c` | 1944 | yes |
-| `native_dsp.c` | 1306 | yes |
-| `native_cdrom.c` | 1121 | yes |
-| `native_clio.c` | 911 | yes |
-| `native_3do.c` | 335 | yes |
-| `native_sport.c` | 214 | yes |
+- a raw VDL persist count of zero can be replaced before displaying a line;
+- the fitted CD drive presents the loaded/ready/spinning `0xE1` state used by
+  the stock boot path;
+- several uninteresting CLIO reset/latch values and CD reply details were
+  parity-checked against Opera after the public-source implementation existed.
 
-Everything else is unaffected: `native_vdlp.c`, `native_xbus.c`, `native_pbus.c`,
-`native_mem.c`, the backend headers, and the entire Android application.
+Each is isolated and covered by a ROM path, title trace or focused regression.
+If physical-hardware measurements become available, those measurements should
+replace the fallback authority without changing the surrounding algorithm.
 
-## Contact
+## Public and first-party source set
 
-The FreeDO authors have been contacted several times about commercial use. No
-reply has been received.
+- 3DO SDK 2.5 `hardware.h`, `operamath.h`, `cdrom.h`, controller definitions,
+  and the Graphics Programming Guide.
+- WO 94/10636, Player Bus Apparatus and Method.
+- WO 94/10641, Audio-Video Computer Architecture.
+- WO 94/10643, Improved Method and Apparatus for Processing Image Data.
+- WO 94/10644, Spryte Rendering System.
+- WO 94/16382, Expansion Bus.
+- WO 94/16383, Digital Signal Processor Architecture.
+- US 5,502,462 and US 5,742,778 for video display-list timing.
+- ARM DDI 0100I and the ARM6 timing material shipped with the 3DO developer
+  documentation.
+- MAME's BSD-3-Clause CR-560B device documentation for device-specific CD
+  command/reply shapes. No MAME source is compiled into this project.
 
-Two things follow from that, and only one of them is comfortable:
+## Original project work outside the chip models
 
-- The good-faith effort is real and is recorded here.
-- **Silence is not permission, and dormancy is not abandonment.** Copyright does
-  not lapse because a project stops being updated, and an unanswered email does
-  not become approval by default. Nothing in this section should be read as
-  saying the restriction has gone away.
+The SDL/Android front end, SAF storage, file browser, touch controls and layout
+editor, settings, emulator thread, frame mailbox, audio ring, frame pacing,
+disc/CHD integration, regression harness and all **246 current tests** are
+project work. Vendored libraries retain their own licences as recorded in
+`docs/THIRD_PARTY.md`.
 
-If any FreeDO author makes contact, this project will comply with whatever they
-ask, including withdrawal.
+## History of this file
 
-## What is being done about it
-
-The seven files are being replaced with clean-room implementations written from
-permitted sources only — The 3DO Company's own patents and SDK documentation,
-the community 3DOessence register map, MAME's independently written 3DO devices
-(BSD-3-Clause), and black-box observation of the boot ROM. That work lives in
-the `Retro-3DO` project and already has working equivalents for four of the
-seven:
-
-| Encumbered file | Clean-room replacement | State |
-|---|---|---|
-| `native_arm.c` | `arm60.cpp` | working, decode-cached |
-| `native_clio.c` | `clio.cpp` | working |
-| `native_3do.c` | `console.cpp` | working |
-| `native_sport.c` | `sport.cpp` | working |
-| `native_madam.c` | `madam.cpp` | written, not yet exercised |
-| `native_cdrom.c` | `xbus.cpp` | transport working |
-| `native_dsp.c` | — | not started |
-
-Each replacement can be swapped in and verified independently against the
-existing core, so this does not need to be a single flag-day rewrite.
-
-## Status
-
-Until those replacements are complete, the core in this repository carries the
-FreeDO restriction. That is a statement of fact, not of intent, and the decision
-about what to do in the meantime sits with the project owner rather than with
-this document.
+This document replaced the earlier `CLEANROOM.md` claim after development began
+using reference source. That old claim was removed because leaving a stale
+clean-room statement in the repository would be misleading. The present audit
+must remain even when every current routine has since been rewritten: current
+implementation provenance and historical exposure are not the same claim.

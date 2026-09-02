@@ -1,0 +1,28 @@
+Retro-3DO distribution notice
+Copyright (c) 2026 Crown Park Computing
+
+The project-owned Retro-3DO source code is distributed under the MIT License
+in LICENSE. That licence permits use, modification, distribution,
+sublicensing and sale, subject to preserving its copyright and permission
+notice.
+
+The application also contains separately licensed components. Their copyright
+and licence terms remain in force and are collected in docs/THIRD_PARTY.md and
+the corresponding third_party/* licence files. They include SDL3 (zlib), Dear
+ImGui (MIT), libchdr (BSD-3-Clause), AdrenoTools (BSD-2-Clause), miniz (MIT),
+the LZMA SDK (public domain) and zstd (BSD selected). Portions informed by
+MAME carry the BSD-3-Clause notices recorded in docs/THIRD_PARTY.md.
+
+No 3DO BIOS, game image or RetroMedia catalogue content is included under the
+Retro-3DO software licence. Users and distributors are responsible for having
+the rights to any BIOS, games, artwork and custom GPU drivers they supply.
+
+Historical reference-source exposure is documented in docs/PROVENANCE.md.
+FreeDO/Opera source is not compiled or vendored in this repository, but FreeDO
+was studied during development and its published notice purports to require
+owner approval for commercial use of knowledge obtained from it. The Retro-3DO
+MIT licence grants rights only in Crown Park Computing's copyright and does not
+purport to grant or waive any third party's rights.
+
+3DO and other product names and marks belong to their respective owners. Their
+use identifies compatibility and does not imply sponsorship or endorsement.

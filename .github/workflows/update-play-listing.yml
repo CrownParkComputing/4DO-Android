@@ -1,0 +1,39 @@
+name: Update Retro-3DO Play listing
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  id-token: write
+
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: 'true'
+
+jobs:
+  update-listing:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout listing assets
+        uses: actions/checkout@v4
+
+      - name: Authenticate to Google Play API
+        id: google_auth
+        uses: google-github-actions/auth@v3
+        with:
+          credentials_json: ${{ secrets.PLAY_SERVICE_ACCOUNT_JSON }}
+          token_format: access_token
+          access_token_scopes: https://www.googleapis.com/auth/androidpublisher
+
+      - name: Validate listing assets
+        run: |
+          test "$(cat play/listings/en-US/title.txt)" = 'Retro-3DO'
+          test "$(wc -m < play/listings/en-US/short-description.txt)" -le 81
+          file play/graphics/store/icon.png | grep '512 x 512'
+          file play/graphics/store/feature-graphic.png | grep '1024 x 500'
+          test "$(find play/graphics/phone -name '*.png' | wc -l)" -ge 2
+
+      - name: Update listing text and graphics
+        env:
+          PLAY_ACCESS_TOKEN: ${{ steps.google_auth.outputs.access_token }}
+        run: bash scripts/update-play-listing.sh

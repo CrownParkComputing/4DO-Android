@@ -1,0 +1,1 @@
+Retro-3DO 2.1.0 replaces the previous emulator with our new modern C++ core and launcher. It adds Vulkan and custom Adreno drivers, a visual A–Z library, multi-disc swapping, RetroMedia artwork, configurable touch controls, display effects and optional CPU boost. Rendering fixes improve Road Rash and The Need for Speed.

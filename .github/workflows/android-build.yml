@@ -131,3 +131,4 @@ jobs:
           releaseFiles: android/app/build/outputs/bundle/release/app-release.aab
           track: ${{ inputs.play_track }}
           status: ${{ inputs.play_status }}
+          whatsNewDirectory: play/whatsnew

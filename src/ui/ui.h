@@ -25,6 +25,7 @@ struct RetroMediaGame;
 struct UiIntent {
     bool quit = false;
     bool reset = false;
+    bool start_demo = false;
     bool toggle_pause = false;
     bool bios_chosen = false;
     std::string bios_path;

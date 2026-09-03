@@ -627,6 +627,16 @@ void Ui::draw_setup_wizard(Console& console, UiIntent& intent) {
             if (wide_button("BEGIN SETUP", 44.0f * scale_)) {
                 wizard_step_ = WizardStep::Bios;
             }
+            ImGui::Spacing();
+            if (wide_button("TRY BUILT-IN HARDWARE DEMO", 44.0f * scale_)) {
+                // This bypasses setup for the current run only. No setting is
+                // saved, so the legal user-BIOS setup returns next launch.
+                setup_complete_ = true;
+                show_launcher_ = false;
+                session_available_ = true;
+                intent.start_demo = true;
+                wake_menu_button();
+            }
             break;
 
         case WizardStep::Bios:
@@ -783,7 +793,7 @@ void Ui::draw_launcher(Console& console, bool emulating, bool touch_visible,
     ImGui::SetCursorScreenPos(
         ImVec2(nav_top.x, nav_top.y + 5.0f * scale_));
     const float total_width = ImGui::GetContentRegionAvail().x;
-    const int action_count = 6 + (retro_media_admin_ ? 1 : 0) +
+    const int action_count = 7 + (retro_media_admin_ ? 1 : 0) +
                              (session_available_ ? 1 : 0);
     const float gap = ImGui::GetStyle().ItemSpacing.x;
     const float action_width =
@@ -806,6 +816,13 @@ void Ui::draw_launcher(Console& console, bool emulating, bool touch_visible,
         if (selected) ImGui::PopStyleColor(2);
     };
     nav_button("LIBRARY", Page::Library);
+    ImGui::SameLine();
+    if (ImGui::Button("DEMO", ImVec2(action_width, 40.0f * scale_))) {
+        intent.start_demo = true;
+        session_available_ = true;
+        show_launcher_ = false;
+        wake_menu_button();
+    }
     ImGui::SameLine();
     nav_button("SETTINGS", Page::Settings);
     ImGui::SameLine();
@@ -1038,7 +1055,7 @@ void Ui::draw_library(Console& console, UiIntent& intent) {
             ImGui::SetCursorScreenPos(
                 ImVec2(content_left,
                        card_bottom.y - padding - button_height));
-            ImGui::BeginDisabled(!console.bios_loaded());
+            ImGui::BeginDisabled(!console.bios_loaded() || console.demo_loaded());
             ImGui::PushStyleColor(ImGuiCol_Button, tinted(accent, 0.13f));
             ImGui::PushStyleColor(ImGuiCol_ButtonHovered,
                                   tinted(accent, 0.30f));
@@ -1080,9 +1097,13 @@ void Ui::draw_library(Console& console, UiIntent& intent) {
     ImGui::SetCursorScreenPos(grid_end);
     ImGui::Dummy(ImVec2(0.0f, 0.0f));
 
-    if (!console.bios_loaded()) {
+    if (!console.bios_loaded() || console.demo_loaded()) {
         ImGui::Spacing();
-        ImGui::TextColored(kAmber, "Load a 3DO BIOS on the System page before playing.");
+        ImGui::TextColored(
+            kAmber,
+            console.demo_loaded()
+                ? "The built-in demo cannot boot games. Load your 3DO BIOS on the System page."
+                : "Load a 3DO BIOS on the System page before playing.");
     }
     ImGui::EndChild();
 }
@@ -1461,8 +1482,10 @@ void Ui::draw_system(Console& console, UiIntent& intent) {
         intent.bios_name = bios_path_buffer_;
     }
     ImGui::TextColored(console.bios_loaded() ? kGreen : kAmber,
-                       console.bios_loaded() ? "BIOS loaded - system ready"
-                                             : "No BIOS loaded");
+                       console.demo_loaded()
+                           ? "Built-in original demo ROM loaded"
+                           : (console.bios_loaded() ? "BIOS loaded - system ready"
+                                                   : "No BIOS loaded"));
 
     ImGui::Separator();
     ImGui::TextColored(kGreen, "INSERTED DISC");
@@ -1489,7 +1512,7 @@ void Ui::draw_system(Console& console, UiIntent& intent) {
                            disc.tracks().size() == 1 ? "" : "s");
         if (ImGui::Button("EJECT")) intent.eject = true;
         ImGui::SameLine();
-        ImGui::BeginDisabled(!console.bios_loaded());
+        ImGui::BeginDisabled(!console.bios_loaded() || console.demo_loaded());
         if (ImGui::Button("START CURRENT DISC")) {
             intent.reset = true;
             session_available_ = true;

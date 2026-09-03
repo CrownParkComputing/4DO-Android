@@ -79,8 +79,9 @@ replace the fallback authority without changing the surrounding algorithm.
 
 The SDL/Android front end, SAF storage, file browser, touch controls and layout
 editor, settings, emulator thread, frame mailbox, audio ring, frame pacing,
-disc/CHD integration, regression harness and all **246 current tests** are
-project work. Vendored libraries retain their own licences as recorded in
+disc/CHD integration, regression harness, original bare-metal demonstration
+ROM, and all **254 current tests** are project work. Vendored libraries retain
+their own licences as recorded in
 `docs/THIRD_PARTY.md`.
 
 ## History of this file

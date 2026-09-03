@@ -42,6 +42,12 @@ cmake --build build -j
 ./build/retro3do
 ```
 
+Choose **Demo** in the launcher, or run `./build/retro3do --demo`, to boot the
+included original hardware demonstration without a commercial BIOS or game.
+The 1.7 KB bare-metal ARM ROM drives MADAM/VDLP video, DSPP audio and PBUS input
+through the emulator's normal hardware paths. Its complete source and
+reproducible build are in [`demo/`](demo/).
+
 Drop `-DRETRO3DO_USE_SYSTEM_SDL=ON` to build the vendored SDL from source
 instead, which is what the mobile targets do.
 
@@ -58,7 +64,7 @@ reproduced here before it gets fixed.
 
 ```sh
 cd android
-./gradlew :app:assembleDebug -PBUILD_WITH_CMAKE=1
+./gradlew :app:bundleDebug -PBUILD_WITH_CMAKE=1
 ```
 
 Gradle drives the same root `CMakeLists.txt` the desktop build uses; there is no
@@ -136,6 +142,7 @@ platform header, it belongs in `src/platform/` instead.
 - [x] Android scoped storage (SAF): the user grants folders, the app requests no storage permission
 - [x] On-screen controls, movable, saved per device
 - [x] Settings that survive a restart
+- [x] Original built-in no-BIOS hardware demonstration ROM
 - [x] RetroMedia account artwork downloads and illustrated library cards (Android)
 - [x] Scanline-timed VDLP updates
 - [ ] Full MADAM CEL pause/status timing

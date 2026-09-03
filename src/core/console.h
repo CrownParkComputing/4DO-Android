@@ -50,7 +50,11 @@ public:
 
     // Load a BIOS image from disk. Without one the machine has nothing to run.
     bool load_bios(const std::string& path);
+    // Load the project-owned demonstration ROM embedded in the app. It is a
+    // hardware test, not a replacement BIOS and cannot boot commercial discs.
+    bool load_builtin_demo();
     bool bios_loaded() const { return bus_.bios_loaded(); }
+    bool demo_loaded() const { return demo_loaded_; }
 
     // Insert a disc image. The disc is opened and its table of contents read;
     // nothing is executed until the machine asks for a sector.
@@ -175,6 +179,7 @@ private:
 
     std::vector<u32> framebuffer_;
     std::string last_error_;
+    bool demo_loaded_ = false;
 
     u64 frame_count_ = 0;
     std::atomic<u32> cpu_scale_percent_{100};

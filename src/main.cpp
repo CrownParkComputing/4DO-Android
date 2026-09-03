@@ -6,6 +6,8 @@
 #include <SDL3/SDL.h>
 #include <SDL3/SDL_main.h>
 
+#include <string>
+
 #include "platform/app.h"
 
 int main(int argc, char* argv[]) {
@@ -22,7 +24,10 @@ int main(int argc, char* argv[]) {
     // previous run remembered. Without this the emulator can only be pointed at
     // a file through the GUI, which makes it awkward to test and impossible to
     // script.
-    app.set_launch_files(argc > 1 ? argv[1] : "", argc > 2 ? argv[2] : "");
+    const bool demo = argc > 1 && std::string(argv[1]) == "--demo";
+    app.set_launch_demo(demo);
+    app.set_launch_files(!demo && argc > 1 ? argv[1] : "",
+                         !demo && argc > 2 ? argv[2] : "");
 
     if (!app.init()) {
         SDL_LogError(SDL_LOG_CATEGORY_APPLICATION, "%s", app.last_error().c_str());

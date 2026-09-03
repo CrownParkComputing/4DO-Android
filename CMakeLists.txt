@@ -95,6 +95,7 @@ add_library(retro3do_core STATIC
     src/core/pbus.cpp
     src/core/console.cpp
     src/core/disc.cpp
+    src/core/demo_rom.cpp
     src/core/frame_mailbox.cpp
     src/core/madam.cpp
     src/core/pad.cpp

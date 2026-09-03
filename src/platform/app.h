@@ -47,6 +47,7 @@ public:
     // argv worth reading - but it is what makes the emulator scriptable, and
     // scriptable is what makes it testable outside a GUI.
     void set_launch_files(std::string bios, std::string disc);
+    void set_launch_demo(bool enabled) { launch_demo_ = enabled; }
 
     bool init();
 
@@ -121,6 +122,7 @@ private:
     std::string actual_renderer_;
     std::string renderer_startup_message_;
     bool start_on_launch_ = false;
+    bool launch_demo_ = false;
     bool running_ = false;
     bool emulating_ = false;
     std::atomic<bool> backgrounded_{false};

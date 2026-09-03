@@ -83,6 +83,73 @@ TEST(a_console_without_a_bios_reports_why) {
     CHECK(!console.last_error().empty());
 }
 
+TEST(the_builtin_demo_is_an_original_executable_rom) {
+    Console console;
+    CHECK(console.load_builtin_demo());
+    CHECK(console.bios_loaded());
+    CHECK(console.demo_loaded());
+    CHECK_EQ(console.bus().read32(kRomBase), 0xea000006u);
+
+    // The ROM really executes through the ARM and hardware bus. Within a few
+    // fields it must install a VDL, start the DSP, and render non-black video.
+    for (int i = 0; i < 30; ++i) console.run_frame();
+    CHECK(console.cpu().total_instructions() > 1000u);
+    CHECK(console.madam().vdl_address() != 0u);
+    CHECK(console.dsp().running());
+    CHECK(console.vdlp().entries_walked() > 0u);
+
+    const Frame frame = console.framebuffer();
+    bool has_colour = false;
+    for (int y = 0; y < frame.height && !has_colour; y += 16) {
+        for (int x = 0; x < frame.width; x += 16) {
+            if ((frame.pixels[static_cast<size_t>(y) * frame.width + x] &
+                 0x00ffffffu) != 0u) {
+                has_colour = true;
+                break;
+            }
+        }
+    }
+    CHECK(has_colour);
+
+    // The DSP program must produce an actual signal, not merely set its run
+    // bit. This is sampled through the same audio ring used by the app.
+    console.audio().reset();
+    console.run_frame();
+    StereoSample samples[1024] = {};
+    const u32 count = console.audio().pull(samples, 1024);
+    bool has_audio = false;
+    int peak = 0;
+    bool audio_changes = false;
+    for (u32 i = 0; i < count; ++i) {
+        if (samples[i].left != 0 || samples[i].right != 0) {
+            has_audio = true;
+        }
+        const int magnitude = samples[i].left < 0
+                                  ? -static_cast<int>(samples[i].left)
+                                  : static_cast<int>(samples[i].left);
+        if (magnitude > peak) peak = magnitude;
+        if (i > 0 && samples[i].left != samples[i - 1].left) {
+            audio_changes = true;
+        }
+        CHECK_EQ(samples[i].left, samples[i].right);
+    }
+    CHECK(has_audio);
+    CHECK(audio_changes);
+    CHECK(peak <= 4096);
+
+    // PBUS input is consumed by the ROM itself. Holding Right must move the
+    // marker in VRAM, which proves the host pad reached emulated software.
+    const u32 before = console.bus().read32(kVramBase +
+        framebuffer_offset(152, 204, 320));
+    Joypad pad;
+    pad.right = true;
+    console.set_joypad(pad);
+    for (int i = 0; i < 3; ++i) console.run_frame();
+    const u32 after = console.bus().read32(kVramBase +
+        framebuffer_offset(152, 204, 320));
+    CHECK(before != after);
+}
+
 TEST(the_frame_is_the_right_shape_for_the_region) {
     Console console;
 

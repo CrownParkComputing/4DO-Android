@@ -250,6 +250,16 @@ bool App::init() {
     load_settings();
     load_nvram();
 
+    if (launch_demo_) {
+        console_->eject_disc();
+        if (!console_->load_builtin_demo()) {
+            last_error_ = console_->last_error();
+            return false;
+        }
+        console_->reset();
+        start_on_launch_ = true;
+    }
+
     if (AndroidStorage::available()) {
         ui_->set_retro_media_status("", 0, 0, false, true,
                                     "Checking account...");
@@ -1305,6 +1315,21 @@ void App::tick() {
             settings_->save();
             SDL_Log("BIOS loaded");
         } else {
+            SDL_Log("%s", console_->last_error().c_str());
+        }
+    }
+    if (intent.start_demo) {
+        // Stop at a frame boundary before replacing the ROM. The demo never
+        // changes the remembered user BIOS and deliberately runs with no disc.
+        emulator_->set_paused(true);
+        console_->eject_disc();
+        if (console_->load_builtin_demo()) {
+            console_->reset();
+            emulating_ = true;
+            emulator_->set_paused(false);
+            SDL_Log("Started built-in original demo ROM");
+        } else {
+            emulating_ = false;
             SDL_Log("%s", console_->last_error().c_str());
         }
     }

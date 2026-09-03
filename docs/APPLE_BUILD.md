@@ -106,7 +106,7 @@ In rough order of likelihood.
 6. **Run the host tests on the Mac.** `macos/build-macos.sh` does this for you.
    This is the first time the core is compiled by Apple clang, for two
    architectures — a portability fault surfaces there as a failed test rather
-   than as a crash on a user's machine days later. All 253 pass on Linux.
+   than as a crash on a user's machine days later. All 254 pass on Linux.
 
 ## Getting a BIOS and discs onto a device
 
@@ -132,11 +132,18 @@ This is the part users get stuck on, and it differs per platform.
 xcrun altool --upload-app -f <ipa> -t ios --apiKey <key> --apiIssuer <issuer>
 ```
 
-Two Apple-side facts worth knowing before the first submission: emulators are
-allowed on the App Store, but the app must not download executable content, and
-it must ship without copyrighted ROM or BIOS material — which is already how
-this one works. And per the family-wide rule in the memory index, an index of
-what is in the build goes in the **Review Notes on every submission**.
+Retro-3DO's iOS build does not offer BIOS or game downloads. Users import their
+own lawfully obtained BIOS and discs through Files. The only executable 3DO
+content bundled with the application is the original demonstration ROM in
+`demo/`; its full source is shipped in the repository and it contains no
+Portfolio, commercial BIOS, or retail game material.
+
+Put this plainly in **Review Notes on every submission**:
+
+> Included boot ROM is original code owned by Crown Park Computing; commercial
+> BIOS and games are not included and are user-imported through Files. The Demo
+> button runs the included ROM without external files and exercises the
+> emulated ARM60 CPU, MADAM/VDLP video, DSPP audio, and PBUS controller input.
 
 **macOS, direct download** (the default, and simplest):
 

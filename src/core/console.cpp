@@ -3,6 +3,8 @@
 
 #include <cstdio>
 
+#include "demo_rom.h"
+
 #if !defined(_WIN32)
 #include <unistd.h>
 #endif
@@ -113,6 +115,20 @@ bool Console::load_bios(const std::string& path) {
     }
 
     // New code underneath the CPU: anything already decoded is stale.
+    demo_loaded_ = false;
+    cpu_.invalidate_decode_cache();
+    last_error_.clear();
+    return true;
+}
+
+bool Console::load_builtin_demo() {
+    const DemoRom& rom = builtin_demo_rom();
+    if (!bus_.load_bios(rom.data, rom.size)) {
+        last_error_ = "The built-in demonstration ROM could not be loaded";
+        demo_loaded_ = false;
+        return false;
+    }
+    demo_loaded_ = true;
     cpu_.invalidate_decode_cache();
     last_error_.clear();
     return true;
@@ -187,6 +203,7 @@ bool Console::load_bios_fd(int fd, const std::string& display_name) {
         return false;
     }
 
+    demo_loaded_ = false;
     cpu_.invalidate_decode_cache();
     last_error_.clear();
     return true;

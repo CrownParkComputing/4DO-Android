@@ -10,6 +10,7 @@
 #include "core/pad.h"
 #include "core/settings.h"
 #include "platform/android_storage.h"
+#include "platform/platform.h"
 #include "platform/storage.h"
 #include "ui/touch_pad.h"
 #include "platform/emulator_thread.h"
@@ -159,7 +160,7 @@ bool App::init() {
     // status bar sits on top of the app: not merely untidy, it covers the top
     // row of controls and steals touches meant for them.
     SDL_WindowFlags flags = SDL_WINDOW_HIGH_PIXEL_DENSITY;
-#if defined(__ANDROID__) || defined(__APPLE__)
+#if RETRO3DO_MOBILE
     flags |= SDL_WINDOW_FULLSCREEN;
 #elif !defined(__linux__)
     flags |= SDL_WINDOW_RESIZABLE;

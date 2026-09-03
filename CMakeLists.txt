@@ -11,6 +11,25 @@ endif()
 
 option(RETRO3DO_BUILD_TESTS "Build the host test suite" ON)
 
+# ---------------------------------------------------------------------------
+# Apple targets.
+#
+# One switch decides whether this is a bundle build, because iOS and macOS
+# differ in almost every particular except that: iOS is always a bundle, macOS
+# is one only if it is going to be double-clicked rather than run from a shell.
+#
+# APPLE covers both; IOS is set by CMake when CMAKE_SYSTEM_NAME=iOS, so
+# "APPLE AND NOT IOS" is the macOS test used throughout this file.
+# ---------------------------------------------------------------------------
+set(RETRO3DO_BUNDLE_ID "com.crownparkcomputing.retro3do" CACHE STRING
+    "Bundle identifier for the iOS and macOS apps")
+set(RETRO3DO_APPLE_TEAM_ID "" CACHE STRING
+    "Apple Developer Team ID. Leave empty for an unsigned local build")
+set(RETRO3DO_MARKETING_VERSION "1.0" CACHE STRING "CFBundleShortVersionString")
+set(RETRO3DO_BUILD_NUMBER "1" CACHE STRING "CFBundleVersion")
+set(RETRO3DO_IOS_MIN "15.0" CACHE STRING "iOS deployment target")
+set(RETRO3DO_MACOS_MIN "11.0" CACHE STRING "macOS deployment target")
+
 # Instruction and register traces. These are how the hardware faults in this
 # core were found and they are worth keeping, but the PC trace sits in the
 # instruction loop, so it is compiled out unless asked for rather than left as
@@ -191,22 +210,70 @@ find_package(Threads REQUIRED)
 target_link_libraries(retro3do PRIVATE retro3do_core imgui ${RETRO3DO_SDL_TARGET} Threads::Threads)
 target_include_directories(retro3do PRIVATE src)
 
-if(IOS)
-    # An iOS build is an app bundle, not a bare executable. Signing is left off
-    # here on purpose: CI has no identity to give, and the archive step signs
-    # the bundle with the app's own certificate anyway.
+if(APPLE)
+    # An Apple build is an app bundle, not a bare executable - on iOS because
+    # there is no other way to install one, and on macOS because a bare
+    # executable has no icon, no Info.plist, and cannot be notarised or
+    # double-clicked.
+    #
+    # The two platforms share the plist keys that identify the app and differ in
+    # everything else, so the common half is set once here.
     set_target_properties(retro3do PROPERTIES
         MACOSX_BUNDLE TRUE
-        MACOSX_BUNDLE_INFO_PLIST ${CMAKE_CURRENT_SOURCE_DIR}/ios/Info.plist.in
+        # Both bundles are named the same thing so one script can find either.
+        OUTPUT_NAME "Retro-3DO"
         MACOSX_BUNDLE_BUNDLE_NAME "Retro-3DO"
-        MACOSX_BUNDLE_GUI_IDENTIFIER "com.crownparkcomputing.retro3do"
-        MACOSX_BUNDLE_BUNDLE_VERSION "1"
-        MACOSX_BUNDLE_SHORT_VERSION_STRING "1.0"
-        XCODE_ATTRIBUTE_IPHONEOS_DEPLOYMENT_TARGET "15.0"
-        XCODE_ATTRIBUTE_TARGETED_DEVICE_FAMILY "1,2"
-        XCODE_ATTRIBUTE_CODE_SIGNING_ALLOWED "NO"
-        XCODE_ATTRIBUTE_CODE_SIGNING_REQUIRED "NO"
+        MACOSX_BUNDLE_GUI_IDENTIFIER "${RETRO3DO_BUNDLE_ID}"
+        MACOSX_BUNDLE_BUNDLE_VERSION "${RETRO3DO_BUILD_NUMBER}"
+        MACOSX_BUNDLE_SHORT_VERSION_STRING "${RETRO3DO_MARKETING_VERSION}"
+        XCODE_ATTRIBUTE_PRODUCT_BUNDLE_IDENTIFIER "${RETRO3DO_BUNDLE_ID}"
     )
+
+    # The icon. actool is part of Xcode and only runs under the Xcode
+    # generator, so the catalog is attached there and skipped elsewhere: a
+    # Ninja build of the app still runs, it just has a generic icon. That is
+    # the right way round - a missing icon must not stop someone building and
+    # testing the emulator.
+    set(RETRO3DO_XCASSETS ${CMAKE_CURRENT_SOURCE_DIR}/assets/apple/Assets.xcassets)
+    if(CMAKE_GENERATOR STREQUAL "Xcode")
+        target_sources(retro3do PRIVATE ${RETRO3DO_XCASSETS})
+        set_source_files_properties(${RETRO3DO_XCASSETS} PROPERTIES
+            MACOSX_PACKAGE_LOCATION Resources)
+        set_target_properties(retro3do PROPERTIES
+            XCODE_ATTRIBUTE_ASSETCATALOG_COMPILER_APPICON_NAME "AppIcon")
+    endif()
+
+    # Signing. Empty by default so a clone builds with no Apple account at all;
+    # give -DRETRO3DO_APPLE_TEAM_ID=XXXXXXXXXX and Xcode signs automatically.
+    if(RETRO3DO_APPLE_TEAM_ID STREQUAL "")
+        set_target_properties(retro3do PROPERTIES
+            XCODE_ATTRIBUTE_CODE_SIGNING_ALLOWED "NO"
+            XCODE_ATTRIBUTE_CODE_SIGNING_REQUIRED "NO")
+    else()
+        set_target_properties(retro3do PROPERTIES
+            XCODE_ATTRIBUTE_DEVELOPMENT_TEAM "${RETRO3DO_APPLE_TEAM_ID}"
+            XCODE_ATTRIBUTE_CODE_SIGN_STYLE "Automatic")
+    endif()
+
+    if(IOS)
+        set_target_properties(retro3do PROPERTIES
+            MACOSX_BUNDLE_INFO_PLIST ${CMAKE_CURRENT_SOURCE_DIR}/ios/Info.plist.in
+            XCODE_ATTRIBUTE_IPHONEOS_DEPLOYMENT_TARGET "${RETRO3DO_IOS_MIN}"
+            # 1,2 = iPhone and iPad from one build.
+            XCODE_ATTRIBUTE_TARGETED_DEVICE_FAMILY "1,2"
+        )
+    else()
+        set_target_properties(retro3do PROPERTIES
+            MACOSX_BUNDLE_INFO_PLIST ${CMAKE_CURRENT_SOURCE_DIR}/macos/Info.plist.in
+            XCODE_ATTRIBUTE_MACOSX_DEPLOYMENT_TARGET "${RETRO3DO_MACOS_MIN}"
+            # Notarisation requires the hardened runtime. It costs nothing to
+            # have it on in local builds too, and it means a hardened-runtime
+            # problem is found while building rather than at submission.
+            XCODE_ATTRIBUTE_ENABLE_HARDENED_RUNTIME "YES"
+            XCODE_ATTRIBUTE_CODE_SIGN_ENTITLEMENTS
+                "${CMAKE_CURRENT_SOURCE_DIR}/macos/Retro3DO.entitlements"
+        )
+    endif()
 endif()
 
 # ---------------------------------------------------------------------------
@@ -218,10 +285,17 @@ endif()
 # gamecheck boots a whole library headless and reports what each title did. It
 # needs discs, which are not in the repository, so it is a tool rather than a
 # test - point it at a library and it becomes one.
-add_executable(gamecheck tools/gamecheck/gamecheck.cpp)
-target_link_libraries(gamecheck PRIVATE retro3do_core)
+#
+# Not on iOS: a command-line executable in an iOS project is not merely useless
+# (there is no shell to run it from), it fails the build, because every product
+# in an iOS Xcode project has to be signed and a bare Mach-O has no bundle to
+# sign. The same goes for the test runner below.
+if(NOT IOS)
+    add_executable(gamecheck tools/gamecheck/gamecheck.cpp)
+    target_link_libraries(gamecheck PRIVATE retro3do_core)
+endif()
 
-if(RETRO3DO_BUILD_TESTS)
+if(RETRO3DO_BUILD_TESTS AND NOT IOS)
     enable_testing()
     add_executable(retro3do_tests
         tests/test_main.cpp

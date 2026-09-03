@@ -1,0 +1,26 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<!-- Direct distribution (Developer ID, hardened runtime, notarised).
+
+	     Deliberately empty. Everything the app links is static - SDL, ImGui,
+	     libchdr - and the emulator is a plain interpreter with no generated
+	     code, so it needs none of the usual hardened-runtime exceptions. Adding
+	     them "just in case" is how an app ends up asking for JIT memory it never
+	     uses, which is a question at review time and a weakening either way.
+
+	     If notarisation or launch ever fails on a hardened-runtime complaint,
+	     add the ONE entitlement the log names and record why here:
+	       com.apple.security.cs.disable-library-validation
+	       com.apple.security.cs.allow-jit
+	       com.apple.security.cs.allow-unsigned-executable-memory
+
+	     The App Sandbox is NOT enabled, and that is a decision rather than an
+	     omission: the app's file browser walks the user's own disks to find a
+	     BIOS and a disc library, and under the sandbox every one of those paths
+	     reads as an empty folder. The Mac App Store requires the sandbox, so it
+	     also requires an NSOpenPanel-plus-security-scoped-bookmark flow first -
+	     the same shape as the Android SAF work. See docs/APPLE_BUILD.md. -->
+</dict>
+</plist>

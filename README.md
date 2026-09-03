@@ -4,7 +4,7 @@ A new 3DO Interactive Multiplayer emulator codebase for phones, tablets and
 desktops. Its historical reference exposure is disclosed in
 [docs/PROVENANCE.md](docs/PROVENANCE.md).
 
-One C++ codebase builds for Android, iOS, Linux and Windows. There is no
+One C++ codebase builds for Android, iOS, macOS, Linux and Windows. There is no
 per-platform front end: SDL provides the window, input, audio and GPU on every
 target, and Dear ImGui draws the launcher and the in-game overlay.
 
@@ -83,14 +83,21 @@ is resized and cached in private app storage, then shown directly on library
 cards. Downloads happen only when the user presses **Download Missing
 Artwork**, and use that account's normal daily allowance/credit balance.
 
-### iOS
+### iOS and macOS
 
 ```sh
-ios/build-ios-macos.sh
+ios/build-ios-macos.sh        # iPhone and iPad
+macos/build-macos.sh          # universal Retro-3DO.app
 ```
 
-macOS only, and deliberately so — a Linux cross-build can make something that
-sideloads but never something submittable. See the comments in that script.
+Both are macOS-only, and deliberately so — a Linux cross-build can make
+something that sideloads but never something submittable, and `actool` (the app
+icon) and `codesign` exist nowhere else.
+
+Neither has been run: everything else in this repository is built and tested
+from Linux. [docs/APPLE_BUILD.md](docs/APPLE_BUILD.md) is the handover — what is
+set up, what to expect on the first real Xcode run, and how to sign, notarise
+and submit.
 
 ## Layout
 
@@ -101,6 +108,8 @@ src/ui/         Dear ImGui: launcher and overlay
 tests/          host-side tests
 android/        Gradle shell around the shared CMake tree
 ios/            Xcode/CMake shell around the shared CMake tree
+macos/          the same, for the desktop bundle: plist, entitlements, script
+assets/apple/   asset catalogue, compiled into the icon by actool
 ```
 
 The rule that keeps this working: if something in `src/core/` ever needs a
@@ -112,6 +121,7 @@ platform header, it belongs in `src/platform/` instead.
 - [x] Memory map and big-endian bus
 - [x] SDL application shell, ImGui launcher
 - [x] Android and iOS build paths off one CMake tree
+- [x] macOS bundle target, icons and signing set up (unrun: see docs/APPLE_BUILD.md)
 - [x] CLIO — interrupts, timers, video counters
 - [x] VDLP — display list to framebuffer
 - [x] MADAM — the CEL engine: affine mapping, indexed and direct cels

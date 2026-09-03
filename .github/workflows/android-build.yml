@@ -4,24 +4,6 @@ on:
   push:
     branches: [ main, master ]
   workflow_dispatch:
-    inputs:
-      upload_to_play:
-        description: Upload the signed AAB to Google Play
-        required: true
-        default: false
-        type: boolean
-      play_track:
-        description: Google Play track
-        required: false
-        default: internal
-        type: choice
-        options: [ internal, alpha, beta, production ]
-      play_status:
-        description: Google Play release status
-        required: false
-        default: draft
-        type: choice
-        options: [ draft, completed ]
 
 permissions:
   contents: read
@@ -108,27 +90,3 @@ jobs:
       - name: Remove plaintext keystore
         if: always()
         run: rm -f "${{ runner.temp }}/retro3do-upload.keystore"
-
-      - name: Check Play credentials
-        id: play_check
-        if: github.event_name == 'workflow_dispatch' && inputs.upload_to_play
-        env:
-          PLAY_SERVICE_ACCOUNT_JSON: ${{ secrets.PLAY_SERVICE_ACCOUNT_JSON }}
-        run: |
-          if [ -n "$PLAY_SERVICE_ACCOUNT_JSON" ]; then
-            echo "available=true" >> "$GITHUB_OUTPUT"
-          else
-            echo "::error::Missing required GitHub secret: PLAY_SERVICE_ACCOUNT_JSON"
-            exit 1
-          fi
-
-      - name: Upload to Google Play
-        if: github.event_name == 'workflow_dispatch' && inputs.upload_to_play && steps.play_check.outputs.available == 'true'
-        uses: r0adkll/upload-google-play@v1.1.3
-        with:
-          serviceAccountJsonPlainText: ${{ secrets.PLAY_SERVICE_ACCOUNT_JSON }}
-          packageName: com.fourdo.android
-          releaseFiles: android/app/build/outputs/bundle/release/app-release.aab
-          track: ${{ inputs.play_track }}
-          status: ${{ inputs.play_status }}
-          whatsNewDirectory: play/whatsnew

@@ -25,6 +25,12 @@ set(RETRO3DO_BUNDLE_ID "com.crownparkcomputing.retro3DO" CACHE STRING
     "Bundle identifier for the iOS and macOS apps")
 set(RETRO3DO_APPLE_TEAM_ID "" CACHE STRING
     "Apple Developer Team ID. Leave empty for an unsigned local build")
+set(RETRO3DO_CODE_SIGN_STYLE "Automatic" CACHE STRING
+    "Automatic, or Manual for an unattended release build")
+set(RETRO3DO_PROVISIONING_PROFILE "" CACHE STRING
+    "Provisioning profile name; Manual signing only")
+set(RETRO3DO_CODE_SIGN_IDENTITY "" CACHE STRING
+    "Signing identity, e.g. Apple Distribution; Manual signing only")
 set(RETRO3DO_MARKETING_VERSION "1.0" CACHE STRING "CFBundleShortVersionString")
 set(RETRO3DO_BUILD_NUMBER "1" CACHE STRING "CFBundleVersion")
 set(RETRO3DO_IOS_MIN "15.0" CACHE STRING "iOS deployment target")
@@ -251,10 +257,29 @@ if(APPLE)
             XCODE_ATTRIBUTE_CODE_SIGNING_ALLOWED "NO"
             XCODE_ATTRIBUTE_CODE_SIGNING_REQUIRED "NO")
     else()
+        # Automatic signing looks for an *App Development* profile, and a
+        # release runner only ever has the App Store distribution one, so an
+        # unattended archive dies with "No profiles for ... were found" before
+        # it builds. CI overrides these three to sign manually.
+        #
+        # They are set ON THE TARGET deliberately. Passing
+        # PROVISIONING_PROFILE_SPECIFIER on the xcodebuild command line applies
+        # it to every target in the project, static libraries included, and
+        # those fail with "does not support provisioning profiles".
         set_target_properties(retro3do PROPERTIES
             XCODE_ATTRIBUTE_DEVELOPMENT_TEAM "${RETRO3DO_APPLE_TEAM_ID}"
-            XCODE_ATTRIBUTE_CODE_SIGN_STYLE "Automatic")
+            XCODE_ATTRIBUTE_CODE_SIGN_STYLE "${RETRO3DO_CODE_SIGN_STYLE}"
+            XCODE_ATTRIBUTE_PROVISIONING_PROFILE_SPECIFIER "${RETRO3DO_PROVISIONING_PROFILE}"
+            XCODE_ATTRIBUTE_CODE_SIGN_IDENTITY "${RETRO3DO_CODE_SIGN_IDENTITY}")
     endif()
+
+    # Without these the archive's Products/Applications is empty and carries no
+    # ApplicationProperties, so -exportArchive has nothing to export and says
+    # nothing useful about why. CMake leaves SKIP_INSTALL at YES for the Xcode
+    # generator.
+    set_target_properties(retro3do PROPERTIES
+        XCODE_ATTRIBUTE_INSTALL_PATH "$(LOCAL_APPS_DIR)"
+        XCODE_ATTRIBUTE_SKIP_INSTALL "NO")
 
     if(IOS)
         set_target_properties(retro3do PROPERTIES

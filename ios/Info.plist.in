@@ -33,6 +33,22 @@
 	<key>ITSAppUsesNonExemptEncryption</key>
 	<false/>
 
+	<!-- Purpose strings are required for APIs the binary LINKS, not only ones
+	     it calls, and SDL links several: nm -u on the built binary shows
+	     AVAudioSession, AVCaptureSession, AVCaptureDevice, CBCentralManager
+	     and CMMotionManager. Without these the upload is accepted and then
+	     discarded in processing as ITMS-90683, hours later, by email. The CI
+	     job derives the list from the binary rather than trusting this
+	     comment. -->
+	<key>NSBluetoothAlwaysUsageDescription</key>
+	<string>Retro-3DO uses Bluetooth only to connect game controllers. It collects no data and never scans for anything else.</string>
+	<key>NSCameraUsageDescription</key>
+	<string>Retro-3DO does not use the camera. This entry is required because the SDL library the app is built on links Apple's camera APIs, and iOS asks for the description whether or not they are ever called.</string>
+	<key>NSMicrophoneUsageDescription</key>
+	<string>Retro-3DO does not record audio. This entry is required because the SDL library the app is built on links Apple's audio-recording APIs, and iOS asks for the description whether or not they are ever called.</string>
+	<key>NSMotionUsageDescription</key>
+	<string>Retro-3DO does not read motion sensors. This entry is required because the SDL library the app is built on links Apple's motion APIs, and iOS asks for the description whether or not they are ever called.</string>
+
 	<!-- A launch screen has to be declared, but naming a storyboard would pull
 	     in ibtool, which only exists on macOS. An empty dictionary satisfies
 	     iOS without adding that dependency. -->

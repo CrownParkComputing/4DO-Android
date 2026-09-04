@@ -147,6 +147,9 @@ jobs:
             fi
           }
           check_api AVCaptureDevice   NSCameraUsageDescription
+          check_api AVCaptureSession  NSCameraUsageDescription
+          check_api AVAudioSession    NSMicrophoneUsageDescription
+          check_api CMMotionManager   NSMotionUsageDescription
           check_api CLLocationManager NSLocationWhenInUseUsageDescription
           check_api PHPhotoLibrary    NSPhotoLibraryUsageDescription
           check_api CNContactStore    NSContactsUsageDescription

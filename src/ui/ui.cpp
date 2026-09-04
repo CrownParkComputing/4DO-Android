@@ -157,13 +157,28 @@ bool Ui::init(SDL_Window* window, SDL_Renderer* renderer) {
     style.Colors[ImGuiCol_Text] = ImVec4(0.91f, 0.94f, 0.97f, 1.0f);
     style.Colors[ImGuiCol_TextDisabled] = kMuted;
 
+    // Dear ImGui lays out in points and SDL_Renderer draws in pixels. On a
+    // Retina display nothing bridges the two by default, and the entire
+    // interface lands in the top-left corner at 1/density scale with the rest
+    // of the screen black: on an iPhone 16 Pro Max that is a 956x440 island in
+    // a 2868x1320 framebuffer. Setting the render scale makes one ImGui unit
+    // one point. Density is 1 where points and pixels agree, so desktop and
+    // Android are untouched.
+    const float density = SDL_GetWindowPixelDensity(window);
+    if (density > 0.0f) SDL_SetRenderScale(renderer, density, density);
+
+    // Size the UI from the POINT height, not the pixel height. Measuring
+    // pixels double-counts the display scale -- the fonts came out density
+    // times too large for their widgets and the labels clipped to "LIB",
+    // "DEM", "SET".
     int window_w = 0;
     int window_h = 0;
-    SDL_GetWindowSizeInPixels(window, &window_w, &window_h);
-    const float from_size =
-        static_cast<float>(window_h > 0 ? window_h : 720) / 480.0f;
-    const float reported = SDL_GetWindowDisplayScale(window);
-    scale_ = std::max(from_size, reported);
+    SDL_GetWindowSize(window, &window_w, &window_h);
+    // Points only, and deliberately without SDL_GetWindowDisplayScale: the
+    // render scale above already accounts for display density, and adding it
+    // here again multiplies the two. On an iPhone that produced a 9x
+    // interface, with a single word filling a button.
+    scale_ = static_cast<float>(window_h > 0 ? window_h : 720) / 480.0f;
     scale_ = std::clamp(scale_, 1.0f, 4.0f);
     style.ScaleAllSizes(scale_);
     io.FontGlobalScale = scale_;
@@ -473,6 +488,7 @@ UiIntent Ui::build(Console& console, bool emulating, double display_fps,
     ImGui_ImplSDLRenderer3_NewFrame();
     ImGui_ImplSDL3_NewFrame();
     ImGui::NewFrame();
+
 
     if (!splash_complete_) {
         draw_splash();

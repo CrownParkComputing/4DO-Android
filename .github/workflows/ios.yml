@@ -1,0 +1,173 @@
+name: iOS
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: retro3do-ios-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  # Unsigned, no secrets, runs on every push and in forks. A broken tree fails
+  # here loudly even when the release job below is skipped.
+  simulator:
+    name: iOS simulator (unsigned)
+    runs-on: macos-26
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          submodules: recursive
+      - name: Report toolchain
+        run: |
+          xcodebuild -version
+          xcrun --sdk iphonesimulator --show-sdk-version
+          cmake --version
+      - name: Build for the simulator
+        run: TARGET=simulator ./ios/build-ios-macos.sh
+
+  # Signed device build, archived and uploaded to App Store Connect.
+  #
+  # Gated on SIGNING_PASSPHRASE and simply does not run without it, so a fork
+  # sees the simulator job and nothing else. The signing material lives in
+  # ios/signing/*.enc, all four encrypted under that one passphrase.
+  release:
+    name: iOS signed archive
+    runs-on: macos-26
+    timeout-minutes: 90
+    if: github.ref == 'refs/heads/main'
+    env:
+      HAS_SIGNING: ${{ secrets.SIGNING_PASSPHRASE != '' }}
+      BUNDLE_ID: com.crownparkcomputing.retro3DO
+      TEAM_ID: 88A3T9K9C5
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          submodules: recursive
+
+      # App Store Connect refuses a build made against too old an SDK, and says
+      # so only at upload, after everything else has reported success.
+      - name: Require an SDK App Store Connect will accept
+        if: env.HAS_SIGNING == 'true'
+        run: |
+          set -euo pipefail
+          xcodebuild -version
+          sdk=$(xcrun --sdk iphoneos --show-sdk-version)
+          echo "iphoneos SDK: $sdk"
+          [ "${sdk%%.*}" -ge 26 ] || {
+            echo "::error::built against iOS SDK $sdk; App Store Connect requires 26 or later"
+            exit 1; }
+
+      - name: Decrypt the signing material
+        if: env.HAS_SIGNING == 'true'
+        env:
+          PASS: ${{ secrets.SIGNING_PASSPHRASE }}
+        run: |
+          set -euo pipefail
+          D="$RUNNER_TEMP/signing"; mkdir -p "$D"; chmod 700 "$D"
+          dec() { openssl enc -d -aes-256-cbc -pbkdf2 -iter 600000 \
+                    -in "ios/signing/$1" -out "$D/$2" -pass env:PASS; }
+          dec dist.p12.enc                dist.p12
+          dec profile.mobileprovision.enc profile.mobileprovision
+          dec asc_key.p8.enc              asc_key.p8
+          dec signing.env.enc             signing.env
+          echo "D=$D" >> "$GITHUB_ENV"
+
+      - name: Import signing certificate
+        if: env.HAS_SIGNING == 'true'
+        run: |
+          set -euo pipefail
+          . "$D/signing.env"
+          KEYCHAIN=build.keychain
+          security create-keychain -p actions "$KEYCHAIN"
+          security default-keychain -s "$KEYCHAIN"
+          security set-keychain-settings "$KEYCHAIN"
+          security unlock-keychain -p actions "$KEYCHAIN"
+          security import "$D/dist.p12" -k "$KEYCHAIN" -P "$CERT_PASSWORD" -T /usr/bin/codesign
+          # codesign: in the partition list is the whole point. Without it the
+          # key imports, find-identity calls it valid, and every signing
+          # attempt fails with errSecInternalComponent -- which reads like a
+          # broken certificate and is nothing of the kind.
+          security set-key-partition-list -S apple-tool:,apple:,codesign: -s -k actions "$KEYCHAIN"
+          mkdir -p ~/Library/MobileDevice/Provisioning\ Profiles
+          cp "$D/profile.mobileprovision" \
+            ~/Library/MobileDevice/Provisioning\ Profiles/build.mobileprovision
+
+      - name: Choose a build number
+        if: env.HAS_SIGNING == 'true'
+        id: buildno
+        run: echo "n=$(date -u +%Y%m%d%H%M)" >> "$GITHUB_OUTPUT"
+
+      - name: Build, archive and export
+        if: env.HAS_SIGNING == 'true'
+        run: |
+          set -euo pipefail
+          # The profile's own Name, not a literal that can drift out of step
+          # with the blob beside it.
+          profile_name=$(security cms -D -i "$D/profile.mobileprovision" \
+            | plutil -extract Name raw -o - -)
+          echo "signing against profile: $profile_name"
+          TEAM_ID="$TEAM_ID" \
+          PROFILE_NAME="$profile_name" \
+          SIGN_IDENTITY="Apple Distribution" \
+          BUILD_NUMBER="${{ steps.buildno.outputs.n }}" \
+          ARCHIVE=1 ./ios/build-ios-macos.sh
+
+      # A delivery can report success, be given a UUID, and then be discarded
+      # in processing -- by email, hours later, with this job green. A missing
+      # icon key does it, and so does a purpose string for an API the binary
+      # merely LINKS. Derived from the binary rather than a remembered list.
+      - name: Verify the bundle cannot be discarded in processing
+        if: env.HAS_SIGNING == 'true'
+        run: |
+          set -euo pipefail
+          app=ios/build/ios-arm64/Retro-3DO.xcarchive/Products/Applications/Retro-3DO.app
+          plist="$app/Info.plist"
+          [ -f "$plist" ] || { echo "::error::no app in the archive"; exit 1; }
+          need() {
+            /usr/bin/plutil -extract "$1" raw -o - "$plist" >/dev/null 2>&1 \
+              || { echo "::error::$1 is missing from the built bundle"; exit 1; }
+          }
+          need CFBundleIcons.CFBundlePrimaryIcon.CFBundleIconName
+          need ITSAppUsesNonExemptEncryption
+          got=$(/usr/bin/plutil -extract CFBundleIdentifier raw -o - "$plist")
+          [ "$got" = "$BUNDLE_ID" ] || {
+            echo "::error::bundle id is $got, expected $BUNDLE_ID"; exit 1; }
+          bin="$app/Retro-3DO"
+          check_api() {
+            if nm -u "$bin" 2>/dev/null | grep -q "$1"; then
+              need "$2"; echo "  $1 is linked -> $2 present"
+            fi
+          }
+          check_api AVCaptureDevice   NSCameraUsageDescription
+          check_api CLLocationManager NSLocationWhenInUseUsageDescription
+          check_api PHPhotoLibrary    NSPhotoLibraryUsageDescription
+          check_api CNContactStore    NSContactsUsageDescription
+          check_api CBCentralManager  NSBluetoothAlwaysUsageDescription
+          echo "bundle looks deliverable"
+
+      - name: Upload to App Store Connect
+        if: env.HAS_SIGNING == 'true'
+        run: |
+          set -euo pipefail
+          . "$D/signing.env"
+          ipa=$(find ios/build/ios-arm64/export -name '*.ipa' -print -quit)
+          [ -n "$ipa" ] || { echo "::error::no ipa was exported"; exit 1; }
+          mkdir -p ~/.appstoreconnect/private_keys
+          cp "$D/asc_key.p8" ~/.appstoreconnect/private_keys/AuthKey_${ASC_KEY_ID}.p8
+          xcrun altool --upload-app -f "$ipa" -t ios \
+            --apiKey "$ASC_KEY_ID" --apiIssuer "$ASC_ISSUER_ID"
+
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: retro3do-ios
+          path: ios/build/ios-arm64/export/*.ipa
+          if-no-files-found: ignore

@@ -25,6 +25,14 @@
 	<key>MinimumOSVersion</key>
 	<string>15.0</string>
 
+	<!-- Declared here so no upload stops to ask. Without this key App Store
+	     Connect raises the export-compliance question on every delivery and
+	     holds the build out of TestFlight until someone answers it by hand.
+	     False is the accurate answer: the emulator uses no encryption of its
+	     own, and HTTPS through the system libraries is exempt. -->
+	<key>ITSAppUsesNonExemptEncryption</key>
+	<false/>
+
 	<!-- A launch screen has to be declared, but naming a storyboard would pull
 	     in ibtool, which only exists on macOS. An empty dictionary satisfies
 	     iOS without adding that dependency. -->

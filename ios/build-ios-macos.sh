@@ -36,6 +36,27 @@ IOS_MIN="${IOS_MIN:-15.0}"
 TEAM_ID="${TEAM_ID:-}"
 ARCHIVE="${ARCHIVE:-0}"
 
+# Unattended release signing. A CI runner holds the App Store distribution
+# profile and nothing else, while automatic signing goes looking for an App
+# Development profile it will never find -- the build then dies with "No
+# profiles for <bundle id> were found", which reads like a missing account
+# rather than the wrong signing style. Give PROFILE_NAME to sign manually
+# against a named profile instead.
+PROFILE_NAME="${PROFILE_NAME:-}"
+SIGN_IDENTITY="${SIGN_IDENTITY:-Apple Distribution}"
+# App Store Connect refuses a CFBundleVersion it has seen before, and reports
+# it only after the entire upload has transferred.
+BUILD_NUMBER="${BUILD_NUMBER:-1}"
+
+SIGN_STYLE="Automatic"
+if [ -n "$PROFILE_NAME" ]; then
+    SIGN_STYLE="Manual"
+    [ -n "$TEAM_ID" ] || {
+        echo "FATAL: PROFILE_NAME needs TEAM_ID as well." >&2
+        exit 1
+    }
+fi
+
 command -v xcrun >/dev/null || {
     echo "FATAL: xcrun not found. This script needs Xcode and only runs on macOS." >&2
     exit 1
@@ -68,6 +89,10 @@ cmake -S "$REPO_ROOT" -B "$BUILD_DIR" -G Xcode \
     -DCMAKE_OSX_DEPLOYMENT_TARGET="$IOS_MIN" \
     -DRETRO3DO_IOS_MIN="$IOS_MIN" \
     -DRETRO3DO_APPLE_TEAM_ID="$TEAM_ID" \
+    -DRETRO3DO_CODE_SIGN_STYLE="$SIGN_STYLE" \
+    -DRETRO3DO_PROVISIONING_PROFILE="$PROFILE_NAME" \
+    -DRETRO3DO_CODE_SIGN_IDENTITY="${PROFILE_NAME:+$SIGN_IDENTITY}" \
+    -DRETRO3DO_BUILD_NUMBER="$BUILD_NUMBER" \
     -DRETRO3DO_BUILD_TESTS=OFF \
     -DRETRO3DO_USE_SYSTEM_SDL=OFF
 
@@ -85,7 +110,37 @@ if [ "$ARCHIVE" = "1" ]; then
     # someone else's team in it fails with an error that names a provisioning
     # profile and not the real cause.
     EXPORT_OPTIONS="$BUILD_DIR/ExportOptions.plist"
-    sed "s/TEAM_ID_PLACEHOLDER/$TEAM_ID/" "$HERE/ExportOptions.plist.in" > "$EXPORT_OPTIONS"
+    if [ -n "$PROFILE_NAME" ]; then
+        # Manual export needs the profile named per bundle id. The template's
+        # automatic style would send xcodebuild looking for a development
+        # profile again, at the very last step.
+        # From the archive, not the build tree: that is the bundle actually
+        # being exported, and reading it fails loudly if SKIP_INSTALL left the
+        # archive with no app in it -- otherwise -exportArchive reports having
+        # nothing to export and does not say why.
+        ARCHIVED_APP="$ARCHIVE_PATH/Products/Applications/Retro-3DO.app"
+        [ -f "$ARCHIVED_APP/Info.plist" ] || {
+            echo "FATAL: the archive contains no app at $ARCHIVED_APP" >&2
+            exit 1
+        }
+        BUNDLE_ID="$(/usr/libexec/PlistBuddy -c 'Print :CFBundleIdentifier' \
+            "$ARCHIVED_APP/Info.plist")"
+        cat > "$EXPORT_OPTIONS" <<PLIST
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0"><dict>
+  <key>method</key><string>app-store-connect</string>
+  <key>teamID</key><string>$TEAM_ID</string>
+  <key>signingStyle</key><string>manual</string>
+  <key>provisioningProfiles</key>
+  <dict><key>$BUNDLE_ID</key><string>$PROFILE_NAME</string></dict>
+  <key>uploadSymbols</key><true/>
+  <key>destination</key><string>export</string>
+</dict></plist>
+PLIST
+    else
+        sed "s/TEAM_ID_PLACEHOLDER/$TEAM_ID/" "$HERE/ExportOptions.plist.in" > "$EXPORT_OPTIONS"
+    fi
     rm -rf "$EXPORT_DIR"
     xcodebuild -exportArchive -archivePath "$ARCHIVE_PATH" \
         -exportOptionsPlist "$EXPORT_OPTIONS" -exportPath "$EXPORT_DIR"

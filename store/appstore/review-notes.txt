@@ -1,0 +1,51 @@
+Retro-3DO is a 3DO Interactive Multiplayer emulator. It ships no commercial
+BIOS, no game images and no copyrighted ROM material. The reviewer needs
+nothing external to see it working.
+
+HOW TO SEE IT RUN, WITH NOTHING INSTALLED
+
+1. Launch the app.
+2. Tap Demo in the left-hand navigation rail.
+3. Tap the button to start the built-in hardware demonstration.
+
+It boots immediately. The status lines report the emulated hardware coming up,
+and a marker appears that the on-screen D-pad moves; A, B and C change its
+colour. No BIOS, no disc and no network access are required at any point.
+
+GUIDELINE 4.7.4 - INDEX OF EMBEDDED SOFTWARE
+
+Everything executable inside this build, with its origin and licence:
+
+1. Retro-3DO emulator, launcher and platform layer
+   Developer: Crown Park Computing
+   Licence:   MIT
+   Source:    github.com/CrownParkComputing/Retro-3DO
+
+2. Retro-3DO Original Hardware Demo (the built-in demonstration ROM)
+   Developer: Crown Park Computing - original work, written for this project
+   Licence:   MIT
+   Source:    demo/retro3do-demo.s in the repository above, with its linker
+              script and a reproducible build script beside it
+   Authored image: 1,794 bytes,
+              SHA-256 f019b2a87431cfaec321dd894201f64b36ce964684661bb3eaf18d49fe1e0a4b
+   The remaining bytes of the 3DO ROM window are supplied as zeroes by the
+   application's ordinary BIOS loader. The manifest is demo/MANIFEST.md.
+   It contains no Portfolio headers or libraries, no retail BIOS, no game
+   code, artwork or music, and no third-party ROM material.
+
+3. Bundled libraries, unmodified in substance and carrying their own licences:
+   SDL3 (zlib), Dear ImGui (MIT), libchdr (BSD-3-Clause), AdrenoTools
+   (BSD-2-Clause), miniz (MIT), LZMA SDK (public domain), zstd (BSD).
+   Collected in docs/THIRD_PARTY.md.
+
+USER-SUPPLIED CONTENT
+
+A BIOS and disc images are supplied by the user, from storage they already
+control, through the iOS Files app. The application downloads no executable
+code and has no mechanism to do so.
+
+TRADE MARKS
+
+Not affiliated with, endorsed by, or connected to The 3DO Company, Panasonic,
+or any rights holder in 3DO hardware, software or trade marks. The name
+describes the hardware the software emulates.

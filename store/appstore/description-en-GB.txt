@@ -1,0 +1,24 @@
+Retro-3DO is a 3DO Interactive Multiplayer emulator built for phones and tablets, not ported down to them.
+
+Widely used 3DO cores descend from 1990s desktop emulators. Their CPU re-decodes every instruction on every execution, their graphics chip is scalar C, and they present frames from inside the emulation thread, so a slow present stalls emulation itself. Retro-3DO decodes each ARM60 instruction once and caches it, and never presents from the emulation path at all. On a handheld that is the difference between a machine that runs and a machine that appears to stutter.
+
+TRY IT WITHOUT ANYTHING ELSE
+
+The app includes an original hardware demonstration ROM, written by Crown Park Computing and shipped with its complete assembly source. Choose Demo in the launcher and it boots immediately, with no BIOS and no game required. It is not a splash screen: the 1.7 KB bare-metal ARM program drives the real hardware paths, exercising MADAM's VDL and the VDLP's interleaved RGB555 framebuffer, CLIO's video counter and DSP program window, player-bus DMA for the controller, and the DSPP DAC for audio. Move the marker with the D-pad; A, B and C change its colour.
+
+WHAT IT EMULATES
+
+- ARM60 CPU with cached instruction decode
+- MADAM and CLIO, including CEL rendering and the matrix engine
+- DSPP audio through the DAC path
+- XBUS/MADAM DMA for CD media, with CHD support
+
+BRING YOUR OWN BIOS AND DISCS
+
+Retro-3DO ships no commercial BIOS, no game images and no copyrighted ROM material. Point it at a BIOS you are entitled to use and load your own discs. On iOS and iPadOS the Files app is the way in: the app's Documents folder is visible there, and the file browser offers it first.
+
+BUILT IN THE OPEN
+
+The project-owned source is MIT licensed and its development history, including its historical reference exposure, is documented rather than glossed over. Bundled third-party components keep their own licences: SDL3, Dear ImGui, libchdr, miniz, the LZMA SDK and zstd among them.
+
+Retro-3DO is not affiliated with, endorsed by, or connected to The 3DO Company, Panasonic, or any rights holder in 3DO hardware, software or trade marks.

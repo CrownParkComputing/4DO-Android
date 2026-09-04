@@ -21,7 +21,7 @@ option(RETRO3DO_BUILD_TESTS "Build the host test suite" ON)
 # APPLE covers both; IOS is set by CMake when CMAKE_SYSTEM_NAME=iOS, so
 # "APPLE AND NOT IOS" is the macOS test used throughout this file.
 # ---------------------------------------------------------------------------
-set(RETRO3DO_BUNDLE_ID "com.crownparkcomputing.retro3do" CACHE STRING
+set(RETRO3DO_BUNDLE_ID "com.crownparkcomputing.retro3DO" CACHE STRING
     "Bundle identifier for the iOS and macOS apps")
 set(RETRO3DO_APPLE_TEAM_ID "" CACHE STRING
     "Apple Developer Team ID. Leave empty for an unsigned local build")

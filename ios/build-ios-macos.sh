@@ -116,11 +116,11 @@ Run it:
   xcrun simctl boot "iPhone 15"      # or any installed device name
   open -a Simulator
   xcrun simctl install booted "$APP"
-  xcrun simctl launch booted com.crownparkcomputing.retro3do
+  xcrun simctl launch booted com.crownparkcomputing.retro3DO
 
 The simulator has no Files app sharing, so put a BIOS in the app's Documents
 directory by hand:
-  xcrun simctl get_app_container booted com.crownparkcomputing.retro3do data
+  xcrun simctl get_app_container booted com.crownparkcomputing.retro3DO data
 EOF
 elif [ -z "$TEAM_ID" ]; then
     cat <<EOF

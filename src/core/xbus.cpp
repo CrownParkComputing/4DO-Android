@@ -340,18 +340,13 @@ u8 CdRomDevice::read_data() {
     }
     const u8 byte = data_[data_pos_++];
 
-    // Draining the last byte of a block pulls the next one in behind it, if
-    // the command asked for more. The drive keeps data-ready asserted across
-    // the join, so a multi-block read is one continuous stream to the host
-    // rather than a sequence the host has to re-arm.
-    //
-    // Waiting for a rotational delay here instead leaves the host reading
-    // zeroes off an empty FIFO while data-ready still says otherwise, and the
-    // transfer never completes.
+    // Leave the FIFO empty until tick() supplies the next sector at the drive
+    // rate. Refilling here bypasses sector_delay_ and lets a stream run at CPU
+    // speed. DMA must wait for data instead of reading zeroes across this gap.
     if (data_pos_ >= data_.size()) {
         data_.clear();
         data_pos_ = 0;
-        fill_next_sector_now();
+        sector_delay_ = kSectorDelay;
     }
     return byte;
 }

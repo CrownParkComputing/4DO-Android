@@ -536,13 +536,14 @@ private:
 public:
     // Set when software pulls the expansion-bus DMA trigger; cleared once the
     // transfer has been served.
+    // Bring-up diagnostics.
+    u32 irq0_pending() const { return irq0_pending_; }
+    u32 irq0_enabled() const { return irq0_enabled_; }
+
     bool xbus_dma_requested() const { return xbus_dma_requested_; }
     void clear_xbus_dma_request() { xbus_dma_requested_ = false; }
 
-    // The expansion transfer runs INSIDE the store that triggers it, before the
-    // CPU executes another instruction - not at the next convenient boundary.
-    // The host writes the trigger and then looks at the result straight away.
-    // The DSP is a separate device; CLIO is only its window onto the bus.
+    // The DSP is a separate device; CLIO is its window onto the bus.
     void attach_dsp(Dsp* dsp) { dsp_ = dsp; }
 
     // Software enables DMA channels through CLIO but the channels are MADAM's,

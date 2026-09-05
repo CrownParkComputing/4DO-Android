@@ -4,6 +4,7 @@
 
 #include <algorithm>
 #include <cfloat>
+#include <cmath>
 #include <cctype>
 #include <cstdio>
 #include <cstdint>
@@ -14,6 +15,7 @@
 #include "backends/imgui_impl_sdlrenderer3.h"
 #include "core/console.h"
 #include "imgui.h"
+#include "imgui_internal.h"
 #include "platform/android_storage.h"
 #include "platform/platform.h"
 
@@ -34,12 +36,13 @@ ImU32 colour(const ImVec4& value) {
 }
 
 void page_heading(const char* title, const char* subtitle) {
-    // Settings and System must remain complete, single-screen pages on a
-    // landscape handheld. Keep their identity in one compact row instead of
-    // spending nearly a quarter of the viewport on a display-sized heading.
     ImGui::TextColored(kCyan, "%s", title);
-    ImGui::SameLine();
+    if (ImGui::GetContentRegionAvail().x > ImGui::CalcTextSize(subtitle).x +
+                                             ImGui::GetStyle().ItemSpacing.x)
+        ImGui::SameLine();
+    ImGui::PushTextWrapPos(0.0f);
     ImGui::TextColored(kMuted, "%s", subtitle);
+    ImGui::PopTextWrapPos();
     ImGui::Separator();
     ImGui::Spacing();
 }
@@ -49,6 +52,56 @@ void section_heading(const char* title, const char* detail) {
     if (detail != nullptr && detail[0] != '\0') {
         ImGui::TextColored(kMuted, "%s", detail);
     }
+    ImGui::Spacing();
+}
+
+ImVec4 tinted(const ImVec4& colour_value, float strength, float alpha = 1.0f);
+
+void same_line_if_fits(const char* label) {
+    const float width = ImGui::CalcTextSize(label, nullptr, true).x +
+        std::max(ImGui::GetFrameHeight(), ImGui::GetStyle().FramePadding.x * 2.0f) +
+        ImGui::GetStyle().ItemInnerSpacing.x;
+    const float right = ImGui::GetCursorScreenPos().x + ImGui::GetContentRegionAvail().x;
+    if (ImGui::GetItemRectMax().x + ImGui::GetStyle().ItemSpacing.x + width <= right)
+        ImGui::SameLine();
+}
+
+void begin_panel(const char* id, float width, bool stacked) {
+    const ImGuiChildFlags flags = ImGuiChildFlags_Borders |
+        (stacked ? ImGuiChildFlags_AutoResizeY | ImGuiChildFlags_AlwaysAutoResize : 0);
+    ImGui::BeginChild(id, ImVec2(width, 0.0f), flags, ImGuiWindowFlags_NoScrollbar);
+    ImGui::PushTextWrapPos(0.0f);
+}
+
+void end_panel() {
+    ImGui::PopTextWrapPos();
+    ImGui::EndChild();
+}
+
+void alphabet_filter(char& selected, const ImVec4& accent, float scale) {
+    constexpr char groups[] = "ABCDEFGHIJKLMNOPQRSTUVWXYZ#";
+    ImGui::PushStyleVar(ImGuiStyleVar_ItemSpacing,
+                        ImVec2(3.0f * scale, 5.0f * scale));
+    ImGui::PushStyleVar(ImGuiStyleVar_FramePadding, ImVec2(3.0f * scale, 8.0f * scale));
+    const float available = ImGui::GetContentRegionAvail().x;
+    const float gap = ImGui::GetStyle().ItemSpacing.x;
+    const int max_columns = std::max(1, static_cast<int>((available + gap) /
+                                                       (26.0f * scale + gap)));
+    const int rows = (27 + max_columns - 1) / max_columns;
+    const int columns = (27 + rows - 1) / rows;
+    const float width = (available - gap * (columns - 1)) / columns;
+    for (int i = 0; i < 27; ++i) {
+        if (i % columns != 0) ImGui::SameLine();
+        const char group = groups[i];
+        char label[2] = {group, '\0'};
+        if (selected == group)
+            ImGui::PushStyleColor(ImGuiCol_Button, tinted(accent, 0.38f));
+        const bool pressed = ImGui::Button(group == '#' ? "0-9" : label,
+                                           ImVec2(width, 0.0f));
+        if (selected == group) ImGui::PopStyleColor();
+        if (pressed) selected = selected == group ? 0 : group;
+    }
+    ImGui::PopStyleVar(2);
     ImGui::Spacing();
 }
 
@@ -71,7 +124,7 @@ ImVec4 card_accent(const std::string& name) {
     return palette[hash % (sizeof(palette) / sizeof(palette[0]))];
 }
 
-ImVec4 tinted(const ImVec4& colour_value, float strength, float alpha = 1.0f) {
+ImVec4 tinted(const ImVec4& colour_value, float strength, float alpha) {
     return ImVec4(0.035f + colour_value.x * strength,
                   0.045f + colour_value.y * strength,
                   0.070f + colour_value.z * strength, alpha);
@@ -157,16 +210,9 @@ bool Ui::init(SDL_Window* window, SDL_Renderer* renderer) {
     style.Colors[ImGuiCol_Text] = ImVec4(0.91f, 0.94f, 0.97f, 1.0f);
     style.Colors[ImGuiCol_TextDisabled] = kMuted;
 
-    int window_w = 0;
-    int window_h = 0;
-    SDL_GetWindowSizeInPixels(window, &window_w, &window_h);
-    const float from_size =
-        static_cast<float>(window_h > 0 ? window_h : 720) / 480.0f;
-    const float reported = SDL_GetWindowDisplayScale(window);
-    scale_ = std::max(from_size, reported);
-    scale_ = std::clamp(scale_, 1.0f, 4.0f);
-    style.ScaleAllSizes(scale_);
-    io.FontGlobalScale = scale_;
+    window_ = window;
+    base_style_ = std::make_unique<ImGuiStyle>(style);
+    update_scale();
 
     if (!ImGui_ImplSDL3_InitForSDLRenderer(window, renderer)) return false;
     if (!ImGui_ImplSDLRenderer3_Init(renderer)) return false;
@@ -392,6 +438,7 @@ void Ui::shutdown() {
         splash_texture_ = nullptr;
     }
     clear_artwork_textures();
+    release_ui_texture();
     if (renderer_ != nullptr) ImGui_ImplSDLRenderer3_Shutdown();
     ImGui_ImplSDL3_Shutdown();
     ImGui::DestroyContext();
@@ -406,6 +453,7 @@ void Ui::suspend_renderer() {
         splash_texture_ = nullptr;
     }
     release_artwork_textures();
+    release_ui_texture();
     ImGui_ImplSDLRenderer3_Shutdown();
     renderer_ = nullptr;
 }
@@ -420,6 +468,22 @@ bool Ui::resume_renderer(SDL_Renderer* renderer) {
     return true;
 }
 
+void Ui::update_scale() {
+    int width = 0;
+    int height = 0;
+    SDL_GetWindowSize(window_, &width, &height);
+    const float fit = std::min(std::max(1, width) / 800.0f,
+                               std::max(1, height) / 480.0f);
+    const float limit = std::max(1.0f, std::min(4.0f, width / 360.0f));
+    const float scale = std::clamp(std::max(fit, SDL_GetWindowDisplayScale(window_)),
+                                    1.0f, limit);
+    if (scale == scale_) return;
+    scale_ = scale;
+    ImGui::GetStyle() = *base_style_;
+    ImGui::GetStyle().ScaleAllSizes(scale_);
+    ImGui::GetIO().FontGlobalScale = scale_;
+}
+
 void Ui::process_event(const SDL_Event& event) {
     if (!initialised_) return;
     ImGui_ImplSDL3_ProcessEvent(&event);
@@ -431,28 +495,49 @@ void Ui::process_event(const SDL_Event& event) {
         // button also counts as activity without stealing that press.
         wake_menu_button();
     }
-    if (show_launcher_ &&
-        (page_ == Page::Library || page_ == Page::Downloads)) {
-        if (event.type == SDL_EVENT_FINGER_DOWN && library_scroll_finger_ < 0) {
-            library_scroll_finger_ = static_cast<s64>(event.tfinger.fingerID);
-            library_scroll_last_y_ = event.tfinger.y;
-        } else if (event.type == SDL_EVENT_FINGER_MOTION &&
-                   library_scroll_finger_ ==
-                       static_cast<s64>(event.tfinger.fingerID)) {
-            const float display_h = std::max(1.0f, ImGui::GetIO().DisplaySize.y);
-            library_scroll_pending_ +=
-                (library_scroll_last_y_ - event.tfinger.y) * display_h;
-            library_scroll_last_y_ = event.tfinger.y;
-        } else if (event.type == SDL_EVENT_FINGER_UP &&
-                   library_scroll_finger_ ==
-                       static_cast<s64>(event.tfinger.fingerID)) {
-            library_scroll_finger_ = -1;
-        }
-    }
     if (event.type == SDL_EVENT_KEY_DOWN && !event.key.repeat &&
         (event.key.scancode == SDL_SCANCODE_ESCAPE ||
          event.key.scancode == SDL_SCANCODE_AC_BACK)) {
         menu_requested_ = true;
+    }
+}
+
+// Use the panel under the initial touch for the entire gesture. The SDL
+// backend labels touch-generated mouse events, so taps still use the normal
+// widgets while a vertical drag cancels their pending click before release.
+void Ui::update_touch_scroll() {
+    ImGuiIO& io = ImGui::GetIO();
+    if (io.MouseSource != ImGuiMouseSource_TouchScreen) {
+        scroll_window_ = 0;
+        scroll_dragging_ = false;
+        return;
+    }
+    if (ImGui::IsMouseClicked(ImGuiMouseButton_Left)) {
+        ImGuiWindow* window = GImGui->HoveredWindow;
+        while (window && (window->ScrollMax.y <= 0.0f ||
+                         (window->Flags & ImGuiWindowFlags_NoScrollWithMouse))) {
+            window = (window->Flags & ImGuiWindowFlags_ChildWindow)
+                         ? window->ParentWindow : nullptr;
+        }
+        scroll_window_ = window ? window->ID : 0;
+        scroll_start_y_ = io.MousePos.y;
+        scroll_start_offset_ = window ? window->Scroll.y : 0.0f;
+        scroll_dragging_ = false;
+    }
+    ImGuiWindow* window = ImGui::FindWindowByID(scroll_window_);
+    if (window && window->WasActive) {
+        const float distance = scroll_start_y_ - io.MousePos.y;
+        if (io.MouseDown[0] && std::abs(distance) > 8.0f * scale_)
+            scroll_dragging_ = true;
+        if (scroll_dragging_) {
+            ImGui::ClearActiveID();
+            ImGui::SetScrollY(window, std::clamp(scroll_start_offset_ + distance,
+                                               0.0f, window->ScrollMax.y));
+        }
+    }
+    if (!io.MouseDown[0]) {
+        scroll_window_ = 0;
+        scroll_dragging_ = false;
     }
 }
 
@@ -470,9 +555,11 @@ UiIntent Ui::build(Console& console, bool emulating, double display_fps,
     UiIntent intent;
     if (!initialised_) return intent;
 
+    update_scale();
     ImGui_ImplSDLRenderer3_NewFrame();
     ImGui_ImplSDL3_NewFrame();
     ImGui::NewFrame();
+    update_touch_scroll();
 
     if (!splash_complete_) {
         draw_splash();
@@ -597,7 +684,8 @@ void Ui::draw_setup_wizard(Console& console, UiIntent& intent) {
     ImGui::SetCursorPos(ImVec2((viewport->WorkSize.x - width) * 0.5f,
                               (viewport->WorkSize.y - height) * 0.5f));
     ImGui::BeginChild("##setup_card", ImVec2(width, height),
-                      ImGuiChildFlags_Borders);
+                      ImGuiChildFlags_Borders, ImGuiWindowFlags_NoScrollbar);
+    ImGui::PushTextWrapPos(0.0f);
     ImGui::TextColored(kCyan, "RETRO-3DO SETUP");
     const int step = wizard_step_ == WizardStep::Welcome    ? 1
                    : wizard_step_ == WizardStep::Bios       ? 2
@@ -769,6 +857,7 @@ void Ui::draw_setup_wizard(Console& console, UiIntent& intent) {
             break;
     }
 
+    ImGui::PopTextWrapPos();
     ImGui::EndChild();
     ImGui::End();
 }
@@ -784,23 +873,22 @@ void Ui::draw_launcher(Console& console, bool emulating, bool touch_visible,
                      ImGuiWindowFlags_NoBringToFrontOnFocus);
 
     const ImVec2 nav_top = ImGui::GetCursorScreenPos();
-    const float nav_height = 50.0f * scale_;
-    ImGui::GetWindowDrawList()->AddRectFilled(
-        nav_top,
-        ImVec2(nav_top.x + ImGui::GetContentRegionAvail().x,
-               nav_top.y + nav_height),
-        IM_COL32(6, 9, 15, 255), 7.0f * scale_);
-    ImGui::SetCursorScreenPos(
-        ImVec2(nav_top.x, nav_top.y + 5.0f * scale_));
     const float total_width = ImGui::GetContentRegionAvail().x;
     const int action_count = 7 + (retro_media_admin_ ? 1 : 0) +
                              (session_available_ ? 1 : 0);
     const float gap = ImGui::GetStyle().ItemSpacing.x;
-    const float action_width =
-        std::max(1.0f, (total_width - gap * (action_count - 1)) /
-                           static_cast<float>(action_count));
+    const int nav_columns = std::max(1, std::min(action_count,
+        static_cast<int>((total_width + gap) / (84.0f * scale_ + gap))));
+    const int nav_rows = (action_count + nav_columns - 1) / nav_columns;
+    const float action_width = (total_width - gap * (nav_columns - 1)) / nav_columns;
+    const float nav_height = nav_rows * (40.0f * scale_ + ImGui::GetStyle().ItemSpacing.y);
+    int nav_index = 0;
+    auto next_nav = [&] {
+        if (nav_index++ % nav_columns != 0) ImGui::SameLine();
+    };
 
     auto nav_button = [&](const char* label, Page page) {
+        next_nav();
         const bool selected = page_ == page;
         if (selected) {
             ImVec4 accent = kAmber;
@@ -816,27 +904,22 @@ void Ui::draw_launcher(Console& console, bool emulating, bool touch_visible,
         if (selected) ImGui::PopStyleColor(2);
     };
     nav_button("LIBRARY", Page::Library);
-    ImGui::SameLine();
+    next_nav();
     if (ImGui::Button("DEMO", ImVec2(action_width, 40.0f * scale_))) {
         intent.start_demo = true;
         session_available_ = true;
         show_launcher_ = false;
         wake_menu_button();
     }
-    ImGui::SameLine();
     nav_button("SETTINGS", Page::Settings);
-    ImGui::SameLine();
     nav_button("ARTWORK", Page::Artwork);
     if (retro_media_admin_) {
-        ImGui::SameLine();
         nav_button("DOWNLOADS", Page::Downloads);
     }
-    ImGui::SameLine();
     nav_button("SYSTEM", Page::System);
-    ImGui::SameLine();
     nav_button("ABOUT", Page::About);
     if (session_available_) {
-        ImGui::SameLine();
+        next_nav();
         ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0.08f, 0.34f, 0.27f, 1.0f));
         if (ImGui::Button("RESUME", ImVec2(action_width, 40.0f * scale_))) {
             show_launcher_ = false;
@@ -845,13 +928,16 @@ void Ui::draw_launcher(Console& console, bool emulating, bool touch_visible,
         }
         ImGui::PopStyleColor();
     }
-    ImGui::SameLine();
+    next_nav();
     if (ImGui::Button("EXIT", ImVec2(action_width, 40.0f * scale_))) {
         intent.quit = true;
     }
     ImGui::SetCursorScreenPos(ImVec2(nav_top.x, nav_top.y + nav_height));
-    const ImGuiWindowFlags page_flags =
-        ImGuiWindowFlags_NoScrollbar | ImGuiWindowFlags_NoScrollWithMouse;
+    const ImGuiWindowFlags page_flags = ImGuiWindowFlags_NoScrollbar;
+    if (page_ != drawn_page_) {
+        ImGui::SetNextWindowScroll(ImVec2(0.0f, 0.0f));
+        drawn_page_ = page_;
+    }
     ImGui::BeginChild("##page", ImVec2(0.0f, 0.0f), ImGuiChildFlags_None,
                       page_flags);
     switch (page_) {
@@ -870,49 +956,18 @@ void Ui::draw_launcher(Console& console, bool emulating, bool touch_visible,
 }
 
 void Ui::draw_library(Console& console, UiIntent& intent) {
-    const char groups[] = "ABCDEFGHIJKLMNOPQRSTUVWXYZ#";
-    auto filter_button = [&](const char* label, char group, float width) {
-        const bool selected = library_group_ == group;
-        if (selected) {
-            ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0.10f, 0.38f, 0.43f, 1.0f));
-        }
-        if (ImGui::Button(label, ImVec2(width, 0.0f))) {
-            library_group_ = selected ? 0 : group;
-        }
-        if (selected) ImGui::PopStyleColor();
-    };
-
-    // A-Z plus one wider 0-9 button, distributed as 28 equal units so the
-    // strip reaches both edges at every resolution. Tapping the selected
-    // filter again clears it, replacing the need for a separate ALL button.
-    ImGui::PushStyleVar(ImGuiStyleVar_ItemSpacing,
-                        ImVec2(3.0f * scale_, ImGui::GetStyle().ItemSpacing.y));
-    const float strip_width = ImGui::GetContentRegionAvail().x;
-    const float strip_spacing = ImGui::GetStyle().ItemSpacing.x * 26.0f;
-    const float unit = std::max(16.0f * scale_,
-                                (strip_width - strip_spacing) / 28.0f);
-    ImGui::SetWindowFontScale(0.86f);
-    bool first_group = true;
-    for (char group : groups) {
-        if (!first_group) ImGui::SameLine();
-        first_group = false;
-        char label[2] = {group, '\0'};
-        filter_button(group == '#' ? "0-9" : label, group,
-                      group == '#' ? unit * 2.0f : unit);
-    }
-    ImGui::SetWindowFontScale(1.0f);
-    ImGui::PopStyleVar();
-    ImGui::Spacing();
+    alphabet_filter(library_group_, kCyan, scale_);
 
     const float rescan_width = 165.0f * scale_;
-    ImGui::SetNextItemWidth(std::max(120.0f, ImGui::GetContentRegionAvail().x -
-                                              rescan_width - 12.0f * scale_));
+    const bool narrow_search = ImGui::GetContentRegionAvail().x < 420.0f * scale_;
+    ImGui::SetNextItemWidth(narrow_search ? -1.0f :
+        ImGui::GetContentRegionAvail().x - rescan_width - ImGui::GetStyle().ItemSpacing.x);
     ImGui::InputTextWithHint("##search", "Search your library...", search_buffer_,
                              sizeof(search_buffer_));
-    ImGui::SameLine();
+    if (!narrow_search) ImGui::SameLine();
     ImGui::BeginDisabled(games_folder_target_.empty());
     ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0.08f, 0.35f, 0.39f, 1.0f));
-    if (ImGui::Button("RESCAN GAMES", ImVec2(rescan_width, 0.0f))) {
+    if (ImGui::Button("RESCAN GAMES", ImVec2(narrow_search ? -1.0f : rescan_width, 0.0f))) {
         intent.rescan_games = true;
     }
     ImGui::PopStyleColor();
@@ -923,11 +978,6 @@ void Ui::draw_library(Console& console, UiIntent& intent) {
     // list, while desktop users can still use a wheel or trackpad.
     ImGui::BeginChild("##game_list", ImVec2(0.0f, 0.0f),
                       ImGuiChildFlags_None, ImGuiWindowFlags_NoScrollbar);
-    if (library_scroll_pending_ != 0.0f) {
-        ImGui::SetScrollY(std::max(0.0f,
-                                   ImGui::GetScrollY() + library_scroll_pending_));
-        library_scroll_pending_ = 0.0f;
-    }
 
     const std::vector<const LibraryGame*> games =
         library_.filtered(search_buffer_, library_group_);
@@ -990,6 +1040,10 @@ void Ui::draw_library(Console& console, UiIntent& intent) {
                 grid_top.y + static_cast<float>(row) * (card_height + gap));
             const ImVec2 card_bottom(card_top.x + card_width,
                                      card_top.y + card_height);
+            if (card_bottom.y < list_clip_min.y || card_top.y > list_clip_max.y) {
+                ImGui::PopID();
+                continue;
+            }
             ImDrawList* draw = list_draw;
             draw->AddRectFilled(card_top, card_bottom,
                                 colour(tinted(accent, 0.045f)),
@@ -1113,14 +1167,13 @@ void Ui::draw_settings(Console& console, bool touch_visible, bool touch_editing,
     page_heading("SETTINGS", "Controls and machine timing");
 
     const float gap = ImGui::GetStyle().ItemSpacing.x;
-    const float column_width = (ImGui::GetContentRegionAvail().x - gap) * 0.5f;
+    const float available_width = ImGui::GetContentRegionAvail().x;
+    const bool stacked = available_width < 700.0f * scale_;
+    const float column_width = stacked ? available_width : (available_width - gap) * 0.5f;
     ImGui::PushStyleVar(ImGuiStyleVar_ItemSpacing,
-                        ImVec2(7.0f * scale_, 5.0f * scale_));
+                        ImVec2(10.0f * scale_, 10.0f * scale_));
 
-    ImGui::BeginChild("##controls_settings", ImVec2(column_width, 0.0f),
-                      ImGuiChildFlags_Borders,
-                      ImGuiWindowFlags_NoScrollbar |
-                          ImGuiWindowFlags_NoScrollWithMouse);
+    begin_panel("##controls_settings", column_width, stacked);
     ImGui::TextColored(kBlue, "ON-SCREEN CONTROLLER");
     ImGui::TextColored(kMuted, "Automatically hidden while a physical pad is connected.");
     if (ImGui::Button(touch_visible ? "ON - HIDE" : "OFF - SHOW",
@@ -1128,11 +1181,11 @@ void Ui::draw_settings(Console& console, bool touch_visible, bool touch_editing,
         intent.toggle_touch_controls = true;
     }
     if (touch_visible) {
-        ImGui::SameLine();
+        same_line_if_fits(touch_editing ? "DONE MOVING" : "EDIT LAYOUT");
         if (ImGui::Button(touch_editing ? "DONE MOVING" : "EDIT LAYOUT")) {
             intent.toggle_layout_edit = true;
         }
-        ImGui::SameLine();
+        same_line_if_fits("RESET");
         if (ImGui::Button("RESET")) intent.reset_touch_layout = true;
     }
 
@@ -1143,25 +1196,22 @@ void Ui::draw_settings(Console& console, bool touch_visible, bool touch_editing,
         intent.region_changed = true;
         intent.set_region_pal = false;
     }
-    ImGui::SameLine();
+    same_line_if_fits("PAL 50 Hz");
     if (ImGui::RadioButton("PAL 50 Hz", &region, 1)) {
         intent.region_changed = true;
         intent.set_region_pal = true;
     }
-    ImGui::EndChild();
+    end_panel();
 
-    ImGui::SameLine();
-    ImGui::BeginChild("##machine_settings", ImVec2(0.0f, 0.0f),
-                      ImGuiChildFlags_Borders,
-                      ImGuiWindowFlags_NoScrollbar |
-                          ImGuiWindowFlags_NoScrollWithMouse);
+    if (!stacked) ImGui::SameLine();
+    begin_panel("##machine_settings", column_width, stacked);
     ImGui::TextColored(kAmber, "ARM CPU BOOST");
     ImGui::TextColored(kMuted, "Game CPU only; audio, video and FMV keep native timing.");
     int cpu = static_cast<int>(console.cpu_scale_percent());
     const int speeds[] = {100, 125, 150};
     const char* speed_names[] = {"100%", "125%", "150%"};
     for (int i = 0; i < 3; ++i) {
-        if (i != 0) ImGui::SameLine();
+        if (i != 0) same_line_if_fits(speed_names[i]);
         if (ImGui::RadioButton(speed_names[i], &cpu, speeds[i])) {
             intent.cpu_scale_changed = true;
             intent.cpu_scale_percent = static_cast<u32>(speeds[i]);
@@ -1173,7 +1223,7 @@ void Ui::draw_settings(Console& console, bool touch_visible, bool touch_editing,
     if (ImGui::Checkbox("Show in-game performance HUD", &performance_visible_)) {
         intent.ui_settings_changed = true;
     }
-    ImGui::EndChild();
+    end_panel();
     ImGui::PopStyleVar();
 }
 
@@ -1181,14 +1231,13 @@ void Ui::draw_artwork(UiIntent& intent) {
     page_heading("ARTWORK", "RetroMedia account and library card downloads");
 
     const float gap = ImGui::GetStyle().ItemSpacing.x;
-    const float column_width = (ImGui::GetContentRegionAvail().x - gap) * 0.5f;
+    const float available_width = ImGui::GetContentRegionAvail().x;
+    const bool stacked = available_width < 700.0f * scale_;
+    const float column_width = stacked ? available_width : (available_width - gap) * 0.5f;
     ImGui::PushStyleVar(ImGuiStyleVar_ItemSpacing,
-                        ImVec2(7.0f * scale_, 7.0f * scale_));
+                        ImVec2(10.0f * scale_, 10.0f * scale_));
 
-    ImGui::BeginChild("##retromedia_account", ImVec2(column_width, 0.0f),
-                      ImGuiChildFlags_Borders,
-                      ImGuiWindowFlags_NoScrollbar |
-                          ImGuiWindowFlags_NoScrollWithMouse);
+    begin_panel("##retromedia_account", column_width, stacked);
     ImGui::TextColored(kViolet, "RETROMEDIA ACCOUNT");
     ImGui::PushStyleColor(ImGuiCol_Text, kMuted);
     ImGui::TextWrapped(
@@ -1230,13 +1279,10 @@ void Ui::draw_artwork(UiIntent& intent) {
         }
         ImGui::EndDisabled();
     }
-    ImGui::EndChild();
+    end_panel();
 
-    ImGui::SameLine();
-    ImGui::BeginChild("##retromedia_downloads", ImVec2(0.0f, 0.0f),
-                      ImGuiChildFlags_Borders,
-                      ImGuiWindowFlags_NoScrollbar |
-                          ImGuiWindowFlags_NoScrollWithMouse);
+    if (!stacked) ImGui::SameLine();
+    begin_panel("##retromedia_downloads", column_width, stacked);
     ImGui::TextColored(kCyan, "GAME CARD ARTWORK");
     ImGui::TextColored(kMuted, "%zu game%s in this library",
                        library_.games().size(),
@@ -1250,7 +1296,7 @@ void Ui::draw_artwork(UiIntent& intent) {
     }
     ImGui::TextColored(kMuted, "Choose what appears on every library card:");
     for (int i = 0; i < 4; ++i) {
-        if (i == 1 || i == 3) ImGui::SameLine();
+        if (i == 1 || i == 3) same_line_if_fits(type_names[i]);
         if (ImGui::RadioButton(type_names[i], &selected_type, i)) {
             retro_media_type_ = type_ids[i];
             intent.retro_media_artwork_changed = true;
@@ -1266,7 +1312,7 @@ void Ui::draw_artwork(UiIntent& intent) {
     ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0.07f, 0.40f, 0.42f, 1.0f));
     ImGui::PushStyleColor(ImGuiCol_ButtonHovered,
                           ImVec4(0.09f, 0.55f, 0.57f, 1.0f));
-    if (ImGui::Button("SYNC / DOWNLOAD MISSING ARTWORK",
+    if (ImGui::Button("DOWNLOAD MISSING ARTWORK",
                       ImVec2(-1.0f, 46.0f * scale_))) {
         retro_media_busy_ = true;
         retro_media_message_ = "Matching library and downloading artwork...";
@@ -1276,7 +1322,7 @@ void Ui::draw_artwork(UiIntent& intent) {
     ImGui::EndDisabled();
     ImGui::TextColored(retro_media_busy_ ? kAmber : kMuted, "%s",
                        retro_media_message_.c_str());
-    ImGui::EndChild();
+    end_panel();
     ImGui::PopStyleVar();
 }
 
@@ -1287,37 +1333,15 @@ void Ui::draw_downloads(UiIntent& intent) {
                            "This page requires a RetroMedia administrator account.");
         return;
     }
-    const char groups[] = "ABCDEFGHIJKLMNOPQRSTUVWXYZ#";
-    ImGui::PushStyleVar(ImGuiStyleVar_ItemSpacing,
-                        ImVec2(3.0f * scale_, ImGui::GetStyle().ItemSpacing.y));
-    const float strip_width = ImGui::GetContentRegionAvail().x;
-    const float strip_spacing = ImGui::GetStyle().ItemSpacing.x * 26.0f;
-    const float unit = std::max(16.0f * scale_,
-                                (strip_width - strip_spacing) / 28.0f);
-    ImGui::SetWindowFontScale(0.86f);
-    bool first = true;
-    for (char group : groups) {
-        if (!first) ImGui::SameLine();
-        first = false;
-        char label[2] = {group, '\0'};
-        const bool selected = retro_media_group_ == group;
-        if (selected) ImGui::PushStyleColor(
-            ImGuiCol_Button, ImVec4(0.38f, 0.25f, 0.12f, 1.0f));
-        if (ImGui::Button(group == '#' ? "0-9" : label,
-                          ImVec2(group == '#' ? unit * 2.0f : unit, 0.0f))) {
-            retro_media_group_ = selected ? 0 : group;
-        }
-        if (selected) ImGui::PopStyleColor();
-    }
-    ImGui::SetWindowFontScale(1.0f);
-    ImGui::PopStyleVar();
-    ImGui::Spacing();
+    alphabet_filter(retro_media_group_, kAmber, scale_);
 
-    ImGui::SetNextItemWidth(ImGui::GetContentRegionAvail().x - 190.0f * scale_);
+    const bool narrow_search = ImGui::GetContentRegionAvail().x < 420.0f * scale_;
+    ImGui::SetNextItemWidth(narrow_search ? -1.0f :
+        ImGui::GetContentRegionAvail().x - 180.0f * scale_ - ImGui::GetStyle().ItemSpacing.x);
     ImGui::InputTextWithHint("##rm_catalogue_search", "Search available games...",
                              retro_media_search_buffer_,
                              sizeof(retro_media_search_buffer_));
-    ImGui::SameLine();
+    if (!narrow_search) ImGui::SameLine();
     ImGui::BeginDisabled(retro_media_busy_);
     if (ImGui::Button("BROWSE / REFRESH", ImVec2(-1.0f, 0.0f))) {
         retro_media_busy_ = true;
@@ -1331,11 +1355,6 @@ void Ui::draw_downloads(UiIntent& intent) {
                        retro_media_message_.c_str());
     ImGui::BeginChild("##rm_game_catalogue", ImVec2(0.0f, 0.0f),
                       ImGuiChildFlags_None, ImGuiWindowFlags_NoScrollbar);
-    if (library_scroll_pending_ != 0.0f) {
-        ImGui::SetScrollY(std::max(
-            0.0f, ImGui::GetScrollY() + library_scroll_pending_));
-        library_scroll_pending_ = 0.0f;
-    }
     if (retro_media_catalogue_.empty()) {
         ImGui::TextWrapped(
             "Choose Browse / Refresh to list ROM sets available to this "
@@ -1357,21 +1376,37 @@ void Ui::draw_downloads(UiIntent& intent) {
     }
     const float available = ImGui::GetContentRegionAvail().x;
     const int columns = available >= 720.0f * scale_ ? 4
-                        : available >= 500.0f * scale_ ? 3 : 2;
+                        : available >= 500.0f * scale_ ? 3
+                        : available >= 340.0f * scale_ ? 2 : 1;
     const float gap = ImGui::GetStyle().ItemSpacing.x;
     const float width = (available - gap * (columns - 1)) / columns;
+    float row_height = 0.0f;
     for (size_t index = 0; index < shown.size(); ++index) {
         const CatalogueItem& game = *shown[index];
+        const ImVec4 accent = card_accent(game.name);
+        if (index % static_cast<size_t>(columns) == 0) {
+            float title_height = 0.0f;
+            for (size_t i = index; i < shown.size() && i < index + columns; ++i)
+                title_height = std::max(title_height, ImGui::CalcTextSize(
+                    shown[i]->name.c_str(), nullptr, false,
+                    std::max(1.0f, width - ImGui::GetStyle().WindowPadding.x * 2.0f)).y);
+            row_height = std::max(126.0f * scale_, title_height + ImGui::GetTextLineHeight() +
+                ImGui::GetFrameHeight() + ImGui::GetStyle().WindowPadding.y * 2.0f +
+                ImGui::GetStyle().ItemSpacing.y * 2.0f);
+        }
         if (index % static_cast<size_t>(columns) != 0) ImGui::SameLine();
         ImGui::PushID(game.slug.c_str());
-        ImGui::BeginChild("##rm_game", ImVec2(width, 84.0f * scale_),
+        ImGui::PushStyleColor(ImGuiCol_Border, tinted(accent, 0.45f));
+        ImGui::BeginChild("##rm_game", ImVec2(width, row_height),
                           ImGuiChildFlags_Borders,
                           ImGuiWindowFlags_NoScrollbar |
                               ImGuiWindowFlags_NoScrollWithMouse);
-        ImGui::TextWrapped("%.36s", game.name.c_str());
+        ImGui::TextWrapped("%s", game.name.c_str());
         const double mib = static_cast<double>(game.total_bytes) / (1024.0 * 1024.0);
         ImGui::TextColored(kMuted, "%d file%s  |  %.1f MiB", game.rom_files,
                            game.rom_files == 1 ? "" : "s", mib);
+        ImGui::SetCursorPosY(row_height - ImGui::GetStyle().WindowPadding.y - ImGui::GetFrameHeight());
+        ImGui::PushStyleColor(ImGuiCol_Button, tinted(accent, 0.20f));
         ImGui::BeginDisabled(retro_media_busy_ || games_folder_target_.empty());
         if (ImGui::Button("DOWNLOAD", ImVec2(-1.0f, 0.0f))) {
             retro_media_busy_ = true;
@@ -1380,7 +1415,9 @@ void Ui::draw_downloads(UiIntent& intent) {
             intent.retro_media_slug = game.slug;
         }
         ImGui::EndDisabled();
+        ImGui::PopStyleColor();
         ImGui::EndChild();
+        ImGui::PopStyleColor();
         ImGui::PopID();
     }
     ImGui::EndChild();
@@ -1390,14 +1427,13 @@ void Ui::draw_system(Console& console, UiIntent& intent) {
     page_heading("SYSTEM", "Renderer, screen presentation and storage");
 
     const float gap = ImGui::GetStyle().ItemSpacing.x;
-    const float column_width = (ImGui::GetContentRegionAvail().x - gap) * 0.5f;
+    const float available_width = ImGui::GetContentRegionAvail().x;
+    const bool stacked = available_width < 700.0f * scale_;
+    const float column_width = stacked ? available_width : (available_width - gap) * 0.5f;
     ImGui::PushStyleVar(ImGuiStyleVar_ItemSpacing,
-                        ImVec2(7.0f * scale_, 5.0f * scale_));
+                        ImVec2(10.0f * scale_, 10.0f * scale_));
 
-    ImGui::BeginChild("##graphics_system", ImVec2(column_width, 0.0f),
-                      ImGuiChildFlags_Borders,
-                      ImGuiWindowFlags_NoScrollbar |
-                          ImGuiWindowFlags_NoScrollWithMouse);
+    begin_panel("##graphics_system", column_width, stacked);
     ImGui::TextColored(kBlue, "RENDERER");
     int renderer = renderer_backend_;
     if (ImGui::RadioButton("AUTO", &renderer, 0)) {
@@ -1405,7 +1441,7 @@ void Ui::draw_system(Console& console, UiIntent& intent) {
         renderer_startup_message_ = "Renderer change applies next launch";
         intent.ui_settings_changed = true;
     }
-    ImGui::SameLine();
+    same_line_if_fits("VULKAN");
     if (ImGui::RadioButton("VULKAN", &renderer, 1)) {
         renderer_backend_ = 1;
         renderer_startup_message_ = "Renderer change applies next launch";
@@ -1447,23 +1483,20 @@ void Ui::draw_system(Console& console, UiIntent& intent) {
         widescreen_ = false;
         intent.ui_settings_changed = true;
     }
-    ImGui::SameLine();
+    same_line_if_fits("16:9 WIDE");
     if (ImGui::RadioButton("16:9 WIDE", &aspect, 1)) {
         widescreen_ = true;
         intent.ui_settings_changed = true;
     }
     if (ImGui::Checkbox("BEZEL", &bezel_)) intent.ui_settings_changed = true;
-    ImGui::SameLine();
+    same_line_if_fits("CRT EFFECT");
     if (ImGui::Checkbox("CRT EFFECT", &crt_effect_)) {
         intent.ui_settings_changed = true;
     }
-    ImGui::EndChild();
+    end_panel();
 
-    ImGui::SameLine();
-    ImGui::BeginChild("##storage_system", ImVec2(0.0f, 0.0f),
-                      ImGuiChildFlags_Borders,
-                      ImGuiWindowFlags_NoScrollbar |
-                          ImGuiWindowFlags_NoScrollWithMouse);
+    if (!stacked) ImGui::SameLine();
+    begin_panel("##storage_system", column_width, stacked);
     ImGui::TextColored(kAmber, "3DO SYSTEM ROM");
     ImGui::SetNextItemWidth(-1.0f);
     if (ImGui::InputTextWithHint("##bios", "ROM or BIN path", bios_path_buffer_,
@@ -1511,7 +1544,7 @@ void Ui::draw_system(Console& console, UiIntent& intent) {
                            disc.sector_count(), disc.tracks().size(),
                            disc.tracks().size() == 1 ? "" : "s");
         if (ImGui::Button("EJECT")) intent.eject = true;
-        ImGui::SameLine();
+        same_line_if_fits("START CURRENT DISC");
         ImGui::BeginDisabled(!console.bios_loaded() || console.demo_loaded());
         if (ImGui::Button("START CURRENT DISC")) {
             intent.reset = true;
@@ -1534,7 +1567,7 @@ void Ui::draw_system(Console& console, UiIntent& intent) {
         setup_complete_ = false;
         wizard_step_ = WizardStep::Welcome;
     }
-    ImGui::EndChild();
+    end_panel();
     ImGui::PopStyleVar();
 }
 
@@ -1542,14 +1575,13 @@ void Ui::draw_about() {
     page_heading("ABOUT RETRO-3DO", "A new, mobile-first 3DO emulator");
 
     const float gap = ImGui::GetStyle().ItemSpacing.x;
-    const float column_width = (ImGui::GetContentRegionAvail().x - gap) * 0.5f;
+    const float available_width = ImGui::GetContentRegionAvail().x;
+    const bool stacked = available_width < 700.0f * scale_;
+    const float column_width = stacked ? available_width : (available_width - gap) * 0.5f;
     ImGui::PushStyleVar(ImGuiStyleVar_ItemSpacing,
-                        ImVec2(7.0f * scale_, 7.0f * scale_));
+                        ImVec2(10.0f * scale_, 10.0f * scale_));
 
-    ImGui::BeginChild("##about_story", ImVec2(column_width, 0.0f),
-                      ImGuiChildFlags_Borders,
-                      ImGuiWindowFlags_NoScrollbar |
-                          ImGuiWindowFlags_NoScrollWithMouse);
+    begin_panel("##about_story", column_width, stacked);
     ImGui::SetWindowFontScale(1.35f);
     ImGui::TextColored(kCyan, "RETRO-3DO");
     ImGui::SetWindowFontScale(0.88f);
@@ -1572,13 +1604,10 @@ void Ui::draw_about() {
         "Commercial games including Road Rash and The Need for Speed reach "
         "correctly rendered gameplay. Compatibility continues to expand; "
         "save states, CD audio and less-used hardware paths remain future work.");
-    ImGui::EndChild();
+    end_panel();
 
-    ImGui::SameLine();
-    ImGui::BeginChild("##about_technology", ImVec2(0.0f, 0.0f),
-                      ImGuiChildFlags_Borders,
-                      ImGuiWindowFlags_NoScrollbar |
-                          ImGuiWindowFlags_NoScrollWithMouse);
+    if (!stacked) ImGui::SameLine();
+    begin_panel("##about_technology", column_width, stacked);
     ImGui::SetWindowFontScale(0.88f);
     ImGui::TextColored(kViolet, "THE EMULATED SYSTEM");
     ImGui::TextWrapped(
@@ -1609,7 +1638,7 @@ void Ui::draw_about() {
         "ISO/BIN/CUE/IMG/CHD | live multi-disc swap | gamepad and touch "
         "controls | RetroMedia artwork/admin catalogue | shared mobile and "
         "desktop core");
-    ImGui::EndChild();
+    end_panel();
     ImGui::PopStyleVar();
 }
 
@@ -1690,7 +1719,8 @@ void Ui::draw_quick_menu(Console& console, bool emulating, bool touch_visible,
         ImGuiCond_Always);
     ImGui::Begin("##quick_menu", nullptr,
                  ImGuiWindowFlags_NoDecoration | ImGuiWindowFlags_NoMove |
-                     ImGuiWindowFlags_NoSavedSettings);
+                     ImGuiWindowFlags_NoSavedSettings | ImGuiWindowFlags_NoScrollbar);
+    ImGui::PushTextWrapPos(0.0f);
     ImGui::SetWindowFontScale(1.5f);
     ImGui::TextColored(kCyan, "GAME MENU");
     ImGui::SetWindowFontScale(1.0f);
@@ -1709,7 +1739,7 @@ void Ui::draw_quick_menu(Console& console, bool emulating, bool touch_visible,
     if (ImGui::Checkbox("Enabled", &touch_visible)) {
         intent.toggle_touch_controls = true;
     }
-    ImGui::SameLine();
+    same_line_if_fits(touch_editing ? "DONE MOVING" : "EDIT LAYOUT");
     ImGui::BeginDisabled(!touch_visible);
     if (ImGui::Button(touch_editing ? "DONE MOVING" : "EDIT LAYOUT")) {
         intent.toggle_layout_edit = true;
@@ -1722,7 +1752,7 @@ void Ui::draw_quick_menu(Console& console, bool emulating, bool touch_visible,
     const int values[] = {100, 125, 150};
     const char* labels[] = {"100%", "125%", "150%"};
     for (int i = 0; i < 3; ++i) {
-        if (i != 0) ImGui::SameLine();
+        if (i != 0) same_line_if_fits(labels[i]);
         if (ImGui::RadioButton(labels[i], &cpu, values[i])) {
             intent.cpu_scale_changed = true;
             intent.cpu_scale_percent = static_cast<u32>(values[i]);
@@ -1734,8 +1764,8 @@ void Ui::draw_quick_menu(Console& console, bool emulating, bool touch_visible,
         ImGui::Spacing();
         ImGui::TextColored(kAmber, "DISC SELECT");
         for (size_t i = 0; i < active_discs_.size(); ++i) {
-            if (i != 0) ImGui::SameLine();
             const std::string label = "DISC " + std::to_string(i + 1);
+            if (i != 0) same_line_if_fits(label.c_str());
             ImGui::BeginDisabled(i == active_disc_);
             if (ImGui::Button(label.c_str())) {
                 intent.disc_chosen = true;
@@ -1756,10 +1786,12 @@ void Ui::draw_quick_menu(Console& console, bool emulating, bool touch_visible,
         quick_menu_ = false;
     }
     if (ImGui::Button("RETURN TO LIBRARY", ImVec2(-1.0f, 0.0f))) {
+        page_ = Page::Library;
         show_launcher_ = true;
         quick_menu_ = false;
     }
     if (ImGui::Button("EXIT RETRO-3DO", ImVec2(-1.0f, 0.0f))) intent.quit = true;
+    ImGui::PopTextWrapPos();
     ImGui::End();
 }
 
@@ -1786,9 +1818,58 @@ void Ui::draw_file_browser(UiIntent& intent) {
     browsing_ = Browsing::None;
 }
 
+void Ui::release_ui_texture() {
+    SDL_DestroyTexture(ui_texture_);
+    ui_texture_ = nullptr;
+    ui_texture_width_ = ui_texture_height_ = 0;
+}
+
 void Ui::render(SDL_Renderer* renderer) {
     if (!initialised_) return;
+    const char* backend = SDL_GetRendererName(renderer);
+    if (!backend || std::strcmp(backend, "vulkan") != 0) {
+        ImGui_ImplSDLRenderer3_RenderDrawData(ImGui::GetDrawData(), renderer);
+        return;
+    }
+
+    // SDL's Vulkan swapchain scissor does not follow rotated Android surfaces.
+    // Texture targets have identity rotation: clip the UI there, then composite
+    // it in a single full-frame draw, preserving the game underneath overlays.
+    int width = 0, height = 0;
+    SDL_GetCurrentRenderOutputSize(renderer, &width, &height);
+    if (width != ui_texture_width_ || height != ui_texture_height_) {
+        release_ui_texture();
+    }
+    if (!ui_texture_ && width > 0 && height > 0) {
+        ui_texture_ = SDL_CreateTexture(renderer, SDL_PIXELFORMAT_RGBA32,
+                                       SDL_TEXTUREACCESS_TARGET, width, height);
+        if (ui_texture_) {
+            ui_texture_width_ = width;
+            ui_texture_height_ = height;
+            // Drawing onto transparent pixels has already multiplied RGB by A.
+            if (!SDL_SetTextureBlendMode(ui_texture_, SDL_BLENDMODE_BLEND_PREMULTIPLIED))
+                release_ui_texture();
+        }
+    }
+    SDL_Texture* previous_target = SDL_GetRenderTarget(renderer);
+    if (!ui_texture_ || !SDL_SetRenderTarget(renderer, ui_texture_)) {
+        ImGui_ImplSDLRenderer3_RenderDrawData(ImGui::GetDrawData(), renderer);
+        return;
+    }
+    SDL_FColor previous_colour;
+    SDL_GetRenderDrawColorFloat(renderer, &previous_colour.r, &previous_colour.g,
+                               &previous_colour.b, &previous_colour.a);
+    SDL_SetRenderViewport(renderer, nullptr);
+    SDL_SetRenderClipRect(renderer, nullptr);
+    SDL_SetRenderScale(renderer, 1.0f, 1.0f);
+    SDL_SetRenderDrawColor(renderer, 0, 0, 0, 0);
+    SDL_RenderClear(renderer);
     ImGui_ImplSDLRenderer3_RenderDrawData(ImGui::GetDrawData(), renderer);
+    SDL_SetRenderTarget(renderer, previous_target);
+    // Viewport, clip and scale are restored by SDL with the previous target.
+    SDL_RenderTexture(renderer, ui_texture_, nullptr, nullptr);
+    SDL_SetRenderDrawColorFloat(renderer, previous_colour.r, previous_colour.g,
+                               previous_colour.b, previous_colour.a);
 }
 
 }  // namespace retro3do

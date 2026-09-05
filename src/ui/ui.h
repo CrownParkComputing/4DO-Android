@@ -1,6 +1,7 @@
 // Retro-3DO front end: splash, library, settings and in-game quick menu.
 #pragma once
 
+#include <memory>
 #include <string>
 #include <unordered_map>
 #include <vector>
@@ -9,6 +10,7 @@
 #include "ui/file_browser.h"
 #include "ui/game_library.h"
 
+struct ImGuiStyle;
 struct SDL_Window;
 struct SDL_Renderer;
 struct SDL_Texture;
@@ -124,6 +126,9 @@ private:
     enum class WizardStep { Welcome, Bios, Games, RetroMedia, Finish };
     enum class WizardPick { None, Bios, Games };
 
+    void release_ui_texture();
+    void update_scale();
+    void update_touch_scroll();
     void draw_splash();
     void draw_setup_wizard(Console& console, UiIntent& intent);
     void poll_setup_picker(UiIntent& intent);
@@ -161,7 +166,10 @@ private:
     GameLibrary library_;
     Browsing browsing_ = Browsing::None;
     Page page_ = Page::Library;
+    Page drawn_page_ = Page::Library;
 
+    SDL_Window* window_ = nullptr;
+    std::unique_ptr<ImGuiStyle> base_style_;
     float scale_ = 1.0f;
     bool initialised_ = false;
     bool show_launcher_ = true;
@@ -178,9 +186,10 @@ private:
     bool menu_requested_ = false;
     u64 splash_started_ms_ = 0;
     u64 last_pointer_activity_ms_ = 0;
-    s64 library_scroll_finger_ = -1;
-    float library_scroll_last_y_ = 0.0f;
-    float library_scroll_pending_ = 0.0f;
+    u32 scroll_window_ = 0;
+    float scroll_start_y_ = 0.0f;
+    float scroll_start_offset_ = 0.0f;
+    bool scroll_dragging_ = false;
     char search_buffer_[128] = {};
     char library_group_ = 0;
     WizardStep wizard_step_ = WizardStep::Welcome;
@@ -194,6 +203,9 @@ private:
     std::string gpu_driver_name_;
     std::string gpu_driver_message_;
     SDL_Renderer* renderer_ = nullptr;
+    SDL_Texture* ui_texture_ = nullptr;
+    int ui_texture_width_ = 0;
+    int ui_texture_height_ = 0;
     SDL_Texture* splash_texture_ = nullptr;
     std::unordered_map<std::string, ArtworkTexture> artwork_;
     std::string retro_media_type_ = "box2d";

@@ -297,6 +297,15 @@ struct MadamStats {
     u32 cels_drawn  = 0;
     u64 pixels_written = 0;
     u32 list_truncated = 0;   // non-zero if the walk hit its safety limit
+
+    // Bring-up diagnostics for the DSP's input channels: how often the DSPP
+    // asked each one for a word, and how often the answer was real data rather
+    // than the dead-channel zero.
+    u64 fifo_asked[13] = {};
+    u64 fifo_delivered[13] = {};
+    u64 fifo_reloads[13] = {};
+    u64 fifo_out_writes[4] = {};
+    u64 fifo_out_stored[4] = {};
 };
 
 // One CCB, unpacked into something the renderer can work with.
@@ -408,6 +417,16 @@ public:
     // The channels are MADAM's registers but they move data for the DSP, so
     // the DSP drives them through here rather than owning them.
     u16  fifo_input_next(u16 channel);
+    void fill_input_fifo(u16 channel);
+
+    // The DMA engine acts on an enable, not only on consumption. Re-enabling
+    // a channel whose current transfer is exhausted runs the loop test right
+    // then - completion interrupt, and the armed reload if there is one. The
+    // audio folio's stop sequence depends on it: it disables the channel,
+    // arms DMANEXT, re-enables, then sleeps on the channel interrupt - with
+    // the voice it just stopped no longer consuming anything. Only the enable
+    // itself can produce that interrupt.
+    void on_input_channel_enabled(u16 channel);
     u16  fifo_input_peek(u16 channel);
     u16  fifo_input_status(u16 channel) const;
     u16  fifo_output_status(u16 channel) const;
@@ -416,6 +435,7 @@ public:
     // Software enables and disables channels through CLIO, not MADAM, so the
     // mask is handed over rather than decoded here.
     void set_dma_channel_enable(u32 mask) { dma_channel_enable_ = mask; }
+    u32  dma_channel_enable() const { return dma_channel_enable_; }
     void clear_fifo(u32 channel, bool output);
 
     // Raised when a channel runs out and cannot reload. The interrupt bit
@@ -427,6 +447,15 @@ public:
     }
 
     const MadamStats& stats() const { return stats_; }
+
+    // Bring-up diagnostics: who reads the DSP DMA channel registers, and what
+    // they were told. The audio folio's retirement logic is driven by these
+    // reads, so a wrong value here becomes a missing cue two layers up.
+    using PcSupplier = u32 (*)(void* context);
+    void set_pc_supplier(PcSupplier s, void* context) {
+        pc_supplier_ = s;
+        pc_context_ = context;
+    }
 
     // Lifetime totals. `stats()` describes the LAST list only, which reads as
     // "the engine barely runs" whenever the final list of a frame happens to
@@ -505,6 +534,28 @@ private:
         s32 length = 0;
         u32 next_address = 0;
         s32 next_length = 0;
+
+        // The hardware FIFO between the DMA engine and the DSPP. The DMA
+        // engine keeps it filled, so the DMA position software reads runs
+        // AHEAD of what the DSPP has actually consumed - by up to eight
+        // words - and a buffer's completion interrupt arrives while its tail
+        // is still queued here. WO 94/10641 describes exactly that: a channel
+        // "can be programmed not to interrupt the CPU until after the FIFO is
+        // emptied following completion of the transfer" - completion, then
+        // draining, as two separate moments.
+        //
+        // This is not a detail. The audio folio decides whether a sample
+        // buffer has finished by reading the DMA position inline, and only
+        // arms the channel interrupt - and goes to sleep - if it has not.
+        // With the FIFO modelled, the position reaches the end of the buffer
+        // early and the inline check says "finished". Without it, the check
+        // says "not yet", the folio arms and sleeps, and if it stops the
+        // voice on that same path there is no consumption left to cross the
+        // boundary: the interrupt it armed for can never fire again. That is
+        // a whole DataStreamer title deadlocked on one missing lookahead.
+        u16 staged[8] = {};
+        u8  staged_count = 0;
+        u8  staged_pos = 0;
     };
     static constexpr u32 kInputFifos = 13;
     static constexpr u32 kOutputFifos = 4;
@@ -518,6 +569,8 @@ private:
     void (*pbus_handler_)(void*) = nullptr;
     FifoDoneHandler fifo_done_ = nullptr;
     void* fifo_done_context_ = nullptr;
+    PcSupplier pc_supplier_ = nullptr;
+    void* pc_context_ = nullptr;
     void* pbus_context_ = nullptr;
     u32 current_ccb_ = 0;
     u32 next_ccb_ = 0;

@@ -361,15 +361,27 @@ u32 Madam::read(u32 offset) {
         const u32 channel = (offset >> 4) & 0x0f;
         const Fifo& fifo = output ? output_fifo_[channel % kOutputFifos]
                                   : input_fifo_[channel % kInputFifos];
+        u32 value = 0;
         switch (offset & 0x0f) {
             // The address and length read back as the channel's CURRENT
             // position, not as what software wrote. That is how software finds
             // out how far a sound has played.
-            case 0x00: return fifo.address + static_cast<u32>(fifo.index);
-            case 0x04: return static_cast<u32>(fifo.length - fifo.index);
-            case 0x08: return fifo.next_address;
-            default:   return static_cast<u32>(fifo.next_length);
+            case 0x00: value = fifo.address + static_cast<u32>(fifo.index); break;
+            case 0x04: value = static_cast<u32>(fifo.length - fifo.index); break;
+            case 0x08: value = fifo.next_address; break;
+            default:   value = static_cast<u32>(fifo.next_length); break;
         }
+#if RETRO3DO_TRACING
+        static std::FILE* fifo_read_log = [] {
+            const char* path = std::getenv("FIFOREADLOG");
+            return path != nullptr ? std::fopen(path, "w") : nullptr;
+        }();
+        if (fifo_read_log != nullptr) {
+            const u32 pc = pc_supplier_ != nullptr ? pc_supplier_(pc_context_) : 0;
+            std::fprintf(fifo_read_log, "R %03X %08X %08X\n", offset, value, pc);
+        }
+#endif
+        return value;
     }
 
     switch (offset) {
@@ -417,47 +429,77 @@ u32 Madam::read(u32 offset) {
 // An address of zero means the channel is idle. That is not a sentinel this
 // code invented: software clears the address to stop a channel.
 
+// The DMA half of an input channel: keep the channel's hardware FIFO filled
+// from memory, running ahead of the DSPP's consumption. Buffer boundaries -
+// the completion interrupt and the reload latch - happen HERE, when the last
+// word is fetched into the FIFO, not when the DSPP finally eats it.
+void Madam::fill_input_fifo(u16 channel) {
+    Fifo& fifo = input_fifo_[channel];
+    while (fifo.staged_count < 8 && fifo.address != 0) {
+        if ((fifo.length - fifo.index) > 0) {
+            const u32 address = fifo.address + static_cast<u32>(fifo.index);
+            const u16 value = static_cast<u16>(
+                (static_cast<u16>(bus_.read8(address)) << 8) |
+                bus_.read8(address + 1));
+            fifo.staged[(fifo.staged_pos + fifo.staged_count) & 7] = value;
+            fifo.staged_count++;
+            fifo.index += 2;
+            continue;
+        }
+
+        fifo.index = 0;
+        if (fifo_done_ != nullptr) {
+            fifo_done_(fifo_done_context_, channel, false);
+        }
+
+        // The loop test. Reload only if software armed one AND left the
+        // channel enabled; otherwise the DMA is finished, and only the words
+        // already staged remain for the DSPP to drain.
+        if (fifo.next_address != 0 &&
+            (dma_channel_enable_ & (1u << channel)) != 0) {
+            fifo.address = fifo.next_address;
+            fifo.length = fifo.next_length;
+            stats_.fifo_reloads[channel]++;
+        } else {
+            fifo.address = 0;
+        }
+    }
+}
+
+void Madam::on_input_channel_enabled(u16 channel) {
+    if (channel >= kInputFifos) {
+        return;
+    }
+    fill_input_fifo(channel);
+}
+
 u16 Madam::fifo_input_peek(u16 channel) {
     if (channel >= kInputFifos) {
         return 0;
     }
-    const Fifo& fifo = input_fifo_[channel];
-    const u32 address = fifo.address + static_cast<u32>(fifo.index);
-    return static_cast<u16>((static_cast<u16>(bus_.read8(address)) << 8) |
-                            bus_.read8(address + 1));
+    Fifo& fifo = input_fifo_[channel];
+    fill_input_fifo(channel);
+    return fifo.staged_count > 0 ? fifo.staged[fifo.staged_pos] : 0;
 }
 
 u16 Madam::fifo_input_next(u16 channel) {
     if (channel >= kInputFifos) {
         return 0;
     }
+    stats_.fifo_asked[channel]++;
     Fifo& fifo = input_fifo_[channel];
-    if (fifo.address == 0) {
+    fill_input_fifo(channel);
+    if (fifo.staged_count == 0) {
         return 0;
     }
-
-    if ((fifo.length - fifo.index) > 0) {
-        const u16 value = fifo_input_peek(channel);
-        fifo.index += 2;
-        return value;
-    }
-
-    fifo.index = 0;
-    if (fifo_done_ != nullptr) {
-        fifo_done_(fifo_done_context_, channel, false);
-    }
-
-    // Reload only if software armed one AND left the channel enabled.
-    if (fifo.next_address != 0 && (dma_channel_enable_ & (1u << channel)) != 0) {
-        fifo.address = fifo.next_address;
-        fifo.length = fifo.next_length;
-        const u16 value = fifo_input_peek(channel);
-        fifo.index += 2;
-        return value;
-    }
-
-    fifo.address = 0;
-    return 0;
+    const u16 value = fifo.staged[fifo.staged_pos];
+    fifo.staged_pos = (fifo.staged_pos + 1) & 7;
+    fifo.staged_count--;
+    stats_.fifo_delivered[channel]++;
+    // Refill behind the read, so the DMA position stays ahead of consumption
+    // the way the real engine's does.
+    fill_input_fifo(channel);
+    return value;
 }
 
 void Madam::fifo_output(u16 channel, u16 value) {
@@ -465,9 +507,11 @@ void Madam::fifo_output(u16 channel, u16 value) {
         return;
     }
     Fifo& fifo = output_fifo_[channel];
+    stats_.fifo_out_writes[channel]++;
     if (fifo.address == 0) {
         return;
     }
+    stats_.fifo_out_stored[channel]++;
 
     if ((fifo.length - fifo.index) > 0) {
         const u32 address = fifo.address + static_cast<u32>(fifo.index);
@@ -481,7 +525,15 @@ void Madam::fifo_output(u16 channel, u16 value) {
     if (fifo_done_ != nullptr) {
         fifo_done_(fifo_done_context_, channel, true);
     }
-    if (fifo.next_address != 0 && (dma_channel_enable_ & (1u << channel)) != 0) {
+    // Output channels occupy bits 16..19 of the shared enable mask - the same
+    // numbering the clear path and CLIO's own set/clear ports use. Testing bit
+    // `channel` here instead - which this did first - gates an OUTPUT
+    // channel's reload on an unrelated INPUT channel's enable bit, so the
+    // audio folio's looping DAC-clock buffer dies at its first boundary
+    // instead of looping, and the folio loses the timebase it paces
+    // everything against.
+    if (fifo.next_address != 0 &&
+        (dma_channel_enable_ & (1u << (channel + 16))) != 0) {
         fifo.address = fifo.next_address;
         fifo.length = fifo.next_length;
     } else {
@@ -493,14 +545,23 @@ u16 Madam::fifo_input_status(u16 channel) const {
     if (channel >= kInputFifos) {
         return 0;
     }
-    return input_fifo_[channel].address != 0 ? 2u : 0u;
+    // Two, or nothing. The reference's own read-back is exactly
+    // (address != 0) ? 2 : 0, and instruments branch on the value - reporting
+    // a FIFO depth here instead is plausible and wrong. With the DMA running
+    // ahead of consumption, the channel still counts as live while staged
+    // words remain to be drained.
+    const Fifo& fifo = input_fifo_[channel];
+    return (fifo.address != 0 || fifo.staged_count > 0) ? 2u : 0u;
 }
 
 u16 Madam::fifo_output_status(u16 channel) const {
     if (channel >= kOutputFifos) {
         return 0;
     }
-    return output_fifo_[channel].address != 0 ? 1u : 0u;
+    // One while the channel has room to accept, per the reference, which
+    // tests the remaining LENGTH rather than the address.
+    const Fifo& fifo = output_fifo_[channel];
+    return (fifo.length - fifo.index) > 0 ? 1u : 0u;
 }
 
 void Madam::clear_fifo(u32 channel, bool output) {
@@ -571,8 +632,13 @@ void Madam::write(u32 offset, u32 value) {
         switch (offset & 0x0f) {
             case 0x00:
                 fifo.address = value;
-                // Setting the address abandons any reload that was armed.
-                if (!output) fifo.next_address = 0;
+                // Setting the address abandons any reload that was armed, and
+                // whatever the old buffer had staged in the hardware FIFO.
+                if (!output) {
+                    fifo.next_address = 0;
+                    fifo.staged_count = 0;
+                    fifo.staged_pos = 0;
+                }
                 break;
             case 0x04:
                 // A length of zero means an idle channel rather than a

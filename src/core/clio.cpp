@@ -204,6 +204,11 @@ void Clio::update_cpu_interrupt_line() {
 // ---------------------------------------------------------------------------
 void Clio::tick(u32 cycles) {
     cdrom_.tick(cycles);
+    // A DMA request can span several sectors. Resume it when the drive's FIFO
+    // has data again; completion belongs to the last byte, not the trigger.
+    if (xbus_dma_requested_ && cdrom_.has_chunk() && dma_handler_ != nullptr) {
+        dma_handler_(dma_context_);
+    }
 
     if (cdrom_.take_media_changed()) {
         media_changed_ = true;
@@ -762,6 +767,9 @@ void Clio::write_impl(u32 offset, u32 value) {
             // Stop and clear whichever channels the mask names. The bits are
             // the same ones that enable them.
             xbus_dma_enable_ &= ~value;
+            if ((value & kClioDmaXbusBit) != 0) {
+                xbus_dma_requested_ = false;
+            }
             if (channel_handler_ != nullptr) {
                 channel_handler_(channel_context_, xbus_dma_enable_, value);
             }
@@ -773,6 +781,9 @@ void Clio::write_impl(u32 offset, u32 value) {
                 xbus_dma_enable_ |= value;
             } else {
                 xbus_dma_enable_ &= ~value;
+                if ((value & kClioDmaXbusBit) != 0) {
+                    xbus_dma_requested_ = false;
+                }
             }
             if (channel_handler_ != nullptr) {
                 channel_handler_(channel_context_, xbus_dma_enable_, 0);

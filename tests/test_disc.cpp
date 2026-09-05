@@ -10,6 +10,9 @@
 #include <vector>
 
 #include "core/disc.h"
+#include "core/console.h"
+#include "core/clio.h"
+#include "core/madam.h"
 #include "test_harness.h"
 
 using namespace retro3do;
@@ -366,4 +369,92 @@ TEST(closing_the_disc_releases_the_descriptor) {
     // Getting here without running out of descriptors is the assertion.
     Disc final_check;
     CHECK(final_check.open_fd(open_read_fd(path), "fd-leak.iso"));
+}
+
+// Exercise the whole drive -> CLIO -> MADAM -> RAM path. An empty drive FIFO
+// must stall DMA, not turn the rest of a multi-sector transfer into zeroes.
+
+namespace {
+constexpr u32 kStreamingDestination = 0x10000;
+constexpr u32 kDoubleSpeedSectorCycles = 12500000u / 150u;
+
+void start_streaming_dma(Console& console, u32 bytes) {
+    const u8 read[7] = {kCmdRead, 0, 2, 0, 0, 0, 3};
+    for (u8 byte : read) console.clio().write(kClioXbusCommand, byte);
+    console.madam().write(kMadamXbusDmaAddress, kStreamingDestination);
+    console.madam().write(kMadamXbusDmaLength, bytes - 4);
+    console.clio().write(kClioDmaRequestSet, kClioDmaXbusBit);
+}
+}
+
+TEST(streaming_dma_waits_for_each_sector_and_interrupts_only_on_completion) {
+    const char* path = scratch("streaming-dma.iso");
+    write_file(path, make_cooked(3));
+    Console console;
+    CHECK(console.load_disc(path));
+    for (u32 i = 0; i < 6144; ++i)
+        console.bus().write8(kStreamingDestination + i, 0xa5);
+    start_streaming_dma(console, 6144);
+
+    CHECK(console.clio().xbus_dma_requested());
+    CHECK(!console.clio().cdrom().has_chunk());
+    CHECK_EQ(console.madam().read(kMadamXbusDmaLength), 4092u);
+    CHECK_EQ(console.expansion_dma_count(), 0u);
+    CHECK_EQ(console.clio().read(kClioIrq0Pending) & kIrqXbusDmaComplete, 0u);
+    for (u32 i = 0; i < 6144; ++i)
+        CHECK_EQ(console.bus().read8(kStreamingDestination + i), i < 2048 ? 1u : 0xa5u);
+
+    console.clio().tick(kDoubleSpeedSectorCycles - 1);
+    CHECK_EQ(console.bus().read8(kStreamingDestination + 2048), 0xa5u);
+    CHECK_EQ(console.expansion_dma_count(), 0u);
+    console.clio().tick(1);
+    CHECK_EQ(console.madam().read(kMadamXbusDmaLength), 2044u);
+    CHECK_EQ(console.clio().read(kClioIrq0Pending) & kIrqXbusDmaComplete, 0u);
+    for (u32 i = 2048; i < 6144; ++i)
+        CHECK_EQ(console.bus().read8(kStreamingDestination + i), i < 4096 ? 2u : 0xa5u);
+
+    console.clio().tick(kDoubleSpeedSectorCycles);
+    CHECK(!console.clio().xbus_dma_requested());
+    CHECK_EQ(console.madam().read(kMadamXbusDmaLength), 0xfffffffcu);
+    CHECK_EQ(console.expansion_dma_count(), 1u);
+    CHECK_EQ(console.clio().read(kClioIrq0Pending) & kIrqXbusDmaComplete, kIrqXbusDmaComplete);
+    for (u32 i = 0; i < 6144; ++i)
+        CHECK_EQ(console.bus().read8(kStreamingDestination + i), i / 2048 + 1);
+    console.clio().write(kClioIrq0Clear, kIrqXbusDmaComplete);
+    console.clio().tick(kDoubleSpeedSectorCycles);
+    CHECK_EQ(console.expansion_dma_count(), 1u);
+    CHECK_EQ(console.clio().read(kClioIrq0Pending) & kIrqXbusDmaComplete, 0u);
+}
+
+TEST(disabling_or_clearing_streaming_dma_cancels_a_waiting_transfer) {
+    const char* path = scratch("streaming-cancel.iso");
+    write_file(path, make_cooked(3));
+    for (u32 clear : {u32(kClioDmaRequestClear), u32(kClioFifoClear)}) {
+        Console console;
+        CHECK(console.load_disc(path));
+        console.bus().write8(kStreamingDestination + 2048, 0xa5);
+        start_streaming_dma(console, 6144);
+        CHECK(console.clio().xbus_dma_requested());
+        console.clio().write(clear, kClioDmaXbusBit);
+        console.clio().tick(kDoubleSpeedSectorCycles);
+        CHECK(!console.clio().xbus_dma_requested());
+        CHECK_EQ(console.bus().read8(kStreamingDestination + 2048), 0xa5u);
+        CHECK_EQ(console.expansion_dma_count(), 0u);
+        CHECK_EQ(console.clio().read(kClioIrq0Pending) & kIrqXbusDmaComplete, 0u);
+    }
+}
+
+TEST(a_dma_request_smaller_than_the_buffered_sector_completes_immediately) {
+    const char* path = scratch("streaming-short.iso");
+    write_file(path, make_cooked(3));
+    Console console;
+    CHECK(console.load_disc(path));
+    console.bus().write8(kStreamingDestination + 32, 0xa5);
+    start_streaming_dma(console, 32);
+    CHECK(!console.clio().xbus_dma_requested());
+    CHECK(console.clio().cdrom().has_chunk());
+    CHECK_EQ(console.expansion_dma_count(), 1u);
+    for (u32 i = 0; i < 32; ++i)
+        CHECK_EQ(console.bus().read8(kStreamingDestination + i), 1u);
+    CHECK_EQ(console.bus().read8(kStreamingDestination + 32), 0xa5u);
 }

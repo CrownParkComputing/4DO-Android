@@ -10,6 +10,20 @@
 
 namespace retro3do {
 
+#if RETRO3DO_TRACING
+namespace {
+// DWATCH: log every 32-bit store to this address, with the storing PC.
+u32 dwatch_addr() {
+    static u32 a = [] {
+        const char* e = std::getenv("DWATCH");
+        return e != nullptr ? static_cast<u32>(std::strtoul(e, nullptr, 16)) : 0u;
+    }();
+    return a;
+}
+}  // namespace
+#endif
+
+
 // What a memory cycle costs.
 //
 // The ARM's own timings are quoted in these three: a sequential access, a
@@ -508,6 +522,34 @@ u32 Arm60::step() {
         }
     }
 #endif
+#if RETRO3DO_TRACING
+    // RETWATCH: comma-separated addresses; when execution reaches one, print
+    // r0 - placed at a call's return site this logs the call's result.
+    {
+        static std::FILE* ret_log = nullptr;
+        static u32 watch[8];
+        static int nwatch = -1;
+        if (nwatch < 0) {
+            nwatch = 0;
+            const char* e = std::getenv("RETWATCH");
+            if (e != nullptr) {
+                ret_log = stderr;
+                char buf[256];
+                std::snprintf(buf, sizeof buf, "%s", e);
+                for (char* tok = std::strtok(buf, ","); tok && nwatch < 8;
+                     tok = std::strtok(nullptr, ",")) {
+                    watch[nwatch++] = static_cast<u32>(std::strtoul(tok, nullptr, 16));
+                }
+            }
+        }
+        for (int i = 0; i < nwatch; ++i) {
+            if (watch[i] == address) {
+                std::fprintf(ret_log, "[ret] %08X r0=%08X r1=%08X r2=%08X\n",
+                             address, regs_[0], regs_[1], regs_[2]);
+            }
+        }
+    }
+#endif
     if (exec_map_ != nullptr && address < 0x00100000u) {
         const u32 word = address >> 2;
         exec_map_[word >> 3] |= static_cast<u8>(1u << (word & 7u));
@@ -782,7 +824,15 @@ u32 Arm60::exec_single_data_transfer(const Decoded& d) {
         if (byte_access) {
             bus_.write8(address, static_cast<u8>(value));
         } else {
-            bus_.write32(address, value);
+            {
+#if RETRO3DO_TRACING
+                const u32 wa = dwatch_addr();
+                if (wa != 0 && (address & ~3u) == wa) {
+                    std::fprintf(stderr, "[dw] %08X <- %08X pc=%08X\n", address, value, regs_[15] - 8);
+                }
+#endif
+                bus_.write32(address, value);
+            }
         }
 
         if (!pre_index) {
@@ -866,7 +916,15 @@ u32 Arm60::exec_block_data_transfer(const Decoded& d) {
             if ((list & (1u << i)) == 0) continue;
             u32 value = regs_[i];
             if (i == 15) value += 4;
-            bus_.write32(address, value);
+            {
+#if RETRO3DO_TRACING
+                const u32 wa = dwatch_addr();
+                if (wa != 0 && (address & ~3u) == wa) {
+                    std::fprintf(stderr, "[dw] %08X <- %08X pc=%08X\n", address, value, regs_[15] - 8);
+                }
+#endif
+                bus_.write32(address, value);
+            }
             address += 4;
             // Write-back takes effect after the first register is stored, so a
             // base in the list stores its original value only if it is lowest.
@@ -909,6 +967,21 @@ u32 Arm60::exec_branch(const Decoded& d) {
 // --- SWI, SWP, MRS, MSR, undefined ----------------------------------------
 u32 Arm60::exec_swi(const Decoded& d) {
     (void)d;
+#if RETRO3DO_TRACING
+    // OS-call narrative: SWITRACE names a file that gets one line per SWI -
+    // the call site, the SWI number, and the first three arguments. This is
+    // the Portfolio system-call story of a run, and diffing it against the
+    // reference build's is how a wedged task's missing wake-up gets named.
+    static std::FILE* swi_log = [] {
+        const char* path = std::getenv("SWITRACE");
+        return path != nullptr ? std::fopen(path, "w") : nullptr;
+    }();
+    if (swi_log != nullptr) {
+        std::fprintf(swi_log, "%08X %06X %08X %08X %08X\n",
+                     regs_[15] - 12, d.raw & 0x00ffffffu,
+                     regs_[0], regs_[1], regs_[2]);
+    }
+#endif
     enter_exception(kVectorSwi, Mode::Supervisor, regs_[15] - 4, false);
     // Taking an exception costs what a taken branch costs, for the same reason:
     // the pipeline is thrown away and refilled from the vector.
@@ -929,7 +1002,15 @@ u32 Arm60::exec_swap(const Decoded& d) {
         if (rd == 15) write_pc(old); else regs_[rd] = old;
     } else {
         const u32 old = ror32(bus_.read32(address), (address & 3u) * 8u);
-        bus_.write32(address, regs_[rm]);
+        {
+#if RETRO3DO_TRACING
+                const u32 wa = dwatch_addr();
+                if (wa != 0 && (address & ~3u) == wa) {
+                    std::fprintf(stderr, "[dw] %08X <- %08X pc=%08X\n", address, regs_[rm], regs_[15] - 8);
+                }
+#endif
+                bus_.write32(address, regs_[rm]);
+            }
         if (rd == 15) write_pc(old); else regs_[rd] = old;
     }
     return 4;

@@ -151,26 +151,40 @@ bool FileBrowser::draw(std::string* chosen_path, std::string* chosen_name) {
                viewport->WorkPos.y + viewport->WorkSize.y * 0.5f),
         ImGuiCond_Always, ImVec2(0.5f, 0.5f));
     ImGui::SetNextWindowSize(
-        ImVec2(viewport->WorkSize.x * 0.8f, viewport->WorkSize.y * 0.8f),
+        ImVec2(viewport->WorkSize.x * 0.94f, viewport->WorkSize.y * 0.92f),
         ImGuiCond_Always);
 
     if (ImGui::Begin(title_.c_str(), &open_,
-                     ImGuiWindowFlags_NoCollapse | ImGuiWindowFlags_NoSavedSettings)) {
+                     ImGuiWindowFlags_NoCollapse | ImGuiWindowFlags_NoSavedSettings |
+                         ImGuiWindowFlags_NoMove | ImGuiWindowFlags_NoResize |
+                         ImGuiWindowFlags_NoScrollbar)) {
+        const float right = ImGui::GetCursorScreenPos().x + ImGui::GetContentRegionAvail().x;
+        bool first_root = true;
+        auto wrap_root = [&](const char* label) {
+            const float button_width = ImGui::CalcTextSize(label).x +
+                                       ImGui::GetStyle().FramePadding.x * 2.0f;
+            if (!first_root && ImGui::GetItemRectMax().x +
+                ImGui::GetStyle().ItemSpacing.x + button_width <= right)
+                ImGui::SameLine();
+            first_root = false;
+        };
         if (using_documents_) {
             // Only folders the user has explicitly granted. The app asks for
             // these one at a time rather than for access to everything, so what
             // it can see is always exactly what was handed to it.
             const std::vector<DocumentEntry> roots = AndroidStorage::granted_roots();
             for (const DocumentEntry& root : roots) {
+                wrap_root(root.name.c_str());
+                ImGui::PushID(root.uri.c_str());
                 if (ImGui::Button(root.name.c_str())) {
                     navigate_to(root.uri);
                 }
-                ImGui::SameLine();
+                ImGui::PopID();
             }
+            wrap_root("+ Add folder");
             if (ImGui::Button("+ Add folder")) {
                 AndroidStorage::pick_folder();
             }
-            ImGui::NewLine();
 
             if (roots.empty()) {
                 ImGui::Spacing();
@@ -181,12 +195,13 @@ bool FileBrowser::draw(std::string* chosen_path, std::string* chosen_name) {
             }
         } else {
             for (const StorageLocation& root : Storage::browse_roots()) {
+                wrap_root(root.label.c_str());
+                ImGui::PushID(root.path.c_str());
                 if (ImGui::Button(root.label.c_str())) {
                     navigate_to(root.path);
                 }
-                ImGui::SameLine();
+                ImGui::PopID();
             }
-            ImGui::NewLine();
         }
 
         ImGui::Separator();
@@ -222,16 +237,28 @@ bool FileBrowser::draw(std::string* chosen_path, std::string* chosen_name) {
 
         // A tall touch-friendly list. Selectable rows rather than tree nodes:
         // a finger needs a big target, and there is nothing to expand.
-        ImGui::BeginChild("entries", ImVec2(0, 0), ImGuiChildFlags_Borders);
+        ImGui::BeginChild("entries", ImVec2(0, 0), ImGuiChildFlags_Borders,
+                          ImGuiWindowFlags_NoScrollbar);
         for (const Entry& entry : entries_) {
-            const std::string label =
-                (entry.is_directory ? "[ ] " : "    ") + entry.name;
-            if (ImGui::Selectable(label.c_str(), false,
-                                  ImGuiSelectableFlags_AllowDoubleClick,
-                                  ImVec2(0, ImGui::GetTextLineHeight() * 1.8f))) {
-                const std::string target =
-                    using_documents_ ? entry.uri
-                                     : Storage::join(directory_, entry.name);
+            const std::string label = entry.name + (entry.is_directory ? "/" : "");
+            const ImVec2 padding = ImGui::GetStyle().FramePadding;
+            const float width = std::max(1.0f, ImGui::GetContentRegionAvail().x - padding.x * 2);
+            const float height = std::max(ImGui::GetFrameHeight(),
+                ImGui::CalcTextSize(label.c_str(), nullptr, false, width).y + padding.y * 2);
+            ImGui::PushID(entry.name.c_str());
+            const bool selected = ImGui::Selectable("##entry", false, 0, ImVec2(0, height));
+            if (ImGui::IsItemVisible()) {
+                const ImVec2 top = ImGui::GetItemRectMin();
+                const ImU32 colour = entry.is_directory ? IM_COL32(70, 210, 225, 255)
+                                                       : ImGui::GetColorU32(ImGuiCol_Text);
+                ImGui::GetWindowDrawList()->AddText(ImGui::GetFont(), ImGui::GetFontSize(),
+                    ImVec2(top.x + padding.x, top.y + padding.y), colour,
+                    label.c_str(), nullptr, width);
+            }
+            ImGui::PopID();
+            if (selected) {
+                const std::string target = using_documents_ ? entry.uri
+                    : Storage::join(directory_, entry.name);
                 if (entry.is_directory) {
                     navigate_to(target);
                 } else {
@@ -239,6 +266,8 @@ bool FileBrowser::draw(std::string* chosen_path, std::string* chosen_name) {
                     if (chosen_name != nullptr) *chosen_name = entry.name;
                     chose = true;
                 }
+                // Navigation replaces entries_; never advance an invalidated iterator.
+                break;
             }
         }
         ImGui::EndChild();

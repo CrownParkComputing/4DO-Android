@@ -35,11 +35,23 @@ Console::Console() : cpu_(bus_), clio_(cpu_), vdlp_(bus_), madam_(bus_), sport_(
     clio_.attach_dsp(&dsp_);
     dsp_.set_host(this);
 
+    madam_.set_pc_supplier(
+        [](void* context) { return static_cast<Console*>(context)->cpu_.pc(); },
+        this);
+
     // Enabling a channel is CLIO's register but the channel is MADAM's.
     clio_.set_channel_handler(
         [](void* context, u32 enable_mask, u32 clear_mask) {
             Console* console = static_cast<Console*>(context);
+            const u32 was = console->madam_.dma_channel_enable();
             console->madam_.set_dma_channel_enable(enable_mask);
+            // An enable EDGE on an input channel starts its DMA engine now.
+            const u32 newly = enable_mask & ~was;
+            for (u32 channel = 0; channel < 13; ++channel) {
+                if ((newly & (1u << channel)) != 0) {
+                    console->madam_.on_input_channel_enabled(channel);
+                }
+            }
             for (u32 channel = 0; channel < 13; ++channel) {
                 if ((clear_mask & (1u << channel)) != 0) {
                     console->madam_.clear_fifo(channel, false);
@@ -413,7 +425,6 @@ void Console::service_expansion_dma() {
     if (!clio_.xbus_dma_requested()) {
         return;
     }
-    clio_.clear_xbus_dma_request();
 
     u32 address = madam_.xbus_dma_address();
     // The length register holds bytes-minus-four and the loop runs while it is
@@ -421,6 +432,17 @@ void Console::service_expansion_dma() {
     const s32 length = static_cast<s32>(madam_.read(kMadamXbusDmaLength));
 
     for (s32 left = length; left >= 0; left -= 4) {
+        if (!clio_.cdrom().has_chunk()) {
+            // Keep the remaining transfer armed across the sector gap. Publish
+            // the bytes already written to the instruction cache as well.
+            if (address != madam_.xbus_dma_address()) {
+                cpu_.invalidate_decode_cache(madam_.xbus_dma_address(),
+                                             address - madam_.xbus_dma_address());
+            }
+            madam_.write(kMadamXbusDmaAddress, address);
+            madam_.write(kMadamXbusDmaLength, static_cast<u32>(left));
+            return;
+        }
         // Each word is assembled from four bytes taken MOST significant first,
         // then stored in ascending address order. Reading them straight through
         // instead reverses every word - which does not fail, it quietly
@@ -438,6 +460,7 @@ void Console::service_expansion_dma() {
 
     // The drive reports the transfer finished by parking the length and raising
     // the completion interrupt the OS enabled at start-up.
+    clio_.clear_xbus_dma_request();
     madam_.write(kMadamXbusDmaLength, 0xfffffffcu);
     madam_.clear_xbus_dma();
     clio_.set_xbus_ready(true);

@@ -84,6 +84,13 @@ public:
     void write_data(u16 address, u16 value);
     u16  read_data(u16 address) const;
 
+    // Bring-up diagnostics: the raw program and data words, and where the
+    // last pass ended. Reading them takes no hardware path and changes nothing.
+    u16 peek_program(u16 address) const { return program_[address & 0x3ff]; }
+    u16 peek_raw_data(u16 address) const { return data_[address & 0x3ff]; }
+    void poke_raw_data(u16 address, u16 value) { data_[address & 0x3ff] = value; }
+    u32 peek_pc() const { return pc_; }
+
     // The semaphore the CPU and the DSPP use to agree who last wrote what.
     void  write_semaphore(u32 value);
     u32   read_semaphore() const;

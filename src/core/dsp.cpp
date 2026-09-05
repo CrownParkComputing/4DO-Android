@@ -1,4 +1,6 @@
 #include "dsp.h"
+#include <cstdio>
+#include <cstdlib>
 
 namespace retro3do {
 namespace {
@@ -568,6 +570,25 @@ u32 Dsp::run() {
 
     while (working && steps++ < kMaxStepsPerPass) {
         const u32 instruction = program_[pc_++ & 0x3ff];
+#if RETRO3DO_TRACING
+        // One line per executed DSPP instruction, for diffing a pass against
+        // another interpreter's walk of the same program.
+        static std::FILE* step_log = [] {
+            const char* path = std::getenv("DSPSTEP");
+            return path != nullptr ? std::fopen(path, "w") : nullptr;
+        }();
+        if (step_log != nullptr) {
+            if (is_control(instruction) && ((instruction >> 7) & 0xff) >= 64) {
+                const u32 packed = (flags.zero() ? 1u : 0) | (flags.negative() ? 2u : 0) |
+                                   (flags.carry() ? 4u : 0) | (flags.overflow() ? 8u : 0) |
+                                   (exact ? 16u : 0);
+                std::fprintf(step_log, "%03X %04X F=%02X Y=%08X\n",
+                             (pc_ - 1) & 0x3ff, instruction, packed, accumulator);
+            } else {
+                std::fprintf(step_log, "%03X %04X\n", (pc_ - 1) & 0x3ff, instruction);
+            }
+        }
+#endif
 
         if (is_control(instruction)) {
             const u32 opcode = (instruction >> 7) & 0xff;

@@ -210,6 +210,9 @@ bool Ui::init(SDL_Window* window, SDL_Renderer* renderer) {
     style.Colors[ImGuiCol_Text] = ImVec4(0.91f, 0.94f, 0.97f, 1.0f);
     style.Colors[ImGuiCol_TextDisabled] = kMuted;
 
+    // Bridge logical points to framebuffer pixels on Retina displays.
+    const float density = SDL_GetWindowPixelDensity(window);
+    if (density > 0.0f) SDL_SetRenderScale(renderer, density, density);
     window_ = window;
     base_style_ = std::make_unique<ImGuiStyle>(style);
     update_scale();
@@ -464,6 +467,8 @@ bool Ui::resume_renderer(SDL_Renderer* renderer) {
     }
     if (!ImGui_ImplSDLRenderer3_Init(renderer)) return false;
     renderer_ = renderer;
+    const float density = SDL_GetWindowPixelDensity(window_);
+    if (density > 0.0f) SDL_SetRenderScale(renderer, density, density);
     load_splash_texture();
     return true;
 }
@@ -475,7 +480,10 @@ void Ui::update_scale() {
     const float fit = std::min(std::max(1, width) / 800.0f,
                                std::max(1, height) / 480.0f);
     const float limit = std::max(1.0f, std::min(4.0f, width / 360.0f));
-    const float scale = std::clamp(std::max(fit, SDL_GetWindowDisplayScale(window_)),
+    // Display scale includes pixel density; renderer scaling already handles it.
+    const float density = std::max(1.0f, SDL_GetWindowPixelDensity(window_));
+    const float logical_display_scale = SDL_GetWindowDisplayScale(window_) / density;
+    const float scale = std::clamp(std::max(fit, logical_display_scale),
                                     1.0f, limit);
     if (scale == scale_) return;
     scale_ = scale;
@@ -560,6 +568,7 @@ UiIntent Ui::build(Console& console, bool emulating, double display_fps,
     ImGui_ImplSDL3_NewFrame();
     ImGui::NewFrame();
     update_touch_scroll();
+
 
     if (!splash_complete_) {
         draw_splash();
@@ -1585,7 +1594,7 @@ void Ui::draw_about() {
     ImGui::SetWindowFontScale(1.35f);
     ImGui::TextColored(kCyan, "RETRO-3DO");
     ImGui::SetWindowFontScale(0.88f);
-    ImGui::TextColored(kMuted, "Version 2.1.0  |  September 2026");
+    ImGui::TextColored(kMuted, "Version 2.1.1  |  September 2026");
     ImGui::Spacing();
     ImGui::TextWrapped(
         "Retro-3DO is a brand-new 3DO emulator implementation, designed and "

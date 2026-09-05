@@ -1,0 +1,7 @@
+# Encrypted signing material is ciphertext, not text. Git can guess "text" for
+# a small blob that happens to contain no NUL byte -- signing.env.enc is 144
+# bytes and does -- and a checkout under core.autocrlf=true would then rewrite
+# its line endings and corrupt it. The damage surfaces in CI at
+# `security import` as a complaint about the password, which reads like a
+# broken certificate and is nothing of the kind.
+*.enc binary

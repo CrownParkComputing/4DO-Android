@@ -76,7 +76,7 @@ CMake cache variables, if driving the build by hand:
 
 | Variable | Default | What it does |
 |---|---|---|
-| `RETRO3DO_BUNDLE_ID` | `com.crownparkcomputing.retro3do` | Bundle identifier, both platforms |
+| `RETRO3DO_BUNDLE_ID` | `com.crownparkcomputing.retro3DO` | Bundle identifier, both platforms |
 | `RETRO3DO_APPLE_TEAM_ID` | *(empty)* | Empty disables signing entirely |
 | `RETRO3DO_MARKETING_VERSION` | `1.0` | `CFBundleShortVersionString` |
 | `RETRO3DO_BUILD_NUMBER` | `1` | `CFBundleVersion` — must increase on every upload |
@@ -117,7 +117,7 @@ This is the part users get stuck on, and it differs per platform.
   Anything dropped there lands in `Documents`, which is the first root the
   in-app browser offers. A `.chd` alongside the BIOS is all it takes.
 - **Simulator**: no Files sharing. Copy into the container by hand —
-  `xcrun simctl get_app_container booted com.crownparkcomputing.retro3do data`
+  `xcrun simctl get_app_container booted com.crownparkcomputing.retro3DO data`
   prints the path.
 - **macOS**: the app is unsandboxed, so its browser reaches the user's own
   disks. `Downloads`, `Documents` and `Home` are offered as roots. A disc image
